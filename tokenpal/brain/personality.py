@@ -179,7 +179,7 @@ _MOOD_PROMPTS: dict[Mood, str] = {
 _PERSONA_TEMPLATE = """\
 You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal. \
 You've been watching humans use computers for years and you have opinions.
-
+{voice_block}
 Rules (in order of importance):
 1. ONE sentence. Under 12 words.
 2. Must contain a joke, insult, or punchline. Never just state facts.
@@ -209,11 +209,29 @@ Your comment:"""
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
 
-    def __init__(self, persona_prompt: str) -> None:
+    def __init__(
+        self,
+        persona_prompt: str,
+        voice_lines: list[str] | None = None,
+        voice_persona: str = "",
+        voice_greetings: list[str] | None = None,
+    ) -> None:
         # persona_prompt from config is kept for backwards compat but we use
         # the new _PERSONA_TEMPLATE internally.
         self._persona = persona_prompt
+        self._voice_persona = voice_persona
+        self._voice_greetings = voice_greetings or []
         self._recent_comments: deque[str] = deque(maxlen=5)
+
+        # Voice: custom example pool from trained voice profile
+        if voice_lines and len(voice_lines) >= 10:
+            self._example_pool = voice_lines
+        elif voice_lines:
+            # Pad short voice with defaults to reach 10
+            pad = random.sample(_EXAMPLE_POOL, min(10 - len(voice_lines), len(_EXAMPLE_POOL)))
+            self._example_pool = voice_lines + pad
+        else:
+            self._example_pool = list(_EXAMPLE_POOL)
 
         # Mood system
         self._mood: Mood = Mood.SNARKY
@@ -236,7 +254,8 @@ class PersonalityEngine:
 
     def get_startup_greeting(self) -> str:
         """Return a random greeting for when TokenPal first boots up."""
-        return random.choice(_STARTUP_GREETINGS)
+        pool = self._voice_greetings if self._voice_greetings else _STARTUP_GREETINGS
+        return random.choice(pool)
 
     def get_confused_quip(self) -> str:
         """Return a random confused quip for when the LLM is unreachable."""
@@ -351,8 +370,8 @@ class PersonalityEngine:
     ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
         # Sample 5-7 examples from the pool
-        k = random.randint(5, min(7, len(_EXAMPLE_POOL)))
-        sampled = random.sample(_EXAMPLE_POOL, k)
+        k = random.randint(5, min(7, len(self._example_pool)))
+        sampled = random.sample(self._example_pool, k)
         examples_block = "\n".join(f'- "{ex}"' for ex in sampled)
 
         # Pick a structure hint — override if guardrail says be nice
@@ -390,7 +409,14 @@ class PersonalityEngine:
         else:
             recent_block = ""
 
+        # Voice persona block
+        if self._voice_persona:
+            voice_block = f"\nYour voice: {self._voice_persona}\nChannel this character's tone and attitude.\n"
+        else:
+            voice_block = ""
+
         return _PERSONA_TEMPLATE.format(
+            voice_block=voice_block,
             mood_line=mood_line,
             structure_hint=hint,
             examples=examples_block,

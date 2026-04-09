@@ -46,6 +46,7 @@ class BrainConfig:
     context_max_tokens: int = 2048
     interestingness_threshold: float = 0.3
     sense_intervals: dict[str, float] = field(default_factory=dict)
+    active_voice: str = ""
     persona_prompt: str = (
         "You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal. "
         "You've been watching humans use computers for years and you have opinions.\n\n"

@@ -47,7 +47,28 @@ def main() -> None:
     ui_config = dataclasses.asdict(config.ui)
     overlay = resolve_overlay(ui_config)
 
-    personality = PersonalityEngine(config.brain.persona_prompt)
+    # Load voice profile if configured
+    voice_lines: list[str] | None = None
+    voice_persona: str = ""
+    voice_greetings: list[str] | None = None
+    if config.brain.active_voice:
+        from tokenpal.tools.voice_profile import load_profile
+
+        try:
+            profile = load_profile(config.brain.active_voice, _DATA_DIR / "voices")
+            voice_lines = profile.lines
+            voice_persona = profile.persona
+            voice_greetings = profile.greetings or None
+            log.info("Loaded voice '%s' (%d lines)", profile.character, len(profile.lines))
+        except FileNotFoundError:
+            log.warning("Voice '%s' not found — using defaults", config.brain.active_voice)
+
+    personality = PersonalityEngine(
+        config.brain.persona_prompt,
+        voice_lines=voice_lines,
+        voice_persona=voice_persona,
+        voice_greetings=voice_greetings,
+    )
 
     # Session memory
     memory: MemoryStore | None = None
