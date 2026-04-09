@@ -18,7 +18,7 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 log = logging.getLogger(__name__)
 
 # Max comments in a rolling window (guardrail §2)
-_MAX_COMMENTS_PER_WINDOW = 6
+_MAX_COMMENTS_PER_WINDOW = 15
 _WINDOW_SECONDS = 300.0
 
 
