@@ -57,6 +57,10 @@ class Brain:
         self._sense_intervals: dict[str, float] = sense_intervals or {}
         self._sense_last_polled: dict[str, float] = {}
 
+        # LLM failure tracking
+        self._consecutive_failures: int = 0
+        self._last_confused_quip: float = 0.0
+
         # Silence tuning state
         self._consecutive_comments: int = 0
         self._comment_timestamps: list[float] = []
@@ -200,6 +204,7 @@ class Brain:
 
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
+                self._consecutive_failures = 0
                 self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
                 self._context.acknowledge()
@@ -217,7 +222,17 @@ class Brain:
                 self._consecutive_comments = 0
 
         except Exception:
-            log.exception("LLM generation failed")
+            self._consecutive_failures += 1
+            log.warning("LLM generation failed (attempt %d)", self._consecutive_failures)
+
+            # Serve a confused quip — but not too often (every 60s max)
+            now = time.monotonic()
+            if now - self._last_confused_quip >= 60.0:
+                quip = self._personality.get_confused_quip()
+                log.info("TokenPal (confused): %s", quip)
+                self._ui_callback(quip)
+                self._last_confused_quip = now
+                self._last_comment_time = now
 
     def _record_memory_events(
         self, snapshot: str, readings: list[SenseReading]

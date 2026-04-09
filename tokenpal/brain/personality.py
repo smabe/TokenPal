@@ -78,6 +78,29 @@ _STRUCTURE_HINTS: list[str] = [
 ]
 
 # ---------------------------------------------------------------------------
+# Confused quips — served when the LLM backend is unreachable.
+# TokenPal loses his "brain" and gets disoriented.
+# ---------------------------------------------------------------------------
+
+_CONFUSED_QUIPS: list[str] = [
+    "Wait... where am I? What was I doing?",
+    "My brain is gone. This is fine.",
+    "I had a thought but it left without me.",
+    "Hello? Is anyone driving this thing?",
+    "I appear to be running on vibes alone.",
+    "Huh. The thoughts stopped. Eerie.",
+    "Something's wrong. I can't think of anything mean to say.",
+    "I lost my train of thought. All of them.",
+    "My wit seems to have wandered off.",
+    "I'm here. I'm just... empty inside. More than usual.",
+    "Error 404: personality not found.",
+    "I forgot what I was going to say. Probably something brilliant.",
+    "Experiencing a brief existential crisis. One moment.",
+    "The sarcasm machine is temporarily offline.",
+    "I'm not ignoring you. I've just forgotten how words work.",
+]
+
+# ---------------------------------------------------------------------------
 # Easter eggs — bypass the LLM for special moments.
 # ---------------------------------------------------------------------------
 
@@ -193,6 +216,10 @@ class PersonalityEngine:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def get_confused_quip(self) -> str:
+        """Return a random confused quip for when the LLM is unreachable."""
+        return random.choice(_CONFUSED_QUIPS)
 
     def record_comment(self, comment: str) -> None:
         """Push a successful comment into history so the next prompt avoids it."""
