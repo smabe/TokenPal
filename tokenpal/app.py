@@ -6,15 +6,20 @@ import asyncio
 import dataclasses
 import logging
 import signal
+import sys
 import threading
 from pathlib import Path
 
+from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.registry import discover_actions, resolve_actions
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.cli import parse_args, print_version, run_check
 from tokenpal.config.loader import load_config
+from tokenpal.config.schema import TokenPalConfig
 from tokenpal.llm.registry import discover_backends, resolve_backend
+from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
 from tokenpal.ui.ascii_renderer import SpeechBubble
 from tokenpal.ui.registry import discover_overlays, resolve_overlay
@@ -26,8 +31,18 @@ _DATA_DIR = Path.home() / ".tokenpal"
 
 
 def main() -> None:
-    setup_logging()
-    config = load_config()
+    args = parse_args()
+
+    if args.version:
+        print_version()
+        return
+
+    setup_logging(verbose=args.verbose)
+
+    if args.check:
+        sys.exit(run_check(config_path=args.config))
+
+    config = load_config(config_path=args.config)
     log.info("TokenPal starting up...")
 
     # Discover all plugins
@@ -84,6 +99,9 @@ def main() -> None:
         memory.setup()
         memory.record_session_start()
 
+    # Startup summary (before overlay takes over terminal)
+    _print_startup_summary(senses, actions, config)
+
     # Set up the overlay (must happen on main thread)
     overlay.setup()
 
@@ -131,3 +149,24 @@ def main() -> None:
         if memory:
             memory.teardown()
         log.info("TokenPal shut down cleanly")
+
+
+def _print_startup_summary(
+    senses: list[AbstractSense],
+    actions: list[AbstractAction],
+    config: TokenPalConfig,
+) -> None:
+    """Print a brief status summary to stderr before the overlay takes over."""
+    sense_names = [s.sense_name for s in senses]
+    action_names = [a.action_name for a in actions]
+    model = config.llm.model_name
+
+    lines = [
+        f"  model: {model}",
+        f"  senses: {', '.join(sense_names) or 'none'}",
+    ]
+    if action_names:
+        lines.append(f"  actions: {', '.join(action_names)}")
+
+    summary = "\n".join(lines)
+    print(f"\n\033[1mTokenPal\033[0m\n{summary}\n", file=sys.stderr)

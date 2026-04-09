@@ -264,6 +264,11 @@ class Brain:
             self._consecutive_failures += 1
             log.warning("LLM generation failed (attempt %d)", self._consecutive_failures)
 
+            if self._consecutive_failures == 1:
+                log.warning("Ollama appears to be down. Start it with: ollama serve")
+                if self._status_callback:
+                    self._status_callback("Ollama unreachable")
+
             # Serve a confused quip — but not too often (every 60s max)
             now = time.monotonic()
             if now - self._last_confused_quip >= 60.0:

@@ -26,17 +26,31 @@ class HttpBackend(AbstractLLMBackend):
         self._model_name = config.get("model_name", "phi3:mini")
         self._temperature = config.get("temperature", 0.8)
         self._client: httpx.AsyncClient | None = None
+        self._reachable: bool = False
+        self._model_available: bool = False
 
     async def setup(self) -> None:
         self._client = httpx.AsyncClient(timeout=60.0)
-        # Quick health check
         try:
             resp = await self._client.get(f"{self._api_url}/models")
             resp.raise_for_status()
+            self._reachable = True
             log.info("Connected to LLM API at %s", self._api_url)
+
+            models = resp.json().get("data", [])
+            model_ids = {m.get("id", "") for m in models}
+            if self._model_name in model_ids:
+                self._model_available = True
+                log.info("Model '%s' is available", self._model_name)
+            else:
+                log.warning(
+                    "Model '%s' not found in Ollama. Run: ollama pull %s",
+                    self._model_name,
+                    self._model_name,
+                )
         except httpx.HTTPError:
             log.warning(
-                "Could not reach LLM API at %s — make sure Ollama/LM Studio is running",
+                "Could not reach LLM API at %s — start Ollama with: ollama serve",
                 self._api_url,
             )
 

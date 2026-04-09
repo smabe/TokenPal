@@ -21,6 +21,12 @@ from tokenpal.config.schema import (
 
 log = logging.getLogger(__name__)
 
+# Project root: two levels up from this file (tokenpal/config/loader.py → project root)
+_PACKAGE_ROOT = Path(__file__).resolve().parent.parent.parent
+
+# User config directory
+_USER_CONFIG_DIR = Path.home() / ".tokenpal"
+
 _SECTION_MAP: dict[str, type] = {
     "senses": SensesConfig,
     "llm": LLMConfig,
@@ -50,25 +56,50 @@ def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
     return cls(**filtered)
 
 
+def _find_defaults() -> Path | None:
+    """Find config.default.toml — check package root, then cwd."""
+    for candidate in [_PACKAGE_ROOT / "config.default.toml", Path.cwd() / "config.default.toml"]:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _find_user_config(config_path: Path | None, project_root: Path | None) -> Path | None:
+    """Find user config.toml — explicit path, then ~/.tokenpal/, then project root, then cwd."""
+    if config_path and config_path.exists():
+        return config_path
+
+    candidates = [_USER_CONFIG_DIR / "config.toml"]
+    if project_root:
+        candidates.append(project_root / "config.toml")
+    candidates.append(Path.cwd() / "config.toml")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
 def load_config(
     project_root: Path | None = None,
     config_path: Path | None = None,
 ) -> TokenPalConfig:
-    """Load config from config.default.toml, then overlay config.toml if it exists."""
-    if project_root is None:
-        project_root = Path.cwd()
+    """Load config from config.default.toml, then overlay user config.toml if found.
 
+    Search order for defaults: package root → cwd.
+    Search order for user config: explicit path → ~/.tokenpal/ → project_root → cwd.
+    """
     # Load defaults
-    defaults_path = project_root / "config.default.toml"
     raw: dict[str, Any] = {}
-    if defaults_path.exists():
+    defaults_path = _find_defaults()
+    if defaults_path:
         with open(defaults_path, "rb") as f:
             raw = tomllib.load(f)
         log.debug("Loaded defaults from %s", defaults_path)
 
     # Overlay user config
-    user_path = config_path or (project_root / "config.toml")
-    if user_path.exists():
+    user_path = _find_user_config(config_path, project_root)
+    if user_path:
         with open(user_path, "rb") as f:
             user_raw = tomllib.load(f)
         raw = _deep_merge(raw, user_raw)
