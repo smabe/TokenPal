@@ -30,6 +30,7 @@ class Brain:
         llm: AbstractLLMBackend,
         ui_callback: Callable[[str], None],
         personality: PersonalityEngine,
+        status_callback: Callable[[str], None] | None = None,
         poll_interval_s: float = 2.0,
         comment_cooldown_s: float = 15.0,
         interestingness_threshold: float = 0.3,
@@ -40,6 +41,7 @@ class Brain:
         self._llm = llm
         self._ui_callback = ui_callback
         self._personality = personality
+        self._status_callback = status_callback
         self._poll_interval = poll_interval_s
         self._cooldown = comment_cooldown_s
         self._threshold = interestingness_threshold
@@ -85,6 +87,7 @@ class Brain:
                 # Update personality state each cycle
                 self._personality.update_mood(snapshot)
                 self._personality.update_gags(snapshot)
+                self._push_status()
 
                 if self._should_comment():
                     await self._generate_comment(snapshot)
@@ -201,6 +204,22 @@ class Brain:
 
         except Exception:
             log.exception("LLM generation failed")
+
+    def _push_status(self) -> None:
+        """Push a status bar update to the UI."""
+        if not self._status_callback:
+            return
+
+        mood = self._personality._mood.value
+        active_senses = sum(1 for s in self._senses if s.enabled)
+        elapsed = time.monotonic() - self._last_comment_time
+        if elapsed < 60:
+            ago = f"{int(elapsed)}s ago"
+        else:
+            ago = f"{int(elapsed / 60)}m ago"
+
+        status = f"{mood} | {active_senses} senses | last spoke {ago} | Ctrl+C"
+        self._status_callback(status)
 
     async def stop(self) -> None:
         """Shut down all components."""

@@ -56,6 +56,9 @@ def main() -> None:
             lambda: overlay.show_speech(SpeechBubble(text=text))
         ),
         personality=personality,
+        status_callback=lambda text: overlay.schedule_callback(
+            lambda t=text: overlay.update_status(t)
+        ),
         poll_interval_s=config.brain.poll_interval_s,
         comment_cooldown_s=config.brain.comment_cooldown_s,
         interestingness_threshold=config.brain.interestingness_threshold,

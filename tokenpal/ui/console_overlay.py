@@ -43,6 +43,7 @@ class ConsoleOverlay(AbstractOverlay):
         self._lock = threading.Lock()
         self._running = False
         self._buddy_name = config.get("buddy_name", "TokenPal")
+        self._status_text: str = "Ctrl+C to quit"
 
         # Typing animation state
         self._full_text: str = ""
@@ -104,7 +105,7 @@ class ConsoleOverlay(AbstractOverlay):
         content.append(f"{_DIM}{'─' * term_width}{_RESET}")
 
         # Status bar (bottom-most)
-        content.append(f"{_DIM}  Ctrl+C to quit{_RESET}")
+        content.append(f"{_DIM}  {self._status_text}{_RESET}")
 
         # Fill remaining space above with blank lines to push to bottom
         blank_lines = max(0, term_height - len(content))
@@ -146,6 +147,11 @@ class ConsoleOverlay(AbstractOverlay):
         self._hide_job = threading.Timer(display_s, self.hide_speech)
         self._hide_job.daemon = True
         self._hide_job.start()
+
+    def update_status(self, text: str) -> None:
+        self._status_text = text
+        if not self._typing_active:
+            self._render()
 
     def hide_speech(self) -> None:
         self._current_bubble = None

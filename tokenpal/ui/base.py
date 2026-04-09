@@ -38,6 +38,9 @@ class AbstractOverlay(abc.ABC):
     def hide_speech(self) -> None:
         """Hide the speech bubble."""
 
+    def update_status(self, text: str) -> None:
+        """Update the status bar text. Optional — overlays may ignore."""
+
     @abc.abstractmethod
     def run_loop(self) -> None:
         """Start the platform event loop. Blocks on main thread."""
