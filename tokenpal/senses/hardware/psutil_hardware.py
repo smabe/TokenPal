@@ -18,6 +18,7 @@ class PsutilHardware(AbstractSense):
     sense_name = "hardware"
     platforms = ("windows", "darwin", "linux")
     priority = 200  # generic fallback; platform-specific ones get lower priority
+    poll_interval_s = 10.0
 
     async def setup(self) -> None:
         # Prime the cpu_percent counter (first call always returns 0)

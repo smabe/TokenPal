@@ -31,6 +31,7 @@ class AbstractSense(abc.ABC):
     sense_name: ClassVar[str]
     platforms: ClassVar[tuple[str, ...]]
     priority: ClassVar[int] = 100
+    poll_interval_s: ClassVar[float] = 2.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

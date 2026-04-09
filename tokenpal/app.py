@@ -60,6 +60,7 @@ def main() -> None:
         comment_cooldown_s=config.brain.comment_cooldown_s,
         interestingness_threshold=config.brain.interestingness_threshold,
         context_max_tokens=config.brain.context_max_tokens,
+        sense_intervals=config.brain.sense_intervals,
     )
 
     # Brain runs in a background thread with its own asyncio loop

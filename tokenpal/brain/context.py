@@ -10,6 +10,18 @@ from tokenpal.senses.base import SenseReading
 # How long readings stay relevant (seconds)
 _READING_TTL = 120.0
 
+# Per-sense weights for interestingness scoring.
+# Higher weight = this sense changing matters more for triggering comments.
+_SENSE_WEIGHTS: dict[str, float] = {
+    "app_awareness": 1.0,
+    "idle": 1.0,
+    "clipboard": 0.8,
+    "screen_capture": 0.6,
+    "hardware": 0.1,
+    "time_awareness": 0.0,
+}
+_DEFAULT_WEIGHT = 0.5
+
 
 class ContextWindowBuilder:
     """Maintains a rolling window of sense readings and builds LLM context."""
@@ -18,7 +30,7 @@ class ContextWindowBuilder:
         self._max_tokens = max_tokens
         self._readings: dict[str, SenseReading] = {}
         self._history: deque[SenseReading] = deque(maxlen=50)
-        self._prev_snapshot: str = ""
+        self._prev_summaries: dict[str, str] = {}
 
     def ingest(self, readings: list[SenseReading]) -> None:
         """Ingest a batch of new readings, keeping the latest per sense."""
@@ -41,23 +53,33 @@ class ContextWindowBuilder:
         return "\n".join(lines)
 
     def interestingness(self) -> float:
-        """Score how much the context has changed since the last snapshot.
+        """Score how much the context has changed since the last acknowledged state.
 
-        Returns 0.0 (identical) to 1.0 (completely different).
-        Simple heuristic: ratio of changed lines.
+        Read-only — does NOT consume the change. Call acknowledge() after
+        a successful comment to mark the current state as seen.
+
+        Uses per-sense weights so noisy senses (time, CPU jitter) don't
+        inflate the score while meaningful events (app switches, idle
+        returns) trigger comments immediately.
         """
-        current = self.snapshot()
-        if not self._prev_snapshot:
-            self._prev_snapshot = current
-            return 1.0
+        now = time.monotonic()
+        score = 0.0
 
-        prev_lines = set(self._prev_snapshot.splitlines())
-        curr_lines = set(current.splitlines())
+        for sense_name, reading in self._readings.items():
+            if now - reading.timestamp > _READING_TTL:
+                continue
 
-        if not curr_lines:
-            return 0.0
+            weight = _SENSE_WEIGHTS.get(sense_name, _DEFAULT_WEIGHT)
+            prev = self._prev_summaries.get(sense_name)
 
-        changed = len(curr_lines - prev_lines)
-        score = changed / max(len(curr_lines), 1)
-        self._prev_snapshot = current
-        return score
+            if prev is None:
+                score += weight * reading.confidence
+            elif reading.summary != prev:
+                score += weight * reading.confidence
+
+        return min(score, 1.0)
+
+    def acknowledge(self) -> None:
+        """Mark the current context as seen. Call after a successful comment."""
+        for sense_name, reading in self._readings.items():
+            self._prev_summaries[sense_name] = reading.summary

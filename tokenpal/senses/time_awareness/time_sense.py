@@ -15,6 +15,7 @@ class TimeSense(AbstractSense):
     sense_name = "time_awareness"
     platforms = ("windows", "darwin", "linux")
     priority = 100
+    poll_interval_s = 30.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)

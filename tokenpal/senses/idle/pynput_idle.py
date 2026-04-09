@@ -23,6 +23,7 @@ class PynputIdle(AbstractSense):
     sense_name = "idle"
     platforms = ("windows", "darwin", "linux")
     priority = 100
+    poll_interval_s = 1.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)

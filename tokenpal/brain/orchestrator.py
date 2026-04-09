@@ -34,6 +34,7 @@ class Brain:
         comment_cooldown_s: float = 15.0,
         interestingness_threshold: float = 0.3,
         context_max_tokens: int = 2048,
+        sense_intervals: dict[str, float] | None = None,
     ) -> None:
         self._senses = senses
         self._llm = llm
@@ -43,8 +44,12 @@ class Brain:
         self._cooldown = comment_cooldown_s
         self._threshold = interestingness_threshold
         self._context = ContextWindowBuilder(max_tokens=context_max_tokens)
-        self._last_comment_time: float = 0.0
+        self._last_comment_time: float = time.monotonic()
         self._running = False
+
+        # Per-sense scheduling
+        self._sense_intervals: dict[str, float] = sense_intervals or {}
+        self._sense_last_polled: dict[str, float] = {}
 
         # Silence tuning state
         self._consecutive_comments: int = 0
@@ -71,7 +76,8 @@ class Brain:
         while self._running:
             try:
                 readings = await self._poll_all_senses()
-                self._context.ingest(readings)
+                if readings:
+                    self._context.ingest(readings)
 
                 snapshot = self._context.snapshot()
                 log.debug("Context: %s", snapshot.replace("\n", " | "))
@@ -89,11 +95,26 @@ class Brain:
             await asyncio.sleep(self._poll_interval)
 
     async def _poll_all_senses(self) -> list[SenseReading]:
-        tasks = [s.poll() for s in self._senses if s.enabled]
+        now = time.monotonic()
+        due: list[AbstractSense] = []
+
+        for s in self._senses:
+            if not s.enabled:
+                continue
+            last = self._sense_last_polled.get(s.sense_name, 0.0)
+            interval = self._sense_intervals.get(s.sense_name, s.poll_interval_s)
+            if now - last >= interval:
+                due.append(s)
+
+        if not due:
+            return []
+
+        tasks = [s.poll() for s in due]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         readings: list[SenseReading] = []
-        for r in results:
+        for s, r in zip(due, results):
+            self._sense_last_polled[s.sense_name] = now
             if isinstance(r, SenseReading):
                 readings.append(r)
             elif isinstance(r, Exception):
@@ -128,6 +149,10 @@ class Brain:
         elif 22 <= hour <= 23:
             threshold = min(threshold + 0.1, 0.8)
 
+        # Boredom bonus: gradually lower threshold after prolonged silence
+        boredom_bonus = min(0.2, elapsed / 600.0)
+        threshold = max(threshold - boredom_bonus, 0.05)
+
         score = self._context.interestingness()
         if score < threshold:
             log.debug("Gate: interestingness %.2f < threshold %.2f", score, threshold)
@@ -150,6 +175,7 @@ class Brain:
             log.info("TokenPal (easter egg): %s", egg)
             self._personality.record_comment(egg)
             self._ui_callback(egg)
+            self._context.acknowledge()
             self._last_comment_time = time.monotonic()
             self._consecutive_comments += 1
             self._comment_timestamps.append(time.monotonic())
@@ -165,6 +191,7 @@ class Brain:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
                 self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
+                self._context.acknowledge()
                 self._last_comment_time = time.monotonic()
                 self._consecutive_comments += 1
                 self._comment_timestamps.append(time.monotonic())

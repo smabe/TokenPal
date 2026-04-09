@@ -16,6 +16,7 @@ class MacOSAppAwareness(AbstractSense):
     sense_name = "app_awareness"
     platforms = ("darwin",)
     priority = 100
+    poll_interval_s = 2.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
