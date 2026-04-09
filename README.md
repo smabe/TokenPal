@@ -78,29 +78,109 @@ Configuration is driven by TOML files — `config.default.toml` ships with sane 
 
 ### Prerequisites
 
-- Python 3.12+
-- [Ollama](https://ollama.com) (easiest LLM backend)
+- **Python 3.12+** — [python.org](https://www.python.org/downloads/) or `brew install python` on macOS
+- **Ollama** — local LLM runner that TokenPal talks to via HTTP
 
-### Quick Start
+### 1. Install Ollama
+
+Ollama runs language models locally and exposes an OpenAI-compatible API that TokenPal connects to.
+
+**macOS:**
+```bash
+brew install ollama
+brew services start ollama   # runs in background
+```
+
+**Windows:**
+```powershell
+winget install Ollama.Ollama
+# Ollama runs as a system service after install
+```
+
+**Linux:**
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Then pull a model (Phi-3 mini is small and fast — ~2.2 GB):
+```bash
+ollama pull phi3:mini
+```
+
+Verify it's working:
+```bash
+ollama run phi3:mini "Say hello in 5 words"
+```
+
+### 2. Install TokenPal
 
 ```bash
 git clone https://github.com/smabe/TokenPal.git
 cd TokenPal
-python -m venv .venv
-source .venv/bin/activate  # or .\.venv\Scripts\Activate.ps1 on Windows
-pip install -e .
+python3 -m venv .venv
+```
 
-# Start Ollama with a small model
-ollama pull phi3:mini
-ollama serve
+Activate the virtual environment:
+```bash
+# macOS / Linux
+source .venv/bin/activate
 
-# Run TokenPal
+# Windows PowerShell
+.\.venv\Scripts\Activate.ps1
+```
+
+Install with platform extras:
+```bash
+# macOS (Apple Silicon)
+pip install -e ".[macos,dev]"
+
+# Windows
+pip install -e ".[windows,dev]"
+
+# Windows with NVIDIA GPU monitoring
+pip install -e ".[windows,nvidia,dev]"
+```
+
+**macOS note:** If you get `No module named '_tkinter'`, install tkinter for your Python version:
+```bash
+brew install python-tk@3.12   # match your Python version
+```
+
+### 3. Run TokenPal
+
+Make sure Ollama is running, then:
+```bash
 python -m tokenpal
 ```
 
-### Platform-Specific Setup
+A small ASCII buddy will appear in the corner of your screen. It polls your system every few seconds and generates sarcastic commentary when something interesting happens.
 
-Detailed setup guides for each target machine:
+To stop: `Ctrl+C` or close the window.
+
+### 4. Customize (optional)
+
+Copy the defaults and edit to taste:
+```bash
+cp config.default.toml config.toml
+```
+
+`config.toml` is gitignored — it's your machine-specific settings. See [Configuration](#configuration) below.
+
+### Alternative LLM Backends
+
+TokenPal works with any OpenAI-compatible local API, not just Ollama:
+
+| Backend | Install | Config |
+|---|---|---|
+| [Ollama](https://ollama.com) | `brew install ollama` | `api_url = "http://localhost:11434/v1"` (default) |
+| [LM Studio](https://lmstudio.ai) | Download from site | `api_url = "http://localhost:1234/v1"` |
+| [Foundry Local](https://learn.microsoft.com/en-us/windows/ai/overview) | Windows only | `api_url = "http://localhost:5272/v1"` |
+
+Just change `api_url` in your `config.toml` under `[llm]`.
+
+### Platform-Specific Dev Setup
+
+Detailed guides for setting up each target machine for development:
 
 - [macOS + Apple Silicon](docs/dev-setup-macos.md)
 - [Windows + Intel Core Ultra (NPU)](docs/dev-setup-windows-intel.md)
