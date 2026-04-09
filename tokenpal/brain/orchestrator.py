@@ -18,7 +18,7 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 log = logging.getLogger(__name__)
 
 # Max comments in a rolling window (guardrail §2)
-_MAX_COMMENTS_PER_WINDOW = 8
+_MAX_COMMENTS_PER_WINDOW = 6
 _WINDOW_SECONDS = 300.0
 
 
@@ -138,10 +138,15 @@ class Brain:
         if elapsed < self._cooldown:
             return False
 
-        # Silence tuning: after 3-4 consecutive comments, force a gap
-        if self._consecutive_comments >= 3 and random.random() < 0.5:
+        # Silence tuning: force a gap after 2 consecutive comments
+        if self._consecutive_comments >= 2 and random.random() < 0.6:
             log.debug("Gate: forced silence after %d consecutive comments", self._consecutive_comments)
             self._consecutive_comments = 0
+            return False
+
+        # Random silence — flat 30% chance to stay quiet even when context is interesting
+        if random.random() < 0.3:
+            log.debug("Gate: random silence (30%%)")
             return False
 
         # Guardrail: cap at N comments per 5-minute window

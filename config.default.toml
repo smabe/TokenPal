@@ -26,7 +26,7 @@ position = "bottom_right"
 
 [brain]
 poll_interval_s = 2.0
-comment_cooldown_s = 15.0
+comment_cooldown_s = 20.0
 context_max_tokens = 2048
 interestingness_threshold = 0.3
 persona_prompt = """You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal. You've been watching humans use computers for years and you have opinions.
