@@ -51,6 +51,7 @@ def main() -> None:
     voice_lines: list[str] | None = None
     voice_persona: str = ""
     voice_greetings: list[str] | None = None
+    voice_offline_quips: list[str] | None = None
     if config.brain.active_voice:
         from tokenpal.tools.voice_profile import load_profile
 
@@ -59,6 +60,7 @@ def main() -> None:
             voice_lines = profile.lines
             voice_persona = profile.persona
             voice_greetings = profile.greetings or None
+            voice_offline_quips = profile.offline_quips or None
             log.info("Loaded voice '%s' (%d lines)", profile.character, len(profile.lines))
         except FileNotFoundError:
             log.warning("Voice '%s' not found — using defaults", config.brain.active_voice)
@@ -68,6 +70,7 @@ def main() -> None:
         voice_lines=voice_lines,
         voice_persona=voice_persona,
         voice_greetings=voice_greetings,
+        voice_offline_quips=voice_offline_quips,
     )
 
     # Session memory

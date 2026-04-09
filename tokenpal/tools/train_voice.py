@@ -97,6 +97,33 @@ Write 10 short startup greetings (what this character would say when waking up o
     return greetings
 
 
+def _generate_offline_quips(character: str, lines: list[str]) -> list[str]:
+    """Ask Ollama to generate confused/offline quips in the character's voice."""
+    samples = random.sample(lines, min(10, len(lines)))
+    samples_block = "\n".join(f"- {line}" for line in samples)
+
+    text = _ollama_generate(
+        f"""Here are sample dialogue lines from "{character}":
+
+{samples_block}
+
+Write 10 short confused/disoriented lines — what this character would say if they suddenly lost their train of thought or their brain stopped working. One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude.""",
+        max_tokens=200,
+        temperature=0.9,
+    )
+
+    if not text:
+        return []
+
+    quips: list[str] = []
+    for line in text.splitlines():
+        cleaned = re.sub(r"^\d+[.)]\s*", "", line).strip().strip("\"'").strip()
+        if cleaned and 8 <= len(cleaned) <= 60:
+            quips.append(cleaned)
+
+    return quips
+
+
 def _find_config_toml() -> Path:
     """Find config.toml — check CWD first, then fall back to project root."""
     cwd = Path.cwd()
@@ -203,6 +230,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     name = character or path.stem
     persona = ""
     greetings: list[str] = []
+    offline_quips: list[str] = []
     if not args.no_persona:
         print("Generating persona via Ollama...", end=" ", flush=True)
         persona = _generate_persona(name, lines) or ""
@@ -222,12 +250,23 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         else:
             print("skipped")
 
+        print("Generating offline quips...", end=" ", flush=True)
+        offline_quips = _generate_offline_quips(name, lines)
+        if offline_quips:
+            print(f"done! ({len(offline_quips)} quips)")
+            for q in offline_quips[:5]:
+                print(f'  "{q}"')
+            print()
+        else:
+            print("skipped")
+
     profile = make_profile(
         character=name,
         source=path.name,
         lines=lines,
         persona=persona,
         greetings=greetings,
+        offline_quips=offline_quips,
     )
     out_path = save_profile(profile, _VOICES_DIR)
     slug = _slugify(name)

@@ -17,6 +17,7 @@ class VoiceProfile:
     lines: list[str]
     persona: str = ""
     greetings: list[str] = field(default_factory=list)
+    offline_quips: list[str] = field(default_factory=list)
     version: int = 1
 
     @property
@@ -51,6 +52,7 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         lines=data["lines"],
         persona=data.get("persona", ""),
         greetings=data.get("greetings", []),
+        offline_quips=data.get("offline_quips", []),
         version=data.get("version", 1),
     )
 
@@ -75,6 +77,7 @@ def make_profile(
     lines: list[str],
     persona: str = "",
     greetings: list[str] | None = None,
+    offline_quips: list[str] | None = None,
 ) -> VoiceProfile:
     """Create a new VoiceProfile with the current timestamp."""
     return VoiceProfile(
@@ -84,4 +87,5 @@ def make_profile(
         lines=lines,
         persona=persona,
         greetings=greetings or [],
+        offline_quips=offline_quips or [],
     )

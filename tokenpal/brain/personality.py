@@ -215,12 +215,14 @@ class PersonalityEngine:
         voice_lines: list[str] | None = None,
         voice_persona: str = "",
         voice_greetings: list[str] | None = None,
+        voice_offline_quips: list[str] | None = None,
     ) -> None:
         # persona_prompt from config is kept for backwards compat but we use
         # the new _PERSONA_TEMPLATE internally.
         self._persona = persona_prompt
         self._voice_persona = voice_persona
         self._voice_greetings = voice_greetings or []
+        self._voice_offline_quips = voice_offline_quips or []
         self._recent_comments: deque[str] = deque(maxlen=5)
 
         # Voice: custom example pool from trained voice profile
@@ -259,7 +261,8 @@ class PersonalityEngine:
 
     def get_confused_quip(self) -> str:
         """Return a random confused quip for when the LLM is unreachable."""
-        return random.choice(_CONFUSED_QUIPS)
+        pool = self._voice_offline_quips if self._voice_offline_quips else _CONFUSED_QUIPS
+        return random.choice(pool)
 
     def record_comment(self, comment: str) -> None:
         """Push a successful comment into history so the next prompt avoids it."""
