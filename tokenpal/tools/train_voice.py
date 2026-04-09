@@ -187,6 +187,41 @@ def _cmd_list() -> None:
         print(f"{slug:<25} {character:<25} {count:>5}")
 
 
+def _cmd_activate() -> None:
+    """Interactive voice switcher — pick from saved profiles."""
+    profiles = list_profiles(_VOICES_DIR)
+    if not profiles:
+        print("No voices saved yet. Train one first:")
+        print('  python -m tokenpal.tools.train_voice --wiki regularshow "Mordecai"')
+        return
+
+    print("Saved voices:\n")
+    for i, (slug, character, count) in enumerate(profiles, 1):
+        print(f"  {i}) {character} ({count} lines)")
+    print(f"  0) Default TokenPal (no voice)")
+
+    try:
+        choice = input(f"\nSelect voice [0-{len(profiles)}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return
+
+    if not choice.isdigit():
+        print("Cancelled.")
+        return
+
+    idx = int(choice)
+    if idx == 0:
+        _activate_voice("")
+        print("Switched to default TokenPal voice. Restart to apply.")
+    elif 1 <= idx <= len(profiles):
+        slug, character, count = profiles[idx - 1]
+        _activate_voice(slug)
+        print(f"Switched to {character} ({count} lines). Restart TokenPal to apply.")
+    else:
+        print("Invalid choice.")
+
+
 def _cmd_extract(args: argparse.Namespace) -> None:
     """Extract lines and optionally save a voice profile."""
     character = args.character
@@ -311,6 +346,10 @@ def main() -> None:
         help="List all saved voice profiles",
     )
     parser.add_argument(
+        "--activate", action="store_true",
+        help="Switch between saved voice profiles",
+    )
+    parser.add_argument(
         "file", nargs="?",
         help="Path to transcript or lines file",
     )
@@ -347,6 +386,10 @@ def main() -> None:
 
     if args.list:
         _cmd_list()
+        return
+
+    if args.activate:
+        _cmd_activate()
         return
 
     if not args.file and not args.wiki:
