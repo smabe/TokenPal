@@ -2,6 +2,7 @@
 
 Usage:
     python -m tokenpal.tools.train_voice transcript.txt "Character Name"
+    python -m tokenpal.tools.train_voice --wiki regularshow "Mordecai"
     python -m tokenpal.tools.train_voice quotes.txt --lines-only
     python -m tokenpal.tools.train_voice --list
 """
@@ -17,7 +18,7 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-from tokenpal.tools.transcript_parser import extract_lines
+from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
     list_profiles,
     make_profile,
@@ -188,26 +189,48 @@ def _cmd_list() -> None:
 
 def _cmd_extract(args: argparse.Namespace) -> None:
     """Extract lines and optionally save a voice profile."""
-    path = Path(args.file)
-    if not path.exists():
-        print(f"Error: file not found: {path}", file=sys.stderr)
-        sys.exit(1)
-
     character = args.character
-    if not character and not args.lines_only:
-        print("Error: character name required (or use --lines-only)", file=sys.stderr)
-        sys.exit(1)
 
-    lines = extract_lines(
-        path,
-        character=character,
-        lines_only=args.lines_only,
-    )
+    if args.wiki:
+        # Fetch from Fandom wiki
+        if not character:
+            print("Error: character name required with --wiki", file=sys.stderr)
+            sys.exit(1)
+
+        from tokenpal.tools.wiki_fetch import fetch_all_transcripts
+
+        step_label = f"Fetching transcripts from {args.wiki}.fandom.com"
+        print(f"\n{step_label}...")
+        text = fetch_all_transcripts(args.wiki, max_pages=args.max_pages)
+        if not text:
+            print("Error: no transcripts found. Check the wiki name.", file=sys.stderr)
+            print(f"  Try: https://{args.wiki}.fandom.com/wiki/Category:Transcripts", file=sys.stderr)
+            sys.exit(1)
+
+        lines = extract_lines_from_text(text, character=character)
+        source = f"{args.wiki}.fandom.com"
+    else:
+        # Extract from local file
+        if not args.file:
+            print("Error: file is required (or use --wiki)", file=sys.stderr)
+            sys.exit(1)
+
+        path = Path(args.file)
+        if not path.exists():
+            print(f"Error: file not found: {path}", file=sys.stderr)
+            sys.exit(1)
+
+        if not character and not args.lines_only:
+            print("Error: character name required (or use --lines-only)", file=sys.stderr)
+            sys.exit(1)
+
+        lines = extract_lines(path, character=character, lines_only=args.lines_only)
+        source = path.name
 
     if not lines:
         label = f" for {character.upper()}" if character else ""
         print(f"No lines found{label}.", file=sys.stderr)
-        print("Check the character name spelling, or try --lines-only.", file=sys.stderr)
+        print("Check the character name spelling.", file=sys.stderr)
         sys.exit(1)
 
     label = character.upper() if character else "input"
@@ -262,7 +285,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
     profile = make_profile(
         character=name,
-        source=path.name,
+        source=source,
         lines=lines,
         persona=persona,
         greetings=greetings,
@@ -311,6 +334,14 @@ def main() -> None:
         "--no-persona", action="store_true",
         help="Skip persona generation via Ollama",
     )
+    parser.add_argument(
+        "--wiki", type=str, default="",
+        help="Fetch transcripts from a Fandom wiki (e.g. 'regularshow', 'adventuretime')",
+    )
+    parser.add_argument(
+        "--max-pages", type=int, default=500,
+        help="Max transcript pages to fetch from wiki (default: 500)",
+    )
 
     args = parser.parse_args()
 
@@ -318,8 +349,13 @@ def main() -> None:
         _cmd_list()
         return
 
-    if not args.file:
-        parser.error("file is required (or use --list)")
+    if not args.file and not args.wiki:
+        parser.error("file or --wiki is required (or use --list)")
+
+    # When using --wiki, the first positional is the character, not a file
+    if args.wiki and args.file and not args.character:
+        args.character = args.file
+        args.file = None
 
     _cmd_extract(args)
 

@@ -120,21 +120,20 @@ def _filter_lines(
     return result
 
 
-def extract_lines(
-    path: Path,
+def extract_lines_from_text(
+    text: str,
     character: str | None = None,
     lines_only: bool = False,
     min_len: int = 8,
     max_len: int = 150,
 ) -> list[str]:
-    """Extract and filter character lines from a transcript file.
+    """Extract and filter character lines from transcript text.
 
     Supports three formats (auto-detected):
     - Standalone: ALL-CAPS name on own line, dialogue below
     - Inline: "Name: dialogue" on the same line (wiki/fan transcripts)
     - Lines: one quote per line (no character names)
     """
-    text = path.read_text(encoding="utf-8", errors="replace")
 
     if lines_only:
         raw = _parse_lines_file(text)
@@ -155,3 +154,15 @@ def extract_lines(
         raw = _parse_lines_file(text)
 
     return _filter_lines(raw, min_len=min_len, max_len=max_len)
+
+
+def extract_lines(
+    path: Path,
+    character: str | None = None,
+    lines_only: bool = False,
+    min_len: int = 8,
+    max_len: int = 150,
+) -> list[str]:
+    """Extract and filter character lines from a transcript file."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return extract_lines_from_text(text, character, lines_only, min_len, max_len)
