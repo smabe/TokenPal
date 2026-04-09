@@ -277,20 +277,16 @@ class PersonalityEngine:
             self._mood_since = time.monotonic()
 
     def update_gags(self, context_snapshot: str) -> None:
-        """Extract app names from context and count app switches (not polls)."""
-        ctx_lower = context_snapshot.lower()
-        known_apps = [
-            "chrome", "firefox", "safari", "edge",
-            "vs code", "vscode", "xcode", "intellij", "vim", "neovim",
-            "terminal", "ghostty", "iterm", "wezterm", "kitty",
-            "slack", "discord", "spotify", "finder", "explorer",
-            "notion", "obsidian", "figma",
-        ]
-        # Find the current foreground app
+        """Extract foreground app from context and count app switches (not polls)."""
+        # Parse "App: <name>" from the context snapshot
         current_app = ""
-        for app in known_apps:
-            if app in ctx_lower:
-                current_app = app
+        for line in context_snapshot.splitlines():
+            if line.startswith("App: "):
+                # Extract app name, strip window title if present
+                app_part = line[5:]
+                if "," in app_part:
+                    app_part = app_part[:app_part.index(",")]
+                current_app = app_part.strip().lower()
                 break
 
         # Only increment on app switch, not every poll

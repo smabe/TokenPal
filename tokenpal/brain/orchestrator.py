@@ -190,6 +190,8 @@ class Brain:
             return
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None
+        if memory_lines:
+            log.info("Memory: %s", " | ".join(memory_lines))
         prompt = self._personality.build_prompt(snapshot, memory_lines=memory_lines)
 
         try:
@@ -230,6 +232,7 @@ class Brain:
             self._memory.record_observation(
                 "app_awareness", "app_switch", current_app
             )
+            log.info("Memory recorded: app_switch → %s", current_app)
             self._last_recorded_app = current_app
 
         # Idle return — check if any reading is from the idle sense
