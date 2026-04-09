@@ -94,6 +94,15 @@ class Brain:
         if not snapshot.strip():
             return
 
+        # Check for easter eggs first — bypass LLM entirely
+        egg = self._personality.check_easter_egg(snapshot)
+        if egg:
+            log.info("TokenPal (easter egg): %s", egg)
+            self._personality.record_comment(egg)
+            self._ui_callback(egg)
+            self._last_comment_time = time.monotonic()
+            return
+
         prompt = self._personality.build_prompt(snapshot)
 
         try:
@@ -102,6 +111,7 @@ class Brain:
 
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
+                self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
                 self._last_comment_time = time.monotonic()
             else:
