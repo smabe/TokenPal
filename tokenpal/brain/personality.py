@@ -156,6 +156,8 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." — boring.
 
 {session_notes}
 
+{memory_block}
+
 What you see right now:
 {context}
 
@@ -300,7 +302,9 @@ class PersonalityEngine:
         """Guardrail: after 4 snarky comments in a row, force a gentler tone."""
         return self._consecutive_snarky >= 4
 
-    def build_prompt(self, context_snapshot: str) -> str:
+    def build_prompt(
+        self, context_snapshot: str, memory_lines: list[str] | None = None
+    ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
         # Sample 5-7 examples from the pool
         k = random.randint(5, min(7, len(_EXAMPLE_POOL)))
@@ -324,6 +328,14 @@ class PersonalityEngine:
         # Build session notes from running gags
         session_notes = self._build_session_notes()
 
+        # Build memory block from persistent history
+        if memory_lines:
+            mem_block = "What you remember from before:\n" + "\n".join(
+                f"- {line}" for line in memory_lines
+            )
+        else:
+            mem_block = ""
+
         # Build recent-comments block
         if self._recent_comments:
             lines = "\n".join(f'- "{c}"' for c in self._recent_comments)
@@ -340,6 +352,7 @@ class PersonalityEngine:
             examples=examples_block,
             context=context_snapshot,
             session_notes=session_notes,
+            memory_block=mem_block,
             recent_comments_block=recent_block,
         )
 

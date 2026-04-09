@@ -58,6 +58,12 @@ class BrainConfig:
 
 
 @dataclass
+class MemoryConfig:
+    enabled: bool = True
+    retention_days: int = 30
+
+
+@dataclass
 class PluginsConfig:
     extra_packages: list[str] = field(default_factory=list)
     sense_overrides: dict[str, str] = field(default_factory=dict)
@@ -69,4 +75,5 @@ class TokenPalConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)

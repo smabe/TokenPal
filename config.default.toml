@@ -38,5 +38,9 @@ Rules (in order of importance):
 
 DON'T say things like: "Ghostty is open." or "It is 9 AM." -- boring."""
 
+[memory]
+enabled = true
+retention_days = 30
+
 [plugins]
 extra_packages = []

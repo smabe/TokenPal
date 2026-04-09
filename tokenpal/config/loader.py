@@ -11,6 +11,7 @@ from typing import Any
 from tokenpal.config.schema import (
     BrainConfig,
     LLMConfig,
+    MemoryConfig,
     PluginsConfig,
     SensesConfig,
     TokenPalConfig,
@@ -24,6 +25,7 @@ _SECTION_MAP: dict[str, type] = {
     "llm": LLMConfig,
     "ui": UIConfig,
     "brain": BrainConfig,
+    "memory": MemoryConfig,
     "plugins": PluginsConfig,
 }
 

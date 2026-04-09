@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Callable
 
 from tokenpal.brain.context import ContextWindowBuilder
+from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -31,6 +32,7 @@ class Brain:
         ui_callback: Callable[[str], None],
         personality: PersonalityEngine,
         status_callback: Callable[[str], None] | None = None,
+        memory: MemoryStore | None = None,
         poll_interval_s: float = 2.0,
         comment_cooldown_s: float = 15.0,
         interestingness_threshold: float = 0.3,
@@ -42,6 +44,8 @@ class Brain:
         self._ui_callback = ui_callback
         self._personality = personality
         self._status_callback = status_callback
+        self._memory = memory
+        self._last_recorded_app: str = ""
         self._poll_interval = poll_interval_s
         self._cooldown = comment_cooldown_s
         self._threshold = interestingness_threshold
@@ -87,6 +91,7 @@ class Brain:
                 # Update personality state each cycle
                 self._personality.update_mood(snapshot)
                 self._personality.update_gags(snapshot)
+                self._record_memory_events(snapshot, readings)
                 self._push_status()
 
                 if self._should_comment():
@@ -184,7 +189,8 @@ class Brain:
             self._comment_timestamps.append(time.monotonic())
             return
 
-        prompt = self._personality.build_prompt(snapshot)
+        memory_lines = self._memory.get_history_lines(10) if self._memory else None
+        prompt = self._personality.build_prompt(snapshot, memory_lines=memory_lines)
 
         try:
             response = await self._llm.generate(prompt)
@@ -198,12 +204,40 @@ class Brain:
                 self._last_comment_time = time.monotonic()
                 self._consecutive_comments += 1
                 self._comment_timestamps.append(time.monotonic())
+                # Record comment milestones
+                if self._memory and self._personality._total_comments % 10 == 0:
+                    self._memory.record_observation(
+                        "system", "milestone",
+                        f"Comment #{self._personality._total_comments}",
+                    )
             else:
                 log.debug("LLM chose silence")
                 self._consecutive_comments = 0
 
         except Exception:
             log.exception("LLM generation failed")
+
+    def _record_memory_events(
+        self, snapshot: str, readings: list[SenseReading]
+    ) -> None:
+        """Record meaningful events to persistent memory."""
+        if not self._memory:
+            return
+
+        # App switch — only record when the foreground app changes
+        current_app = self._personality._last_seen_app
+        if current_app and current_app != self._last_recorded_app:
+            self._memory.record_observation(
+                "app_awareness", "app_switch", current_app
+            )
+            self._last_recorded_app = current_app
+
+        # Idle return — check if any reading is from the idle sense
+        for r in readings:
+            if r.sense_name == "idle" and "returned" in r.summary.lower():
+                self._memory.record_observation(
+                    "idle", "idle_return", r.summary
+                )
 
     def _push_status(self) -> None:
         """Push a status bar update to the UI."""

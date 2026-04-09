@@ -7,7 +7,9 @@ import dataclasses
 import logging
 import signal
 import threading
+from pathlib import Path
 
+from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.config.loader import load_config
@@ -18,6 +20,8 @@ from tokenpal.ui.registry import discover_overlays, resolve_overlay
 from tokenpal.util.logging import setup_logging
 
 log = logging.getLogger(__name__)
+
+_DATA_DIR = Path.home() / ".tokenpal"
 
 
 def main() -> None:
@@ -45,6 +49,16 @@ def main() -> None:
 
     personality = PersonalityEngine(config.brain.persona_prompt)
 
+    # Session memory
+    memory: MemoryStore | None = None
+    if config.memory.enabled:
+        memory = MemoryStore(
+            db_path=_DATA_DIR / "memory.db",
+            retention_days=config.memory.retention_days,
+        )
+        memory.setup()
+        memory.record_session_start()
+
     # Set up the overlay (must happen on main thread)
     overlay.setup()
 
@@ -59,6 +73,7 @@ def main() -> None:
         status_callback=lambda text: overlay.schedule_callback(
             lambda t=text: overlay.update_status(t)
         ),
+        memory=memory,
         poll_interval_s=config.brain.poll_interval_s,
         comment_cooldown_s=config.brain.comment_cooldown_s,
         interestingness_threshold=config.brain.interestingness_threshold,
@@ -87,4 +102,6 @@ def main() -> None:
         overlay.run_loop()
     finally:
         asyncio.run(brain.stop())
+        if memory:
+            memory.teardown()
         log.info("TokenPal shut down cleanly")
