@@ -16,8 +16,8 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 
 log = logging.getLogger(__name__)
 
-# Max comments in a 5-minute window (guardrail §2)
-_MAX_COMMENTS_PER_WINDOW = 5
+# Max comments in a rolling window (guardrail §2)
+_MAX_COMMENTS_PER_WINDOW = 8
 _WINDOW_SECONDS = 300.0
 
 
@@ -74,6 +74,7 @@ class Brain:
                 self._context.ingest(readings)
 
                 snapshot = self._context.snapshot()
+                log.debug("Context: %s", snapshot.replace("\n", " | "))
 
                 # Update personality state each cycle
                 self._personality.update_mood(snapshot)
@@ -106,7 +107,7 @@ class Brain:
 
         # Silence tuning: after 3-4 consecutive comments, force a gap
         if self._consecutive_comments >= 3 and random.random() < 0.5:
-            log.debug("Forced silence — %d consecutive comments", self._consecutive_comments)
+            log.debug("Gate: forced silence after %d consecutive comments", self._consecutive_comments)
             self._consecutive_comments = 0
             return False
 
@@ -116,7 +117,7 @@ class Brain:
             t for t in self._comment_timestamps if now - t < _WINDOW_SECONDS
         ]
         if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
-            log.debug("Rate limit — %d comments in window", len(self._comment_timestamps))
+            log.debug("Gate: rate limit — %d comments in window", len(self._comment_timestamps))
             return False
 
         # Time-of-day weighting: raise threshold at night for quieter behavior
@@ -127,7 +128,10 @@ class Brain:
         elif 22 <= hour <= 23:
             threshold = min(threshold + 0.1, 0.8)
 
-        return self._context.interestingness() >= threshold
+        score = self._context.interestingness()
+        if score < threshold:
+            log.debug("Gate: interestingness %.2f < threshold %.2f", score, threshold)
+        return score >= threshold
 
     async def _generate_comment(self, snapshot: str | None = None) -> None:
         if snapshot is None:

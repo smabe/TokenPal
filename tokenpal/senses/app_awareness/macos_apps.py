@@ -25,7 +25,6 @@ class MacOSAppAwareness(AbstractSense):
     async def setup(self) -> None:
         # Import here so non-macOS platforms don't fail
         try:
-            from AppKit import NSWorkspace  # noqa: F401
             import Quartz  # noqa: F401
         except ImportError:
             log.warning("pyobjc not installed — disabling macOS app awareness")
@@ -35,27 +34,31 @@ class MacOSAppAwareness(AbstractSense):
         if not self.enabled:
             return None
 
-        from AppKit import NSWorkspace
         import Quartz
 
-        ws = NSWorkspace.sharedWorkspace()
-        front_app = ws.frontmostApplication()
-        app_name = front_app.localizedName() if front_app else "Unknown"
-
-        # Get window title from Quartz
+        # Use Quartz window list instead of NSWorkspace.frontmostApplication()
+        # — NSWorkspace is unreliable from background threads and can get stuck
+        # returning the host terminal's app.  The Quartz list is ordered
+        # front-to-back, so the first normal-level window is the foreground app.
+        app_name = "Unknown"
         window_title = ""
+
         windows = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID,
         )
         if windows:
             for w in windows:
+                # Skip windows that aren't normal app windows (menus, panels, etc.)
+                layer = w.get("kCGWindowLayer", 999)
+                if layer != 0:
+                    continue
                 owner = w.get("kCGWindowOwnerName", "")
-                if owner == app_name:
-                    title = w.get("kCGWindowName", "")
-                    if title:
-                        window_title = title
-                        break
+                if not owner or owner in ("Window Server", "Dock"):
+                    continue
+                app_name = owner
+                window_title = w.get("kCGWindowName", "") or ""
+                break
 
         if window_title:
             summary = f'App: {app_name}, window title: "{window_title}"'
