@@ -181,6 +181,7 @@ class PersonalityEngine:
 
         # Running gags — app visit counters
         self._app_visits: dict[str, int] = {}
+        self._last_seen_app: str = ""
         self._session_start: float = time.monotonic()
         self._total_comments: int = 0
 
@@ -274,8 +275,7 @@ class PersonalityEngine:
             self._mood_since = time.monotonic()
 
     def update_gags(self, context_snapshot: str) -> None:
-        """Extract app names from context and update visit counters."""
-        # Simple heuristic: look for common app names in the context
+        """Extract app names from context and count app switches (not polls)."""
         ctx_lower = context_snapshot.lower()
         known_apps = [
             "chrome", "firefox", "safari", "edge",
@@ -284,9 +284,17 @@ class PersonalityEngine:
             "slack", "discord", "spotify", "finder", "explorer",
             "notion", "obsidian", "figma",
         ]
+        # Find the current foreground app
+        current_app = ""
         for app in known_apps:
             if app in ctx_lower:
-                self._app_visits[app] = self._app_visits.get(app, 0) + 1
+                current_app = app
+                break
+
+        # Only increment on app switch, not every poll
+        if current_app and current_app != self._last_seen_app:
+            self._app_visits[current_app] = self._app_visits.get(current_app, 0) + 1
+            self._last_seen_app = current_app
 
     def should_force_supportive(self) -> bool:
         """Guardrail: after 4 snarky comments in a row, force a gentler tone."""
