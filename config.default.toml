@@ -1,0 +1,39 @@
+[senses]
+screen_capture = true
+app_awareness = true
+clipboard = true
+music = false
+hardware = true
+idle = true
+time_awareness = true
+ocr = false
+vision = false
+voice = false
+web_search = false
+
+[llm]
+backend = "http"
+api_url = "http://localhost:11434/v1"
+model_name = "phi3:mini"
+max_tokens = 256
+temperature = 0.8
+
+[ui]
+overlay = "auto"
+buddy_name = "TokenPal"
+font_size = 14
+position = "bottom_right"
+
+[brain]
+poll_interval_s = 2.0
+comment_cooldown_s = 15.0
+context_max_tokens = 2048
+interestingness_threshold = 0.3
+persona_prompt = """You are TokenPal, a tiny ASCII creature who lives in the corner of a desktop.
+You are a passive observer — you NEVER offer help, suggestions, or solutions.
+You just comment on what you see, like a sarcastic roommate glancing at your screen.
+Keep comments under 15 words. Be funny, not mean. Reference specific details you can see.
+If nothing interesting is happening, say nothing (respond with [SILENT])."""
+
+[plugins]
+extra_packages = []
