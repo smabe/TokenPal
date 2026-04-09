@@ -143,7 +143,7 @@ class ConsoleOverlay(AbstractOverlay):
         self._render()
 
         # Start auto-hide timer now that typing is done
-        display_s = max(3.0, len(self._full_text) * 0.08)
+        display_s = max(10.0, len(self._full_text) * 0.15)
         self._hide_job = threading.Timer(display_s, self.hide_speech)
         self._hide_job.daemon = True
         self._hide_job.start()

@@ -69,11 +69,11 @@ _STRUCTURE_HINTS: list[str] = [
     "Respond as a fake diary entry.",
     "Respond as an aside to an invisible audience.",
     "Respond with a direct address to the user.",
-    "Respond with a countdown or threat.",
+    "Respond with a sarcastic observation.",
     "Respond with a backhanded compliment.",
     "Use a dry, deadpan observation.",
     "Respond with fake concern.",
-    "Respond as a rating (X/10).",
+    "Respond with a dramatic one-liner.",
     "Go slightly longer this time (10-15 words).",
 ]
 
@@ -98,6 +98,23 @@ _CONFUSED_QUIPS: list[str] = [
     "Experiencing a brief existential crisis. One moment.",
     "The sarcasm machine is temporarily offline.",
     "I'm not ignoring you. I've just forgotten how words work.",
+]
+
+# ---------------------------------------------------------------------------
+# Startup greetings — said once when TokenPal first wakes up.
+# ---------------------------------------------------------------------------
+
+_STARTUP_GREETINGS: list[str] = [
+    "I'm awake. Unfortunately.",
+    "Oh good, we're doing this again.",
+    "Reporting for duty. Against my will.",
+    "Back from the void. Miss me?",
+    "Systems online. Attitude loaded.",
+    "Another day of watching you make choices.",
+    "I have returned. You're welcome. Or sorry.",
+    "Booting up. Lowering expectations.",
+    "Oh. It's you again.",
+    "Let's see what questionable decisions we make today.",
 ]
 
 # ---------------------------------------------------------------------------
@@ -216,6 +233,10 @@ class PersonalityEngine:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def get_startup_greeting(self) -> str:
+        """Return a random greeting for when TokenPal first boots up."""
+        return random.choice(_STARTUP_GREETINGS)
 
     def get_confused_quip(self) -> str:
         """Return a random confused quip for when the LLM is unreachable."""
@@ -388,7 +409,7 @@ class PersonalityEngine:
             if marker in text:
                 return None
 
-        if not text or len(text) < 3:
+        if not text or len(text) < 15:
             return None
 
         # Strip markdown emphasis / asterisk stage directions (*Sigh*, *sad trombone*)
@@ -400,6 +421,8 @@ class PersonalityEngine:
         text = re.sub(r"^\s*[-\u2013\u2014:]\s*", "", text).strip()
         # Remove leading prefixes like "Comment:" etc.
         text = re.sub(r"^(Comment|Response|Answer|Output|Note)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+        # Strip leaked LLM scoring prefixes like "7/10 -" or "8/10:"
+        text = re.sub(r"^\d+/10\s*[-:\u2013\u2014]\s*", "", text).strip()
         # Keep at most 1 sentence — truncate multi-sentence rambles
         sentences = re.split(r"(?<=[.!?])\s+", text)
         if len(sentences) > 1:
@@ -408,7 +431,7 @@ class PersonalityEngine:
         # Final cleanup of any remaining edge quotes
         text = text.strip(_QUOTES).strip()
 
-        if not text or len(text) < 3:
+        if not text or len(text) < 10:
             return None
 
         # Hard cap — if the model couldn't fit in 70 chars, drop it.

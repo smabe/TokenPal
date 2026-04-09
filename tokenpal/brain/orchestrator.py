@@ -80,6 +80,13 @@ class Brain:
         await self._llm.setup()
         log.info("Brain started — polling every %.1fs", self._poll_interval)
 
+        # Say hello immediately so the buddy isn't silent on startup
+        greeting = self._personality.get_startup_greeting()
+        log.info("TokenPal (startup): %s", greeting)
+        self._personality.record_comment(greeting)
+        self._ui_callback(greeting)
+        self._last_comment_time = time.monotonic()
+
         await self._run_loop()
 
     async def _run_loop(self) -> None:
@@ -158,6 +165,9 @@ class Brain:
             log.debug("Gate: rate limit — %d comments in window", len(self._comment_timestamps))
             return False
 
+        # Activity level: user switching apps / hardware busy → talk more
+        activity = self._context.activity_level()
+
         # Time-of-day weighting: raise threshold at night for quieter behavior
         hour = datetime.now().hour
         threshold = self._threshold
@@ -166,13 +176,22 @@ class Brain:
         elif 22 <= hour <= 23:
             threshold = min(threshold + 0.1, 0.8)
 
-        # Boredom bonus: gradually lower threshold after prolonged silence
-        boredom_bonus = min(0.2, elapsed / 600.0)
-        threshold = max(threshold - boredom_bonus, 0.05)
+        # Activity bonus: high activity lowers the threshold (up to -0.15)
+        threshold = max(threshold - activity * 0.15, 0.05)
 
         score = self._context.interestingness()
-        if score < threshold:
-            log.debug("Gate: interestingness %.2f < threshold %.2f", score, threshold)
+
+        # Boredom bonus: gradually lower threshold after prolonged silence,
+        # but ONLY when there's at least *some* real context change (score > 0).
+        # Without this guard, hardware jitter alone triggers empty comments.
+        if score > 0:
+            boredom_bonus = min(0.2, elapsed / 600.0)
+            threshold = max(threshold - boredom_bonus, 0.1)
+
+        log.debug(
+            "Gate: interestingness %.2f vs threshold %.2f (activity %.2f)",
+            score, threshold, activity,
+        )
         return score >= threshold
 
     async def _generate_comment(self, snapshot: str | None = None) -> None:

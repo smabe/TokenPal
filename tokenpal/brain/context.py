@@ -17,7 +17,7 @@ _SENSE_WEIGHTS: dict[str, float] = {
     "idle": 1.0,
     "clipboard": 0.8,
     "screen_capture": 0.6,
-    "hardware": 0.1,
+    "hardware": 0.3,
     "time_awareness": 0.0,
 }
 _DEFAULT_WEIGHT = 0.5
@@ -78,6 +78,45 @@ class ContextWindowBuilder:
                 score += weight * reading.confidence
 
         return min(score, 1.0)
+
+    def activity_level(self) -> float:
+        """Return 0.0–1.0 measuring how active the user is right now.
+
+        Factors:
+        - App switch frequency: how many distinct app_awareness changes in the
+          last 60 seconds (more switching = more active).
+        - Hardware load: high CPU/RAM suggests the machine is busy doing things.
+        """
+        now = time.monotonic()
+        window = 60.0
+
+        # --- App switch frequency ---
+        # Count distinct app_awareness summary changes in the window
+        app_summaries: list[str] = []
+        for r in self._history:
+            if r.sense_name == "app_awareness" and now - r.timestamp <= window:
+                app_summaries.append(r.summary)
+
+        # Count transitions (consecutive different summaries)
+        switches = 0
+        for i in range(1, len(app_summaries)):
+            if app_summaries[i] != app_summaries[i - 1]:
+                switches += 1
+
+        # 5+ switches in 60s = max activity from app switching
+        app_activity = min(switches / 5.0, 1.0)
+
+        # --- Hardware load ---
+        hw_reading = self._readings.get("hardware")
+        hw_activity = 0.0
+        if hw_reading and now - hw_reading.timestamp <= _READING_TTL:
+            cpu = hw_reading.data.get("cpu_percent", 0)
+            ram = hw_reading.data.get("ram_percent", 0)
+            # Use the higher of the two, scaled so 70%+ = meaningful activity
+            hw_activity = min(max(cpu, ram) / 100.0, 1.0)
+
+        # Blend: app switching is the stronger signal
+        return min(app_activity * 0.7 + hw_activity * 0.3, 1.0)
 
     def acknowledge(self) -> None:
         """Mark the current context as seen. Call after a successful comment."""
