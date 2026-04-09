@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 _LOG_DIR = Path.home() / ".tokenpal" / "logs"
@@ -27,7 +28,9 @@ def setup_logging(level: int = logging.INFO) -> None:
     # File handler — tail with: tail -f ~/.tokenpal/logs/tokenpal.log
     try:
         _LOG_DIR.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(_LOG_FILE, encoding="utf-8")
+        file_handler = RotatingFileHandler(
+            _LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
         file_handler.setFormatter(fmt)
         file_handler.setLevel(logging.DEBUG)
         root.addHandler(file_handler)
