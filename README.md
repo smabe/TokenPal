@@ -96,6 +96,63 @@ system_info = true
 open_app = true
 ```
 
+## Personas & Voices
+
+TokenPal ships with a default sarcastic gremlin persona. You can replace it with a character voice trained from show transcripts, or write your own persona prompt.
+
+### Quick: custom persona prompt
+
+Edit `config.toml` to change what TokenPal sounds like without training a full voice:
+
+```toml
+[brain]
+persona_prompt = "You are a grumpy pirate who judges people's computer habits. ONE sentence, under 12 words."
+```
+
+### Train a voice from transcripts
+
+The voice trainer extracts character dialogue from transcripts (local files or Fandom wikis), then uses Ollama to generate a persona description, startup greetings, and offline quips.
+
+```bash
+# From a Fandom wiki (fetches all transcript pages automatically)
+python -m tokenpal.tools.train_voice --wiki regularshow "Mordecai"
+python -m tokenpal.tools.train_voice --wiki adventuretime "BMO"
+
+# From a local transcript file
+python -m tokenpal.tools.train_voice transcript.txt "Character Name"
+
+# From a file of raw quotes (one per line, no character names)
+python -m tokenpal.tools.train_voice quotes.txt --lines-only
+```
+
+This saves a voice profile to `~/.tokenpal/voices/` and auto-activates it in `config.toml`.
+
+### Manage voices
+
+```bash
+# List all saved voice profiles
+python -m tokenpal.tools.train_voice --list
+
+# Switch between saved voices (interactive picker)
+python -m tokenpal.tools.train_voice --activate
+
+# Or set it directly in config.toml
+# [brain]
+# active_voice = "mordecai"    # use a trained voice
+# active_voice = ""            # back to default TokenPal
+```
+
+Restart TokenPal after switching voices.
+
+### Training options
+
+| Flag | Effect |
+|------|--------|
+| `--preview` | Show extracted lines without saving |
+| `--no-persona` | Skip Ollama persona/greetings generation |
+| `--min-lines N` | Minimum lines required (default: 10) |
+| `--max-pages N` | Max wiki transcript pages to fetch (default: 500) |
+
 ## CLI
 
 ```
