@@ -460,7 +460,7 @@ class PersonalityEngine:
         # Final cleanup of any remaining edge quotes
         text = text.strip(_QUOTES).strip()
 
-        if not text or len(text) < 10:
+        if not text or len(text) < 15:
             return None
 
         # Hard cap — if the model couldn't fit in 70 chars, drop it.
