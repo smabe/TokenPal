@@ -60,15 +60,7 @@ class ConsoleOverlay(AbstractOverlay):
         lines.append(f"{_DIM}{'─' * pad}{_RESET}{_GREEN}{header}{_RESET}{_DIM}{'─' * pad}{_RESET}")
         lines.append("")
 
-        # Buddy (always centered)
-        buddy_lines = self._current_frame.lines
-        for bl in buddy_lines:
-            pad = max(0, (term_width - len(bl)) // 2)
-            lines.append(f"{_GREEN}{' ' * pad}{bl}{_RESET}")
-
-        lines.append("")
-
-        # Speech bubble or status
+        # Speech bubble or status (above buddy)
         if self._current_bubble:
             bubble_lines = self._current_bubble.render()
             for bl in bubble_lines:
@@ -78,6 +70,14 @@ class ConsoleOverlay(AbstractOverlay):
             status = "zzz..."
             pad = max(0, (term_width - len(status)) // 2)
             lines.append(f"{_DIM}{' ' * pad}{status}{_RESET}")
+
+        lines.append("")
+
+        # Buddy (always centered, below bubble)
+        buddy_lines = self._current_frame.lines
+        for bl in buddy_lines:
+            pad = max(0, (term_width - len(bl)) // 2)
+            lines.append(f"{_GREEN}{' ' * pad}{bl}{_RESET}")
 
         lines.append("")
 

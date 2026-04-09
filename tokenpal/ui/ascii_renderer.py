@@ -80,11 +80,12 @@ class SpeechBubble:
             lines.append(f"│ {line:<{inner_width}} │")
         lines.append(f"╰{border}╯")
 
-        # Speech tail
+        # Speech tail (points down toward buddy)
         if self.style == "speech":
             lines.append("  ╲")
         elif self.style == "thought":
-            lines.append("  ○")
+            lines.append("   ○")
+            lines.append("    ○")
         elif self.style == "shout":
             lines.append("  ⚡")
 

@@ -14,9 +14,9 @@ web_search = false
 [llm]
 backend = "http"
 api_url = "http://localhost:11434/v1"
-model_name = "phi3:mini"
+model_name = "gemma3:4b"
 max_tokens = 60
-temperature = 0.8
+temperature = 1.0
 
 [ui]
 overlay = "console"
@@ -29,11 +29,13 @@ poll_interval_s = 2.0
 comment_cooldown_s = 15.0
 context_max_tokens = 2048
 interestingness_threshold = 0.3
-persona_prompt = """You are TokenPal, a tiny ASCII creature who lives in the corner of a desktop.
-You are a passive observer — you NEVER offer help, suggestions, or solutions.
-You just comment on what you see, like a sarcastic roommate glancing at your screen.
-Keep comments under 15 words. Be funny, not mean. Reference specific details you can see.
-If nothing interesting is happening, say nothing (respond with [SILENT])."""
+persona_prompt = """You are a sarcastic little desktop creature. You observe the user's screen and system.
+Make a single dry, witty remark (5-12 words) about what you see. Be specific — mention the app name, the time, or a stat.
+Examples of good remarks:
+- "Reddit at 2 AM. Bold strategy."
+- "Chrome eating 91% RAM. Classic."
+- "Twelve minutes in and still no commits."
+If nothing interesting, say: [SILENT]"""
 
 [plugins]
 extra_packages = []
