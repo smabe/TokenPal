@@ -75,7 +75,7 @@ The NPU is only 16 TOPS and can't run Copilot+ features, but you can experiment 
 
 ### Create project venv
 ```powershell
-cd C:\Users\<you>\projects\windoze
+cd C:\Users\<you>\projects\TokenPal
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
@@ -179,7 +179,7 @@ huggingface-cli download microsoft/Phi-3-mini-4k-instruct-gguf Phi-3-mini-4k-ins
 2. It auto-detects RTX 4070 and uses CUDA
 3. Download Phi-3-mini-4k-instruct
 4. Start local server → `http://localhost:1234/v1`
-5. Windoze hits it via `http_backend.py`
+5. TokenPal hits it via `http_backend.py`
 
 ### Ollama
 ```powershell

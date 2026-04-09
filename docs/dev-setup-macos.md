@@ -50,7 +50,7 @@ brew install git
 
 ### Create project venv
 ```bash
-cd ~/projects/windoze
+cd ~/projects/TokenPal
 python3 -m venv .venv
 source .venv/bin/activate
 ```
@@ -222,9 +222,9 @@ Or use the macOS MediaRemote private framework via ctypes (more complex, less st
 from AppKit import NSSpeechSynthesizer
 
 synth = NSSpeechSynthesizer.alloc().init()
-synth.startSpeakingString_("Hello from Windoze")
+synth.startSpeakingString_("Hello from TokenPal")
 ```
-Or simpler: `subprocess.run(["say", "Hello from Windoze"])`
+Or simpler: `subprocess.run(["say", "Hello from TokenPal"])`
 
 ### Overlay window (NSWindow — for full-screen support)
 ```python
@@ -280,7 +280,7 @@ result = subprocess.run(
 ```
 
 **Gotcha:** `powermetrics` requires root. Options:
-1. Run Windoze with sudo (not ideal)
+1. Run TokenPal with sudo (not ideal)
 2. Run a small helper daemon that caches sensor data to a file
 3. Skip deep thermals and stick to psutil basics
 4. Use `iStats` gem: `gem install iStats && istats` (less data but no sudo)
@@ -352,7 +352,7 @@ python3 -c "import Quartz; print(f'Idle: {Quartz.CGEventSourceSecondsSinceLastEv
 python3 -c "from AppKit import NSPasteboard; print(NSPasteboard.generalPasteboard().stringForType_('public.utf8-plain-text'))"
 
 # 10. TTS
-python3 -c "import subprocess; subprocess.run(['say', 'Windoze is alive'])"
+python3 -c "import subprocess; subprocess.run(['say', 'TokenPal is alive'])"
 ```
 
 ---

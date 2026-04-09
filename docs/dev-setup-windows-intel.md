@@ -69,7 +69,7 @@ Fall back to OpenVINO GenAI or the HTTP backend (LM Studio/Ollama). See LLM back
 
 ### Create project venv
 ```powershell
-cd C:\Users\<you>\projects\windoze
+cd C:\Users\<you>\projects\TokenPal
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
@@ -138,7 +138,7 @@ If ONNX/OpenVINO setup is painful, just run a local model server:
 1. Download from https://lmstudio.ai
 2. Download Phi-3-mini-4k-instruct (GGUF format)
 3. Start local server (defaults to `http://localhost:1234/v1`)
-4. Windoze hits it via `http_backend.py` — zero NPU config needed
+4. TokenPal hits it via `http_backend.py` — zero NPU config needed
 
 ### Ollama
 ```powershell

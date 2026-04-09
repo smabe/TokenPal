@@ -66,7 +66,7 @@ hipinfo
 
 ### Create project venv
 ```powershell
-cd C:\Users\<you>\projects\windoze
+cd C:\Users\<you>\projects\TokenPal
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 ```
@@ -231,8 +231,8 @@ amdsmi.amdsmi_shut_down()
 - **LibreHardwareMonitor** exposes AMD GPU data via WMI (same as other Windows setups)
 - This is the most reliable path for thermals + fan speed + VRAM usage
 
-### For the Windoze architecture
-Create `windoze/senses/hardware/amd_gpu_hardware.py`:
+### For the TokenPal architecture
+Create `tokenpal/senses/hardware/amd_gpu_hardware.py`:
 - Extends `PsutilHardware`
 - Uses `amdsmi` if available, falls back to WMI + LibreHardwareMonitor
 - Registered with `platforms = ("windows",)` and detected via GPU vendor check at resolve time
@@ -329,7 +329,7 @@ winget install UB-Mannheim.TesseractOCR
 
 ## 12. What This Machine Is Best For
 
-This is your **power station** for Windoze development:
+This is your **power station** for TokenPal development:
 - **Run the biggest models:** 13B-14B Q4 fits in 16 GB VRAM. Higher quality commentary.
 - **Vision model headroom:** Can load a chat LLM (8B, ~5 GB) AND a vision model (Florence-2, ~1 GB) simultaneously.
 - **Fast iteration:** Desktop CPU + GPU = fastest build/test cycles.
