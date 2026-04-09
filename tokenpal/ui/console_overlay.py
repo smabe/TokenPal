@@ -25,6 +25,9 @@ _CLEAR_SCREEN = "\033[2J\033[H"
 _HIDE_CURSOR = "\033[?25l"
 _SHOW_CURSOR = "\033[?25h"
 
+# Typing animation speed (seconds per character)
+_TYPING_SPEED = 0.03
+
 
 @register_overlay
 class ConsoleOverlay(AbstractOverlay):
@@ -40,6 +43,12 @@ class ConsoleOverlay(AbstractOverlay):
         self._lock = threading.Lock()
         self._running = False
         self._buddy_name = config.get("buddy_name", "TokenPal")
+
+        # Typing animation state
+        self._full_text: str = ""
+        self._typing_index: int = 0
+        self._typing_active: bool = False
+        self._last_type_time: float = 0.0
 
     def setup(self) -> None:
         sys.stdout.write(_HIDE_CURSOR)
@@ -63,7 +72,16 @@ class ConsoleOverlay(AbstractOverlay):
 
         # Speech bubble or status (above buddy)
         if self._current_bubble:
-            bubble_lines = self._current_bubble.render()
+            # During typing, show partial text; after typing, show full text
+            if self._typing_active:
+                partial = SpeechBubble(
+                    text=self._full_text[:self._typing_index],
+                    style=self._current_bubble.style,
+                    max_width=self._current_bubble.max_width,
+                )
+                bubble_lines = partial.render()
+            else:
+                bubble_lines = self._current_bubble.render()
             for bl in bubble_lines:
                 pad = max(0, (term_width - len(bl)) // 2)
                 content.append(f"{_WHITE}{' ' * pad}{bl}{_RESET}")
@@ -104,12 +122,27 @@ class ConsoleOverlay(AbstractOverlay):
     def show_speech(self, bubble: SpeechBubble) -> None:
         self._current_bubble = bubble
         self._current_frame = BuddyFrame.get("talking")
-        self._render()
 
-        # Auto-hide after duration
+        # Start typing animation
+        self._full_text = bubble.text
+        self._typing_index = 0
+        self._typing_active = True
+        self._last_type_time = time.monotonic()
+
+        # Cancel any pending hide job
         if self._hide_job:
             self._hide_job.cancel()
-        display_s = max(4.0, len(bubble.text) * 0.1)
+            self._hide_job = None
+
+        self._render()
+
+    def _finish_typing(self) -> None:
+        """Called when the typing animation completes."""
+        self._typing_active = False
+        self._render()
+
+        # Start auto-hide timer now that typing is done
+        display_s = max(3.0, len(self._full_text) * 0.08)
         self._hide_job = threading.Timer(display_s, self.hide_speech)
         self._hide_job.daemon = True
         self._hide_job.start()
@@ -118,6 +151,7 @@ class ConsoleOverlay(AbstractOverlay):
         self._current_bubble = None
         self._current_frame = BuddyFrame.get("idle")
         self._hide_job = None
+        self._typing_active = False
         self._render()
 
     def run_loop(self) -> None:
@@ -125,6 +159,17 @@ class ConsoleOverlay(AbstractOverlay):
         self._running = True
         try:
             while self._running:
+                # Advance typing animation
+                if self._typing_active:
+                    now = time.monotonic()
+                    if now - self._last_type_time >= _TYPING_SPEED:
+                        self._typing_index += 1
+                        self._last_type_time = now
+                        if self._typing_index >= len(self._full_text):
+                            self._finish_typing()
+                        else:
+                            self._render()
+
                 # Process any pending callbacks
                 with self._lock:
                     now = time.monotonic()
@@ -137,7 +182,8 @@ class ConsoleOverlay(AbstractOverlay):
                     except Exception:
                         log.exception("Callback error")
 
-                time.sleep(0.1)
+                # Adaptive sleep: fast during typing, slow otherwise
+                time.sleep(0.03 if self._typing_active else 0.1)
         except KeyboardInterrupt:
             self._running = False
 
