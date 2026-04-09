@@ -16,7 +16,7 @@ from tokenpal.ui.registry import register_overlay
 
 log = logging.getLogger(__name__)
 
-# ANSI color codes
+# ANSI escape codes
 _GREEN = "\033[38;2;0;255;136m"
 _WHITE = "\033[38;2;220;220;220m"
 _DIM = "\033[2m"
@@ -48,47 +48,52 @@ class ConsoleOverlay(AbstractOverlay):
         log.info("ConsoleOverlay ready")
 
     def _render(self) -> None:
-        """Redraw the entire console display."""
+        """Redraw the entire console display, bottom-anchored."""
         term_width = shutil.get_terminal_size().columns
+        term_height = shutil.get_terminal_size().lines
 
-        lines: list[str] = []
+        content: list[str] = []
 
         # Header
-        lines.append("")
         header = f" {self._buddy_name} "
-        pad = (term_width - len(header)) // 2
-        lines.append(f"{_DIM}{'─' * pad}{_RESET}{_GREEN}{header}{_RESET}{_DIM}{'─' * pad}{_RESET}")
-        lines.append("")
+        hpad = (term_width - len(header)) // 2
+        content.append("")
+        content.append(f"{_DIM}{'─' * hpad}{_RESET}{_GREEN}{header}{_RESET}{_DIM}{'─' * hpad}{_RESET}")
+        content.append("")
 
         # Speech bubble or status (above buddy)
         if self._current_bubble:
             bubble_lines = self._current_bubble.render()
             for bl in bubble_lines:
                 pad = max(0, (term_width - len(bl)) // 2)
-                lines.append(f"{_WHITE}{' ' * pad}{bl}{_RESET}")
+                content.append(f"{_WHITE}{' ' * pad}{bl}{_RESET}")
         else:
             status = "zzz..."
             pad = max(0, (term_width - len(status)) // 2)
-            lines.append(f"{_DIM}{' ' * pad}{status}{_RESET}")
+            content.append(f"{_DIM}{' ' * pad}{status}{_RESET}")
 
-        lines.append("")
+        content.append("")
 
-        # Buddy (always centered, below bubble)
+        # Buddy (always centered)
         buddy_lines = self._current_frame.lines
         for bl in buddy_lines:
             pad = max(0, (term_width - len(bl)) // 2)
-            lines.append(f"{_GREEN}{' ' * pad}{bl}{_RESET}")
+            content.append(f"{_GREEN}{' ' * pad}{bl}{_RESET}")
 
-        lines.append("")
+        content.append("")
 
         # Bottom border
-        lines.append(f"{_DIM}{'─' * term_width}{_RESET}")
+        content.append(f"{_DIM}{'─' * term_width}{_RESET}")
 
-        # Sense status line
-        lines.append(f"{_DIM}  Ctrl+C to quit{_RESET}")
+        # Status bar (bottom-most)
+        content.append(f"{_DIM}  Ctrl+C to quit{_RESET}")
+
+        # Fill remaining space above with blank lines to push to bottom
+        blank_lines = max(0, term_height - len(content))
+        output_lines = [""] * blank_lines + content
 
         # Write all at once to avoid flicker
-        output = _CLEAR_SCREEN + "\n".join(lines)
+        output = _CLEAR_SCREEN + "\n".join(output_lines)
         sys.stdout.write(output)
         sys.stdout.flush()
 
