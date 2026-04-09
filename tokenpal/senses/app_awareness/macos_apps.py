@@ -57,9 +57,10 @@ class MacOSAppAwareness(AbstractSense):
                         window_title = title
                         break
 
-        summary = f"{app_name}"
         if window_title:
-            summary += f' — "{window_title}"'
+            summary = f'App: {app_name}, window title: "{window_title}"'
+        else:
+            summary = f"App: {app_name}"
 
         return self._reading(
             data={

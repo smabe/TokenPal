@@ -37,7 +37,7 @@ class TimeSense(AbstractSense):
         else:
             session_str = f"{minutes}m"
 
-        summary = f"{time_str}, {day_str}. Session: {session_str}."
+        summary = f"It's {time_str} on {day_str}, user has been working for {session_str}"
 
         return self._reading(
             data={

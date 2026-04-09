@@ -27,7 +27,7 @@ class ContextWindowBuilder:
             self._history.append(r)
 
     def snapshot(self) -> str:
-        """Build a context string from current readings for the LLM prompt."""
+        """Build a natural-language context string for the LLM prompt."""
         now = time.monotonic()
         lines: list[str] = []
 
@@ -35,8 +35,8 @@ class ContextWindowBuilder:
             age = now - reading.timestamp
             if age > _READING_TTL:
                 continue
-            tag = sense_name.upper().replace("_", " ")
-            lines.append(f"[{tag}] {reading.summary}")
+            # Use the summary directly — it's already human-readable
+            lines.append(reading.summary)
 
         return "\n".join(lines)
 
