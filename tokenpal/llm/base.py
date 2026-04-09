@@ -4,8 +4,17 @@ from __future__ import annotations
 
 import abc
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
+
+
+@dataclass
+class ToolCall:
+    """A single tool invocation requested by the LLM."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
 
 
 @dataclass
@@ -16,6 +25,7 @@ class LLMResponse:
     tokens_used: int
     model_name: str
     latency_ms: float
+    tool_calls: list[ToolCall] = field(default_factory=list)
 
 
 class AbstractLLMBackend(abc.ABC):
@@ -39,6 +49,17 @@ class AbstractLLMBackend(abc.ABC):
     @abc.abstractmethod
     async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
         """Single-shot generation."""
+
+    async def generate_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        max_tokens: int = 256,
+    ) -> LLMResponse:
+        """Chat completion with tool definitions. Default: fall back to generate()."""
+        # Fallback for backends that don't support tools — just use the last user message
+        prompt = messages[-1].get("content", "") if messages else ""
+        return await self.generate(prompt, max_tokens)
 
     async def stream(self, prompt: str, max_tokens: int = 256) -> AsyncIterator[str]:
         """Yield tokens as they arrive. Default: fall back to generate()."""

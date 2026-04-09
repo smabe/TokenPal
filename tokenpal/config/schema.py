@@ -65,6 +65,14 @@ class MemoryConfig:
 
 
 @dataclass
+class ActionsConfig:
+    enabled: bool = True
+    timer: bool = True
+    system_info: bool = True
+    open_app: bool = True
+
+
+@dataclass
 class PluginsConfig:
     extra_packages: list[str] = field(default_factory=list)
     sense_overrides: dict[str, str] = field(default_factory=dict)
@@ -77,4 +85,5 @@ class TokenPalConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    actions: ActionsConfig = field(default_factory=ActionsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)

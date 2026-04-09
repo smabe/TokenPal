@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from tokenpal.config.schema import (
+    ActionsConfig,
     BrainConfig,
     LLMConfig,
     MemoryConfig,
@@ -26,6 +27,7 @@ _SECTION_MAP: dict[str, type] = {
     "ui": UIConfig,
     "brain": BrainConfig,
     "memory": MemoryConfig,
+    "actions": ActionsConfig,
     "plugins": PluginsConfig,
 }
 

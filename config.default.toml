@@ -43,5 +43,11 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." -- boring."""
 enabled = true
 retention_days = 30
 
+[actions]
+enabled = true
+timer = true
+system_info = true
+open_app = true
+
 [plugins]
 extra_packages = []

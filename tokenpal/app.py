@@ -9,6 +9,7 @@ import signal
 import threading
 from pathlib import Path
 
+from tokenpal.actions.registry import discover_actions, resolve_actions
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.brain.personality import PersonalityEngine
@@ -33,6 +34,7 @@ def main() -> None:
     discover_senses(extra_packages=config.plugins.extra_packages)
     discover_backends()
     discover_overlays()
+    discover_actions()
 
     # Resolve implementations for this platform + config
     sense_flags = {f.name: getattr(config.senses, f.name) for f in dataclasses.fields(config.senses)}
@@ -60,6 +62,18 @@ def main() -> None:
 
     personality = PersonalityEngine(config.brain.persona_prompt, voice=voice)
 
+    # Actions (LLM-callable tools)
+    actions = []
+    if config.actions.enabled:
+        action_flags = {
+            f.name: getattr(config.actions, f.name)
+            for f in dataclasses.fields(config.actions)
+            if f.name != "enabled"
+        }
+        actions = resolve_actions(enabled=action_flags)
+        if actions:
+            log.info("Loaded %d actions: %s", len(actions), [a.action_name for a in actions])
+
     # Session memory
     memory: MemoryStore | None = None
     if config.memory.enabled:
@@ -85,6 +99,7 @@ def main() -> None:
             lambda t=text: overlay.update_status(t)
         ),
         memory=memory,
+        actions=actions,
         poll_interval_s=config.brain.poll_interval_s,
         comment_cooldown_s=config.brain.comment_cooldown_s,
         interestingness_threshold=config.brain.interestingness_threshold,

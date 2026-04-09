@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import time
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable
 
+from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import PersonalityEngine
-from tokenpal.llm.base import AbstractLLMBackend
+from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 
 log = logging.getLogger(__name__)
@@ -25,6 +27,9 @@ _WINDOW_SECONDS = 300.0
 class Brain:
     """Polls senses, builds context, decides when to comment, generates via LLM."""
 
+    # Max tool call rounds per comment to prevent infinite loops
+    _MAX_TOOL_ROUNDS = 3
+
     def __init__(
         self,
         senses: list[AbstractSense],
@@ -33,6 +38,7 @@ class Brain:
         personality: PersonalityEngine,
         status_callback: Callable[[str], None] | None = None,
         memory: MemoryStore | None = None,
+        actions: list[AbstractAction] | None = None,
         poll_interval_s: float = 2.0,
         comment_cooldown_s: float = 15.0,
         interestingness_threshold: float = 0.3,
@@ -52,6 +58,10 @@ class Brain:
         self._context = ContextWindowBuilder(max_tokens=context_max_tokens)
         self._last_comment_time: float = time.monotonic()
         self._running = False
+
+        # Actions (LLM-callable tools)
+        self._actions: dict[str, AbstractAction] = {a.action_name: a for a in (actions or [])}
+        self._tool_specs = [a.to_tool_spec() for a in self._actions.values()]
 
         # Per-sense scheduling
         self._sense_intervals: dict[str, float] = sense_intervals or {}
@@ -223,7 +233,12 @@ class Brain:
         prompt = self._personality.build_prompt(snapshot, memory_lines=memory_lines)
 
         try:
-            response = await self._llm.generate(prompt)
+            # Use tool-calling path if actions are available
+            if self._actions and self._tool_specs:
+                response = await self._generate_with_tools(prompt)
+            else:
+                response = await self._llm.generate(prompt)
+
             filtered = self._personality.filter_response(response.text)
 
             if filtered:
@@ -257,6 +272,65 @@ class Brain:
                 self._ui_callback(quip)
                 self._last_confused_quip = now
                 self._last_comment_time = now
+
+    async def _generate_with_tools(self, prompt: str) -> LLMResponse:
+        """Multi-turn tool-calling loop. Sends prompt with tool defs, executes
+        any tool calls the LLM requests, feeds results back, and repeats until
+        the LLM produces a final text response (or we hit the round limit)."""
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+
+        for _round in range(self._MAX_TOOL_ROUNDS):
+            response = await self._llm.generate_with_tools(
+                messages=messages,
+                tools=self._tool_specs,
+            )
+
+            if not response.tool_calls:
+                return response
+
+            assistant_msg: dict[str, Any] = {
+                "role": "assistant",
+                "content": response.text or "",
+                "tool_calls": [
+                    {
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {
+                            "name": tc.name,
+                            "arguments": json.dumps(tc.arguments),
+                        },
+                    }
+                    for tc in response.tool_calls
+                ],
+            }
+            messages.append(assistant_msg)
+
+            results = await asyncio.gather(
+                *(self._execute_tool_call(tc) for tc in response.tool_calls),
+            )
+            for tc, result_text in zip(response.tool_calls, results):
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result_text,
+                })
+
+        log.warning("Hit tool round limit (%d), forcing text response", self._MAX_TOOL_ROUNDS)
+        return await self._llm.generate_with_tools(messages=messages, tools=[])
+
+    async def _execute_tool_call(self, tc: ToolCall) -> str:
+        """Execute a single tool call and return the result text."""
+        action = self._actions.get(tc.name)
+        if action is None:
+            log.warning("LLM called unknown action: %s", tc.name)
+            return f"Unknown tool '{tc.name}'."
+        try:
+            result = await action.execute(**tc.arguments)
+            log.info("Action '%s' executed: %s", tc.name, result.output)
+            return result.output
+        except Exception as e:
+            log.warning("Action '%s' failed: %s", tc.name, e)
+            return f"Error: {e}"
 
     def _record_memory_events(
         self, snapshot: str, readings: list[SenseReading]
@@ -305,5 +379,10 @@ class Brain:
                 await sense.teardown()
             except Exception:
                 log.exception("Error tearing down sense '%s'", sense.sense_name)
+        for action in self._actions.values():
+            try:
+                await action.teardown()
+            except Exception:
+                log.exception("Error tearing down action '%s'", action.action_name)
         await self._llm.teardown()
         log.info("Brain stopped")
