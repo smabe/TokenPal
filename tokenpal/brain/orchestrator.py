@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
-from typing import Any, Callable
+from datetime import datetime
+from typing import Callable
 
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.personality import PersonalityEngine
@@ -13,6 +15,10 @@ from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.senses.base import AbstractSense, SenseReading
 
 log = logging.getLogger(__name__)
+
+# Max comments in a 5-minute window (guardrail §2)
+_MAX_COMMENTS_PER_WINDOW = 5
+_WINDOW_SECONDS = 300.0
 
 
 class Brain:
@@ -40,6 +46,10 @@ class Brain:
         self._last_comment_time: float = 0.0
         self._running = False
 
+        # Silence tuning state
+        self._consecutive_comments: int = 0
+        self._comment_timestamps: list[float] = []
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -63,8 +73,14 @@ class Brain:
                 readings = await self._poll_all_senses()
                 self._context.ingest(readings)
 
+                snapshot = self._context.snapshot()
+
+                # Update personality state each cycle
+                self._personality.update_mood(snapshot)
+                self._personality.update_gags(snapshot)
+
                 if self._should_comment():
-                    await self._generate_comment()
+                    await self._generate_comment(snapshot)
 
             except Exception:
                 log.exception("Error in brain loop")
@@ -87,11 +103,41 @@ class Brain:
         elapsed = time.monotonic() - self._last_comment_time
         if elapsed < self._cooldown:
             return False
-        return self._context.interestingness() >= self._threshold
 
-    async def _generate_comment(self) -> None:
-        snapshot = self._context.snapshot()
+        # Silence tuning: after 3-4 consecutive comments, force a gap
+        if self._consecutive_comments >= 3 and random.random() < 0.5:
+            log.debug("Forced silence — %d consecutive comments", self._consecutive_comments)
+            self._consecutive_comments = 0
+            return False
+
+        # Guardrail: cap at N comments per 5-minute window
+        now = time.monotonic()
+        self._comment_timestamps = [
+            t for t in self._comment_timestamps if now - t < _WINDOW_SECONDS
+        ]
+        if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
+            log.debug("Rate limit — %d comments in window", len(self._comment_timestamps))
+            return False
+
+        # Time-of-day weighting: raise threshold at night for quieter behavior
+        hour = datetime.now().hour
+        threshold = self._threshold
+        if 0 <= hour < 6:
+            threshold = min(threshold + 0.2, 0.9)
+        elif 22 <= hour <= 23:
+            threshold = min(threshold + 0.1, 0.8)
+
+        return self._context.interestingness() >= threshold
+
+    async def _generate_comment(self, snapshot: str | None = None) -> None:
+        if snapshot is None:
+            snapshot = self._context.snapshot()
         if not snapshot.strip():
+            return
+
+        # Guardrail: sensitive app detected — go silent
+        if self._personality.check_sensitive_app(snapshot):
+            log.debug("Sensitive app detected — staying silent")
             return
 
         # Check for easter eggs first — bypass LLM entirely
@@ -101,6 +147,8 @@ class Brain:
             self._personality.record_comment(egg)
             self._ui_callback(egg)
             self._last_comment_time = time.monotonic()
+            self._consecutive_comments += 1
+            self._comment_timestamps.append(time.monotonic())
             return
 
         prompt = self._personality.build_prompt(snapshot)
@@ -114,8 +162,11 @@ class Brain:
                 self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
                 self._last_comment_time = time.monotonic()
+                self._consecutive_comments += 1
+                self._comment_timestamps.append(time.monotonic())
             else:
                 log.debug("LLM chose silence")
+                self._consecutive_comments = 0
 
         except Exception:
             log.exception("LLM generation failed")
