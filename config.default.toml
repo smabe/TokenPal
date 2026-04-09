@@ -15,11 +15,11 @@ web_search = false
 backend = "http"
 api_url = "http://localhost:11434/v1"
 model_name = "phi3:mini"
-max_tokens = 256
+max_tokens = 60
 temperature = 0.8
 
 [ui]
-overlay = "auto"
+overlay = "console"
 buddy_name = "TokenPal"
 font_size = 14
 position = "bottom_right"

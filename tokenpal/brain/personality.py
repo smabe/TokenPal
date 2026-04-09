@@ -19,10 +19,13 @@ class PersonalityEngine:
         """Combine persona + current context into a full LLM prompt."""
         return (
             f"{self._persona}\n\n"
-            f"Here is what you can currently observe:\n"
-            f"{context_snapshot}\n\n"
-            f"Based on what you observe, make a short comment. "
-            f"If nothing is interesting, respond with [SILENT]."
+            f"--- CURRENT OBSERVATIONS ---\n"
+            f"{context_snapshot}\n"
+            f"--- END OBSERVATIONS ---\n\n"
+            f"Write ONE short, funny comment (under 15 words) about what you observe. "
+            f"Do NOT repeat or echo the observations. Do NOT include tags like [TIME] or [APP]. "
+            f"Just say your comment directly as if speaking out loud. "
+            f"If nothing is interesting, respond with only: [SILENT]"
         )
 
     def filter_response(self, text: str) -> str | None:
@@ -36,8 +39,17 @@ class PersonalityEngine:
         if not text or len(text) < 3:
             return None
 
-        # Cap at ~100 chars to keep comments punchy
-        if len(text) > 120:
-            text = text[:117] + "..."
+        # Strip any leaked context tags the LLM echoed back
+        import re
+        text = re.sub(r"\[[^\]]{2,}\]", "", text).strip()
+        # Clean up leftover dashes/whitespace from stripped tags
+        text = re.sub(r"^\s*[-–—]\s*", "", text).strip()
+
+        if not text or len(text) < 3:
+            return None
+
+        # Cap length to keep comments punchy
+        if len(text) > 80:
+            text = text[:77] + "..."
 
         return text

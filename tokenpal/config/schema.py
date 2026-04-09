@@ -26,13 +26,13 @@ class LLMConfig:
     model_path: str = ""
     api_url: str = "http://localhost:11434/v1"
     model_name: str = "phi3:mini"
-    max_tokens: int = 256
+    max_tokens: int = 60
     temperature: float = 0.8
 
 
 @dataclass
 class UIConfig:
-    overlay: str = "auto"
+    overlay: str = "console"
     buddy_name: str = "TokenPal"
     font_family: str = "Courier"
     font_size: int = 14
