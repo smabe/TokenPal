@@ -25,7 +25,7 @@ class VoiceProfile:
         return len(self.lines)
 
 
-def _slugify(name: str) -> str:
+def slugify(name: str) -> str:
     """Convert a character name to a filesystem-safe slug."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
@@ -33,7 +33,7 @@ def _slugify(name: str) -> str:
 def save_profile(profile: VoiceProfile, voices_dir: Path) -> Path:
     """Save a voice profile to JSON. Returns the path written."""
     voices_dir.mkdir(parents=True, exist_ok=True)
-    slug = _slugify(profile.character)
+    slug = slugify(profile.character)
     path = voices_dir / f"{slug}.json"
     data = asdict(profile)
     data["line_count"] = profile.line_count

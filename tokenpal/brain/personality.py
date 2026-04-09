@@ -9,6 +9,10 @@ import re
 import time
 from collections import deque
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tokenpal.tools.voice_profile import VoiceProfile
 
 log = logging.getLogger(__name__)
 
@@ -212,24 +216,19 @@ class PersonalityEngine:
     def __init__(
         self,
         persona_prompt: str,
-        voice_lines: list[str] | None = None,
-        voice_persona: str = "",
-        voice_greetings: list[str] | None = None,
-        voice_offline_quips: list[str] | None = None,
+        voice: VoiceProfile | None = None,
     ) -> None:
-        # persona_prompt from config is kept for backwards compat but we use
-        # the new _PERSONA_TEMPLATE internally.
         self._persona = persona_prompt
-        self._voice_persona = voice_persona
-        self._voice_greetings = voice_greetings or []
-        self._voice_offline_quips = voice_offline_quips or []
+        self._voice_persona = voice.persona if voice else ""
+        self._voice_greetings = voice.greetings if voice and voice.greetings else []
+        self._voice_offline_quips = voice.offline_quips if voice and voice.offline_quips else []
         self._recent_comments: deque[str] = deque(maxlen=5)
 
         # Voice: custom example pool from trained voice profile
+        voice_lines = voice.lines if voice else None
         if voice_lines and len(voice_lines) >= 10:
             self._example_pool = voice_lines
         elif voice_lines:
-            # Pad short voice with defaults to reach 10
             pad = random.sample(_EXAMPLE_POOL, min(10 - len(voice_lines), len(_EXAMPLE_POOL)))
             self._example_pool = voice_lines + pad
         else:

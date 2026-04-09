@@ -23,7 +23,7 @@ from tokenpal.tools.voice_profile import (
     list_profiles,
     make_profile,
     save_profile,
-    _slugify,
+    slugify,
 )
 
 _VOICES_DIR = Path.home() / ".tokenpal" / "voices"
@@ -70,8 +70,8 @@ Based on these lines, write a ONE sentence persona description for an AI that sh
 Write ONLY the persona description, nothing else. No quotes. One sentence.""")
 
 
-def _generate_greetings(character: str, lines: list[str]) -> list[str]:
-    """Ask Ollama to generate startup greetings in the character's voice."""
+def _generate_lines_from_prompt(character: str, lines: list[str], task_prompt: str) -> list[str]:
+    """Generate numbered one-liners via Ollama from a character's voice samples."""
     samples = random.sample(lines, min(10, len(lines)))
     samples_block = "\n".join(f"- {line}" for line in samples)
 
@@ -80,7 +80,7 @@ def _generate_greetings(character: str, lines: list[str]) -> list[str]:
 
 {samples_block}
 
-Write 10 short startup greetings (what this character would say when waking up or arriving). One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude. No stage directions.""",
+{task_prompt}""",
         max_tokens=200,
         temperature=0.9,
     )
@@ -88,41 +88,26 @@ Write 10 short startup greetings (what this character would say when waking up o
     if not text:
         return []
 
-    greetings: list[str] = []
+    result: list[str] = []
     for line in text.splitlines():
-        # Strip numbering like "1." or "1)"
         cleaned = re.sub(r"^\d+[.)]\s*", "", line).strip().strip("\"'").strip()
         if cleaned and 8 <= len(cleaned) <= 60:
-            greetings.append(cleaned)
+            result.append(cleaned)
+    return result
 
-    return greetings
+
+def _generate_greetings(character: str, lines: list[str]) -> list[str]:
+    return _generate_lines_from_prompt(character, lines,
+        "Write 10 short startup greetings (what this character would say when waking up "
+        "or arriving). One per line, numbered 1-10. Each under 50 characters. "
+        "Match their slang and attitude. No stage directions.")
 
 
 def _generate_offline_quips(character: str, lines: list[str]) -> list[str]:
-    """Ask Ollama to generate confused/offline quips in the character's voice."""
-    samples = random.sample(lines, min(10, len(lines)))
-    samples_block = "\n".join(f"- {line}" for line in samples)
-
-    text = _ollama_generate(
-        f"""Here are sample dialogue lines from "{character}":
-
-{samples_block}
-
-Write 10 short confused/disoriented lines — what this character would say if they suddenly lost their train of thought or their brain stopped working. One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude.""",
-        max_tokens=200,
-        temperature=0.9,
-    )
-
-    if not text:
-        return []
-
-    quips: list[str] = []
-    for line in text.splitlines():
-        cleaned = re.sub(r"^\d+[.)]\s*", "", line).strip().strip("\"'").strip()
-        if cleaned and 8 <= len(cleaned) <= 60:
-            quips.append(cleaned)
-
-    return quips
+    return _generate_lines_from_prompt(character, lines,
+        "Write 10 short confused/disoriented lines — what this character would say if "
+        "they suddenly lost their train of thought or their brain stopped working. "
+        "One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude.")
 
 
 def _find_config_toml() -> Path:
@@ -290,33 +275,29 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     greetings: list[str] = []
     offline_quips: list[str] = []
     if not args.no_persona:
-        print("Generating persona via Ollama...", end=" ", flush=True)
-        persona = _generate_persona(name, lines) or ""
-        if persona:
-            print("done!")
-            print(f"\nPersona: {persona}\n")
-        else:
-            print("skipped (Ollama unavailable)")
+        from concurrent.futures import ThreadPoolExecutor
 
-        print("Generating startup greetings...", end=" ", flush=True)
-        greetings = _generate_greetings(name, lines)
+        print("Generating persona, greetings, and offline quips via Ollama...", flush=True)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            f_persona = pool.submit(_generate_persona, name, lines)
+            f_greetings = pool.submit(_generate_greetings, name, lines)
+            f_quips = pool.submit(_generate_offline_quips, name, lines)
+
+        persona = f_persona.result() or ""
+        greetings = f_greetings.result()
+        offline_quips = f_quips.result()
+
+        if persona:
+            print(f"\nPersona: {persona}")
         if greetings:
-            print(f"done! ({len(greetings)} greetings)")
+            print(f"\nStartup greetings ({len(greetings)}):")
             for g in greetings[:5]:
                 print(f'  "{g}"')
-            print()
-        else:
-            print("skipped")
-
-        print("Generating offline quips...", end=" ", flush=True)
-        offline_quips = _generate_offline_quips(name, lines)
         if offline_quips:
-            print(f"done! ({len(offline_quips)} quips)")
+            print(f"\nOffline quips ({len(offline_quips)}):")
             for q in offline_quips[:5]:
                 print(f'  "{q}"')
-            print()
-        else:
-            print("skipped")
+        print()
 
     profile = make_profile(
         character=name,
@@ -327,7 +308,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         offline_quips=offline_quips,
     )
     out_path = save_profile(profile, _VOICES_DIR)
-    slug = _slugify(name)
+    slug = slugify(name)
 
     print(f"Saved voice \"{slug}\" ({len(lines)} lines) to {out_path}")
 

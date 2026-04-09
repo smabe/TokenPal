@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import re
 import sys
-import urllib.request
 import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Iterator
 
 # Fandom wiki API endpoint pattern

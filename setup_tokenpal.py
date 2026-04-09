@@ -7,7 +7,6 @@ Usage:
 
 from __future__ import annotations
 
-import os
 import platform
 import shutil
 import subprocess
@@ -127,7 +126,7 @@ def install_deps(python: str, plat: str) -> bool:
     extras = pip_extras(plat)
     print(f"  Running: pip install -e \".[{extras}]\"")
 
-    result = subprocess.run(
+    subprocess.run(
         [python, "-m", "pip", "install", "--upgrade", "pip"],
         capture_output=True, text=True,
     )
