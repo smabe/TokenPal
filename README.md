@@ -171,6 +171,23 @@ python -m tokenpal.tools.train_voice --activate
 | `--min-lines N` | Minimum lines required (default: 10) |
 | `--max-pages N` | Max wiki transcript pages to fetch (default: 500) |
 
+### Fine-tune a voice model (LoRA)
+
+For deeper character embodiment, fine-tune a model on the voice's dialogue lines using a remote GPU:
+
+1. Configure your GPU box in `config.toml`:
+   ```toml
+   [finetune.remote]
+   host = "gpu-box.local"
+   user = "you"
+   use_wsl = true  # if Windows + WSL
+   ```
+
+2. One-time setup: `/voice finetune-setup`
+3. Fine-tune: `/voice finetune mordecai`
+
+Training runs on the remote GPU via SSH (survives disconnects). The merged model is automatically downloaded and registered with Ollama. See [docs/remote-training-guide.md](docs/remote-training-guide.md) for the full guide.
+
 ## CLI
 
 ```
@@ -213,7 +230,7 @@ tokenpal/
 ├── config/          # TOML schema and loader
 ├── llm/             # LLM backends (HTTP/Ollama with tool-calling support)
 ├── senses/          # Pluggable sensors (app, hardware, idle, time)
-├── tools/           # CLI utilities (voice training, wiki transcripts)
+├── tools/           # Voice training, LoRA fine-tuning, remote GPU orchestrator
 ├── ui/              # Console overlay with ASCII art, input, and speech bubbles
 ├── commands.py      # Slash command dispatcher
 ├── cli.py           # Argument parsing and --check command

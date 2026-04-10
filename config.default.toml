@@ -57,7 +57,18 @@ data_dir = "~/.tokenpal"
 extra_packages = []
 
 [finetune]
+base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+# lora_rank = 16              # auto-tuned by dataset size
+# epochs = 3                  # auto-tuned by dataset size
+# batch_size = 4
+# learning_rate = 0.0002
+# quantization = "q4_k_m"    # only for legacy GGUF export
+# output_dir = "~/.tokenpal/finetune"
+
 # Remote GPU training — set host/user in config.toml (machine-specific)
 # [finetune.remote]
-# host = ""
-# user = ""
+# host = "gpu-box.local"     # SSH hostname or IP
+# user = ""                  # SSH user (optional, uses default)
+# remote_dir = "~/tokenpal-training"
+# use_wsl = false            # true for Windows + WSL hosts
+# gpu_backend = "auto"       # auto, cuda, or rocm

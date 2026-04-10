@@ -1,44 +1,61 @@
-# Fine-Tuning Voice Models
+# Fine-Tuning Voice Models [SHIPPED]
 
 ## Goal
 
-LoRA fine-tune Gemma 4 on trained voice lines so the model *becomes* the character, not just prompted to act like one.
+LoRA fine-tune on trained voice lines so the model *becomes* the character, not just prompted to act like one.
 
 ## Why
 
-Prompt-based voices work but the model still has its own personality underneath. Fine-tuning would make it truly embody the character — Benson wouldn't need to be told to yell, he'd just yell.
+Prompt-based voices work but the model still has its own personality underneath. Fine-tuning makes it truly embody the character — Benson wouldn't need to be told to yell, he'd just yell.
 
-## Approach
+## Stack (as shipped)
 
-### Stack
-- **Unsloth** + QLoRA — 2-5x faster training, 50-80% less memory than full fine-tune
-- **Hugging Face TRL** — Google's official recommended training library for Gemma
-- Export to **GGUF** → load in Ollama via Modelfile
+- **PEFT + bitsandbytes** (QLoRA) — 4-bit quantized training, ~6GB VRAM for 1-3B models
+- **Hugging Face TRL** — `SFTTrainer` with ShareGPT-format data
+- **Merge to safetensors** → register with Ollama via `FROM ./merged` Modelfile
+- Dropped Unsloth (compatibility issues, PEFT+bitsandbytes is sufficient)
 
 ### Dataset
-Voice lines already exist in `~/.tokenpal/voices/*.json` as structured JSON with:
-- `lines` — raw character dialogue (hundreds to thousands per character)
-- `persona` — one-sentence voice description
-- `mood_prompts` — character-specific mood descriptions
 
-Need a prep pipeline to convert these to chat-format training data.
+Voice lines from `~/.tokenpal/voices/*.json` converted to ShareGPT-format JSONL by `dataset_prep.py`:
+- **Observation** (75%): screen context → character comment
+- **Conversation** (15%): user message → character response
+- **Freeform** (10%): unprompted character speech
+
+40+ synthetic context scenarios mirror actual TokenPal sense readings. 90/10 train/val split.
 
 ### Target Hardware
-- Mac M-series (MLX path possible but Unsloth is CUDA-first)
-- Dell XPS 16 (Intel NPU — likely too slow)
-- AMD laptop with RTX 4070 (primary training target)
-- AMD desktop with RX 9070 XT (ROCm support TBD)
 
-## Implementation Scope
+- **AMD laptop with RTX 4070** (8GB VRAM) — primary, tested end-to-end
+- **AMD desktop with RX 9070 XT** (16GB VRAM) — install.sh detects ROCm, not yet validated
+- Mac M-series — orchestrates training via SSH, does not train locally
+- Dell XPS 16 (Intel NPU) — not supported for training, install.sh gives clear error
 
-1. **Dataset prep** — voice lines → chat-format JSONL for training
-2. **Training script** — QLoRA via Unsloth, configurable base model + LoRA rank
-3. **GGUF export** — convert trained adapter to quantized GGUF
-4. **Ollama integration** — auto-create Modelfile, register with Ollama
-5. **TokenPal integration** — `/voice finetune <name>` or extend `/voice train`
+## What Shipped
 
-## Open Questions
-- Minimum voice lines needed for meaningful fine-tuning? (likely 200+)
-- Training time on RTX 4070 for ~1000 lines?
-- Should we fine-tune the full model or just train a LoRA adapter served alongside base?
-- ROCm support for RX 9070 XT — does Unsloth work on AMD?
+1. **Dataset prep** (`tokenpal/tools/dataset_prep.py`) — voice lines → ShareGPT JSONL
+2. **Training CLI** (`tokenpal/tools/finetune_voice.py`) — `tokenpal-finetune` with prep/train/merge/export/register/all subcommands
+3. **Remote orchestrator** (`tokenpal/tools/remote_train.py`) — SSH/SCP pipeline with:
+   - Auto-built wheel bundle (hash-compared, only re-pushed when code changes)
+   - `install.sh`: WSL self-relocation, CUDA/ROCm detection, PyTorch index selection, sentinel file
+   - Base model download (remote-first, local fallback + SCP push)
+   - Training in `tmux` (survives SSH drops), polled every 30s
+   - Checkpoint resume (`--resume` auto-detected)
+   - `flock` lockfile for concurrent training prevention
+   - Merge adapter → safetensors, pull directory, register with Ollama
+   - sha256 integrity verification, disk space preflight, actionable error messages
+4. **App integration** — `/voice finetune <name>`, `/voice finetune-setup`
+5. **Config** — `[finetune]` + `[finetune.remote]` in config.toml
+6. **Tests** — 32 tests covering helpers, install.sh content, bundle building, full pipeline mocks
+
+## Open Questions (answered)
+
+- **Minimum voice lines?** — `auto_tune()` adjusts: <200 lines warns (rank=8, epochs=5), 200-500 (rank=8, epochs=4), 500-2000 (rank=16, epochs=3), 2000+ (rank=32, epochs=2)
+- **Training time on RTX 4070?** — 30-60 min for ~500-1000 lines with TinyLlama 1.1B
+- **Full model vs LoRA adapter?** — LoRA adapter merged into base model for Ollama (safetensors dir)
+- **ROCm for RX 9070 XT?** — install.sh detects ROCm and selects correct PyTorch index, but end-to-end training not yet validated
+
+## See Also
+
+- `docs/remote-training-guide.md` — user-facing setup and usage guide
+- `CLAUDE.md` — Fine-Tuning section for architecture details

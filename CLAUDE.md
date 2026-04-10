@@ -22,7 +22,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --config PATH` — use specific config file
 - `ollama serve` / `brew services start ollama` — LLM backend must be running
-- `pytest` — run tests (62 tests, asyncio_mode=auto)
+- `pytest` — run tests (135 tests, asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 - `tail -f ~/.tokenpal/logs/tokenpal.log` — debug log (DEBUG level, rotated at 5MB)
@@ -59,6 +59,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`, `/voice [list|switch|off|info|train]`
 - `/model` shows current, `/model <name>` swaps, `/model list` shows installed, `/model pull <name>` downloads, `/model browse` shows recommended
 - `/voice train <wiki> "<character>"` — background thread, progress callbacks, pauses brain during training
+- `/voice finetune <name>` — remote LoRA fine-tuning (see Fine-Tuning section below)
+- `/voice finetune-setup` — one-time remote GPU environment setup
 - Dispatched from main thread, results shown as speech bubbles
 
 ## UI
@@ -85,6 +87,26 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `train_from_wiki()` accepts `progress_callback` for live UI updates during training
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
+## Fine-Tuning
+- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested, ROCm detected but not yet validated)
+- Stack: PEFT + bitsandbytes (QLoRA) + TRL SFTTrainer, merged to safetensors (not GGUF)
+- `tokenpal/tools/remote_train.py`: SSH/SCP orchestrator, wheel bundle builder, tmux training wrapper
+- `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all
+- `tokenpal/tools/dataset_prep.py`: voice lines → ShareGPT-format JSONL (observation 75%, conversation 15%, freeform 10%)
+- Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, use_wsl, gpu_backend)
+- Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
+- Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes
+- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection, sentinel file (`.install-ok`) for partial-install recovery
+- Training runs in `tmux` session (survives SSH drops), polled every 30s, output tee'd to `train.log`
+- Checkpoint resume: `--resume` flag auto-detected from existing `checkpoint-*` dirs, passed to HF Trainer
+- `flock /tmp/tokenpal-training.lock` prevents concurrent training
+- Merge: `merge_adapter()` loads base + LoRA adapter via PEFT, saves merged safetensors. Ollama registers via `FROM ./merged` Modelfile
+- Model integrity: sha256 of safetensors verified after SCP pull
+- Disk space preflight: warns if < 25GB free on remote
+- Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions
+- WSL-specific: base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), Windows mount path resolution for SCP↔WSL bridge
+- See `docs/remote-training-guide.md` for user-facing setup and usage
+
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent` (causes text overlap)
 - macOS: app awareness uses Quartz `CGWindowListCopyWindowInfo` (NOT `NSWorkspace.frontmostApplication()`)
@@ -110,7 +132,6 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Plan files in `plans/` — shipped plans marked `[SHIPPED]`, `npu-buddy-exploration.md` is the original vision doc
 
 ## What's Left
-- LoRA fine-tuning voices via Unsloth/QLoRA (see `docs/fine-tuning-plan.md`)
 - Better ASCII art (user designing their own)
 - Daily summaries in SQLite (end-of-day aggregation)
 - MLX backend (native macOS inference, skip Ollama)
