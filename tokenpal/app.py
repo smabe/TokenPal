@@ -19,6 +19,7 @@ from tokenpal.cli import parse_args, print_version, run_check
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
+from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
@@ -151,11 +152,7 @@ def main() -> None:
         )
 
     def _cmd_model(args: str) -> CommandResult:
-        name = args.strip()
-        if not name:
-            return CommandResult(f"Current model: {llm.model_name}")
-        llm.set_model(name)
-        return CommandResult(f"Switched to {name}")
+        return _handle_model_command(args, llm, overlay)
 
     def _cmd_voice(args: str) -> CommandResult:
         return _handle_voice_command(
@@ -244,6 +241,112 @@ def _unload_model(model_name: str) -> None:
         log.info("Unloaded model '%s' from Ollama", model_name)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
+
+
+_RECOMMENDED_MODELS: list[tuple[str, str]] = [
+    ("gemma4", "Google, 9B — fast, witty, tool calling (default)"),
+    ("llama3.2:3b", "Meta, 3B — very fast, lightweight"),
+    ("llama3.1:8b", "Meta, 8B — balanced speed/quality"),
+    ("mistral:7b", "Mistral, 7B — solid all-rounder"),
+    ("phi4-mini", "Microsoft, 3.8B — compact, capable"),
+    ("qwen3:8b", "Alibaba, 8B — multilingual"),
+]
+
+
+def _handle_model_command(
+    args: str,
+    llm: AbstractLLMBackend,
+    overlay: AbstractOverlay,
+) -> CommandResult:
+    """Handle /model subcommands."""
+    import json
+    import urllib.request
+
+    parts = args.strip().split(maxsplit=1)
+    subcmd = parts[0].lower() if parts else ""
+    subargs = parts[1].strip() if len(parts) > 1 else ""
+
+    # No args → show current model
+    if not subcmd:
+        return CommandResult(f"Current model: {llm.model_name}")
+
+    if subcmd == "list":
+        try:
+            req = urllib.request.Request("http://localhost:11434/api/tags")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read())
+            models = data.get("models", [])
+            if not models:
+                return CommandResult("No models installed.")
+            names = []
+            for m in models:
+                name = m.get("name", "?")
+                size_gb = m.get("size", 0) / 1e9
+                marker = " *" if name == llm.model_name else ""
+                names.append(f"{name} ({size_gb:.1f}GB){marker}")
+            return CommandResult("Models: " + ", ".join(names))
+        except Exception:
+            return CommandResult("Can't reach Ollama.")
+
+    if subcmd == "pull":
+        if not subargs:
+            return CommandResult("Usage: /model pull <name>")
+        model = subargs
+
+        def _pull() -> None:
+            import subprocess
+
+            bubble = SpeechBubble(
+                text=f"Downloading {model}...", persistent=True,
+            )
+            overlay.schedule_callback(lambda: overlay.show_speech(bubble))
+            overlay.schedule_callback(
+                lambda: overlay.update_status(f"Pulling {model}...")
+            )
+            try:
+                result = subprocess.run(
+                    ["ollama", "pull", model],
+                    capture_output=True, text=True, timeout=600,
+                )
+                if result.returncode == 0:
+                    overlay.schedule_callback(
+                        lambda: overlay.show_speech(
+                            SpeechBubble(text=f"Got {model}! /model {model} to use it.")
+                        )
+                    )
+                else:
+                    err = (result.stderr or "unknown error").strip()[:60]
+                    overlay.schedule_callback(
+                        lambda: overlay.show_speech(
+                            SpeechBubble(text=f"Pull failed: {err}")
+                        )
+                    )
+            except Exception:
+                overlay.schedule_callback(
+                    lambda: overlay.show_speech(
+                        SpeechBubble(text="Pull failed. Check logs.")
+                    )
+                )
+            finally:
+                overlay.schedule_callback(
+                    lambda: overlay.update_status("")
+                )
+
+        threading.Thread(
+            target=_pull, daemon=True, name="model-pull",
+        ).start()
+        return CommandResult("")
+
+    if subcmd == "browse":
+        lines = [f"{n} — {d}" for n, d in _RECOMMENDED_MODELS]
+        return CommandResult(
+            "Recommended: " + " | ".join(lines)
+            + " — /model pull <name> to download"
+        )
+
+    # Bare name → switch model
+    llm.set_model(subcmd)
+    return CommandResult(f"Switched to {subcmd}")
 
 
 def _handle_voice_command(

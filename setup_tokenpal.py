@@ -156,22 +156,22 @@ def check_ollama() -> bool:
         if result.returncode == 0:
             ok("Ollama is running")
             # Check for default model
-            if "gemma3:4b" in (result.stdout or ""):
-                ok("gemma3:4b model is available")
+            if "gemma4" in (result.stdout or ""):
+                ok("gemma4 model is available")
                 return True
             else:
-                warn("gemma3:4b not found")
-                if ask("Pull gemma3:4b now? (~3GB download)"):
-                    print("  Pulling gemma3:4b (this may take a few minutes)...")
+                warn("gemma4 not found")
+                if ask("Pull gemma4 now? (~3GB download)"):
+                    print("  Pulling gemma4 (this may take a few minutes)...")
                     pull = subprocess.run(
-                        ["ollama", "pull", "gemma3:4b"],
+                        ["ollama", "pull", "gemma4"],
                         capture_output=False,
                     )
                     if pull.returncode == 0:
                         ok("Model pulled successfully")
                         return True
                     else:
-                        fail("Pull failed — you can retry later: ollama pull gemma3:4b")
+                        fail("Pull failed — you can retry later: ollama pull gemma4")
                         return True  # Non-fatal
                 return True
         else:

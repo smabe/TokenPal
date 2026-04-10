@@ -54,8 +54,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Slash Commands
 - `tokenpal/commands.py`: `CommandDispatcher` with `CommandResult` dataclass
-- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name]`
-- `/model` swaps the LLM model at runtime via `AbstractLLMBackend.set_model()`
+- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`
+- `/model` shows current, `/model <name>` swaps, `/model list` shows installed, `/model pull <name>` downloads, `/model browse` shows recommended
 - Dispatched from main thread, results shown as speech bubbles
 
 ## UI

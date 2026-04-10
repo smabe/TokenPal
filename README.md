@@ -58,7 +58,7 @@ TokenPal observes your desktop through modular **senses** and generates short, w
 
 **Slash Commands:**
 - `/help` — list commands
-- `/model [name]` — show or swap the LLM model at runtime
+- `/model [name|list|pull|browse]` — show, swap, download, or browse models
 - `/voice list|switch|off|info|train` — manage voice profiles live
 - `/mood` — show current mood
 - `/status` — show model, senses, actions
