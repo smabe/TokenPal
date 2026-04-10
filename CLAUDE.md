@@ -88,23 +88,26 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
 ## Fine-Tuning
-- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested, ROCm detected but not yet validated)
-- Stack: PEFT + bitsandbytes (QLoRA) + TRL SFTTrainer, merged to safetensors (not GGUF)
+- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with TinyLlama + BMO, ROCm detected but not yet validated)
+- Stack: PEFT + bitsandbytes (QLoRA) + TRL `SFTConfig`/`SFTTrainer` (bf16), merged to safetensors (not GGUF)
 - `tokenpal/tools/remote_train.py`: SSH/SCP orchestrator, wheel bundle builder, tmux training wrapper
-- `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all
+- `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all. `export_gguf()` delegates merge to `merge_adapter()`
 - `tokenpal/tools/dataset_prep.py`: voice lines → ShareGPT-format JSONL (observation 75%, conversation 15%, freeform 10%)
 - Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, use_wsl, gpu_backend)
+- Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Llama 3.2 3B Instruct (ungated, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token)
 - Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
-- Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes
-- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection, sentinel file (`.install-ok`) for partial-install recovery
+- Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. `--force-reinstall --no-cache-dir` ensures fresh code lands even without version bump
+- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection, sentinel file (`.install-ok`) for partial-install recovery, skips PyTorch download if already installed
 - Training runs in `tmux` session (survives SSH drops), polled every 30s, output tee'd to `train.log`
 - Checkpoint resume: `--resume` flag auto-detected from existing `checkpoint-*` dirs, passed to HF Trainer
 - `flock /tmp/tokenpal-training.lock` prevents concurrent training
 - Merge: `merge_adapter()` loads base + LoRA adapter via PEFT, saves merged safetensors. Ollama registers via `FROM ./merged` Modelfile
-- Model integrity: sha256 of safetensors verified after SCP pull
+- Model pull: rsync with `--info=progress2` + `--partial` for Linux hosts (progress + resume), SCP `-r` for WSL hosts (no rsync on Windows)
+- Model integrity: sha256 of safetensors verified after pull
 - Disk space preflight: warns if < 25GB free on remote
 - Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions
-- WSL-specific: base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), Windows mount path resolution for SCP↔WSL bridge
+- Shared helpers: `_drain_stream()` (async stream reading), `_resolve_wsl_mount()` (WSL path resolution)
+- WSL-specific: base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), `_resolve_wsl_mount()` for SCP↔WSL bridge
 - See `docs/remote-training-guide.md` for user-facing setup and usage
 
 ## Platform Notes

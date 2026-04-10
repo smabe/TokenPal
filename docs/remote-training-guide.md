@@ -35,7 +35,7 @@ That's it. The pipeline handles everything: building the training package, insta
 
 ```toml
 [finetune]
-base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # HuggingFace model ID
+base_model = "meta-llama/Llama-3.2-3B-Instruct"  # recommended
 # lora_rank = 16           # auto-tuned by dataset size
 # epochs = 3               # auto-tuned by dataset size
 # batch_size = 4
@@ -43,6 +43,22 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"  # HuggingFace model ID
 ```
 
 LoRA rank and epochs are auto-tuned based on voice line count. You generally don't need to touch these.
+
+### Base model options (8GB VRAM)
+
+| Model | Size | Quality | Auth |
+|-------|------|---------|------|
+| `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 2GB | Low (testing only) | None |
+| `meta-llama/Llama-3.2-1B-Instruct` | 2.5GB | Decent | None |
+| **`meta-llama/Llama-3.2-3B-Instruct`** | 6GB | **Good (recommended)** | **None** |
+| `google/gemma-2-2b-it` | 5GB | Strong for size | None |
+| `microsoft/Phi-3.5-mini-instruct` | 7.5GB | Very capable | None |
+| `google/gemma-2-9b-it` | 18GB | Best quality, tight fit | HF token |
+
+For gated models (Gemma-2 9B), set `HF_TOKEN` on the remote:
+```bash
+ssh you@gpu-box "wsl -e bash -lc \"echo 'export HF_TOKEN=hf_yourtoken' >> ~/.bashrc\""
+```
 
 ### `[finetune.remote]` — GPU box connection
 
@@ -98,7 +114,10 @@ Training runs inside a `tmux` session on the remote, so it survives SSH disconne
 
 ### 5. Merge + Pull
 
-After training, the LoRA adapter is merged back into the base model and saved as safetensors. The merged directory is SCP'd back to your local machine at `~/.tokenpal/finetune/models/tokenpal-<name>/`.
+After training, the LoRA adapter is merged back into the base model and saved as safetensors. The merged directory is pulled back to `~/.tokenpal/finetune/models/tokenpal-<name>/`:
+
+- **Linux hosts**: rsync with `--info=progress2` and `--partial` (shows progress, supports resume)
+- **WSL hosts**: SCP with `-r` (Windows SSH has no rsync)
 
 ### 6. Ollama Registration
 

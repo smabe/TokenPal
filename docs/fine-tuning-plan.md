@@ -51,7 +51,7 @@ Voice lines from `~/.tokenpal/voices/*.json` converted to ShareGPT-format JSONL 
 ## Open Questions (answered)
 
 - **Minimum voice lines?** — `auto_tune()` adjusts: <200 lines warns (rank=8, epochs=5), 200-500 (rank=8, epochs=4), 500-2000 (rank=16, epochs=3), 2000+ (rank=32, epochs=2)
-- **Training time on RTX 4070?** — 30-60 min for ~500-1000 lines with TinyLlama 1.1B
+- **Training time on RTX 4070?** — ~2.5 min for 587 samples (3 epochs) with TinyLlama 1.1B. Expect 5-15 min with Llama 3.2 3B
 - **Full model vs LoRA adapter?** — LoRA adapter merged into base model for Ollama (safetensors dir)
 - **ROCm for RX 9070 XT?** — install.sh detects ROCm and selects correct PyTorch index, but end-to-end training not yet validated
 
