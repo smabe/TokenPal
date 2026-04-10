@@ -22,7 +22,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --config PATH` — use specific config file
 - `ollama serve` / `brew services start ollama` — LLM backend must be running
-- `pytest` — run tests (55 tests, asyncio_mode=auto)
+- `pytest` — run tests (62 tests, asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 - `tail -f ~/.tokenpal/logs/tokenpal.log` — debug log (DEBUG level, rotated at 5MB)
@@ -35,9 +35,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Brain
 - `PersonalityEngine`: rotating few-shot examples (27 pool, sample 5-7), comment history deque, voice-specific structure hints, mood system (6 moods), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio after 3, late-night tone)
-- Two prompt paths: `build_prompt()` for observations (1-2 sentences, no hard char cap, [SILENT] allowed), `build_conversation_prompt()` for user input (relaxed: 2 sentences, 150 chars, always responds)
-- `_apply_voice()` consolidates all voice field init (used by __init__ and set_voice)
-- Shared `_clean_llm_text()` with pre-compiled regex constants for response cleanup
+- Three prompt paths: `build_prompt()` for observations, `build_freeform_prompt()` for unprompted thoughts (no screen context, rich voices only), `build_conversation_prompt()` for user input
+- `_apply_voice()` consolidates all voice field init; `_sample_examples()` and `_pick_hint()` shared across prompt builders
+- Freeform thoughts: `has_rich_voice` (50+ lines), `_should_freeform()` (15% chance, 45s min gap), `_generate_freeform_comment()`
+- `_emit_comment()` consolidates comment bookkeeping (record, show, timestamps) across observation/freeform/easter egg paths
+- Shared `_clean_llm_text()` with pre-compiled regex constants for response cleanup (includes orphan punctuation stripping)
 - `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern prevents consumed changes
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom → "Condolences.", Calculator → "Math. Voluntarily.")
 - Graceful degradation: confused quips when Ollama is unreachable, "Ollama unreachable" pushed to status bar on first failure
@@ -54,12 +56,14 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Slash Commands
 - `tokenpal/commands.py`: `CommandDispatcher` with `CommandResult` dataclass
-- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`
+- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`, `/voice [list|switch|off|info|train]`
 - `/model` shows current, `/model <name>` swaps, `/model list` shows installed, `/model pull <name>` downloads, `/model browse` shows recommended
+- `/voice train <wiki> "<character>"` — background thread, progress callbacks, pauses brain during training
 - Dispatched from main thread, results shown as speech bubbles
 
 ## UI
-- Console overlay: bottom-anchored layout, typing animation (30ms/char), live status bar (mood + senses + last spoke)
+- Console overlay: bottom-anchored layout, typing animation (30ms/char), live status bar (mood + senses + last spoke), `SpeechBubble.persistent` for training progress
+- `brain.paused` suppresses comments during voice training
 - Text input: cbreak mode (termios), non-blocking stdin via `select.select()`, dirty-flag coalesced redraws
 - Input line rendered between bottom border and status bar: `> typed text here_`
 - Buddy art: block-character chonky design with Cyrillic eyes, 4 expressions (idle/talking/thinking/surprised)
@@ -73,6 +77,13 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported (model decides). Arguments come as JSON strings.
 - `AbstractLLMBackend.set_model()` for runtime model swap. `model_name` property exposed on base class.
 - Prompt template in `personality.py` has mood line, structure hint, examples, session notes, memory block, context, recent comments.
+
+## Voice Training
+- `tokenpal/tools/train_voice.py`: `_generate_voice_assets()` runs 5 parallel Ollama calls (persona, greetings, offline quips, mood prompts, structure hints)
+- `tokenpal/tools/wiki_fetch.py`: `_strip_wiki_markup()` normalizes all Fandom wiki formats, then `_wikitext_to_dialogue()` extracts `Name: dialogue` lines. Handles `{{L|Name|dialogue}}` templates and `'''Name:'''` bold formats
+- `tokenpal/tools/voice_profile.py`: `VoiceProfile` dataclass with lines, persona, greetings, offline_quips, mood_prompts, structure_hints
+- `train_from_wiki()` accepts `progress_callback` for live UI updates during training
+- Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent` (causes text overlap)
@@ -99,6 +110,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Plan files in `plans/` — shipped plans marked `[SHIPPED]`, `npu-buddy-exploration.md` is the original vision doc
 
 ## What's Left
+- LoRA fine-tuning voices via Unsloth/QLoRA (see `docs/fine-tuning-plan.md`)
 - Better ASCII art (user designing their own)
 - Daily summaries in SQLite (end-of-day aggregation)
 - MLX backend (native macOS inference, skip Ollama)
@@ -107,4 +119,3 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Windows text input (needs msvcrt instead of termios)
 - Browser content guardrails (needs tab title/URL filtering)
 - Security review (pre-release audit of input listeners + privacy surface)
-- Voice commands via slash commands (pushed to far future)
