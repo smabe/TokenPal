@@ -14,7 +14,7 @@ web_search = false
 [llm]
 backend = "http"
 api_url = "http://localhost:11434/v1"
-model_name = "gemma3:4b"
+model_name = "gemma4"
 max_tokens = 40
 temperature = 1.0
 

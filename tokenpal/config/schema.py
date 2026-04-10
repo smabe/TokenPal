@@ -25,7 +25,7 @@ class LLMConfig:
     backend: str = "http"
     model_path: str = ""
     api_url: str = "http://localhost:11434/v1"
-    model_name: str = "gemma3:4b"
+    model_name: str = "gemma4"
     max_tokens: int = 40
     temperature: float = 0.8
 
