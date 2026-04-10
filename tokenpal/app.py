@@ -343,14 +343,16 @@ def _start_voice_training(
 
             from tokenpal.tools.train_voice import (
                 _generate_greetings,
+                _generate_mood_prompts,
                 _generate_offline_quips,
                 _generate_persona,
             )
 
-            with ThreadPoolExecutor(max_workers=3) as pool:
+            with ThreadPoolExecutor(max_workers=4) as pool:
                 f_p = pool.submit(_generate_persona, character, lines)
                 f_g = pool.submit(_generate_greetings, character, lines)
                 f_q = pool.submit(_generate_offline_quips, character, lines)
+                f_m = pool.submit(_generate_mood_prompts, character, lines)
 
             profile = make_profile(
                 character=character,
@@ -359,6 +361,7 @@ def _start_voice_training(
                 persona=f_p.result() or "",
                 greetings=f_g.result(),
                 offline_quips=f_q.result(),
+                mood_prompts=f_m.result(),
             )
             save_profile(profile, voices_dir)
             personality.set_voice(profile)

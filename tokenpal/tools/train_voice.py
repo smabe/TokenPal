@@ -128,6 +128,45 @@ def _generate_offline_quips(character: str, lines: list[str]) -> list[str]:
         "One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude.")
 
 
+def _generate_mood_prompts(character: str, lines: list[str]) -> dict[str, str]:
+    """Generate character-specific mood descriptions for all 6 moods."""
+    samples = random.sample(lines, min(10, len(lines)))
+    samples_block = "\n".join(f"- {line}" for line in samples)
+
+    text = _ollama_generate(
+        f"""Here are sample dialogue lines from "{character}":
+
+{samples_block}
+
+Write 6 mood descriptions for this character. Each should be ONE sentence describing how this character acts in that mood, using their slang and personality. Format as "MOOD: description".
+
+SNARKY: (their default dry/sharp attitude)
+IMPRESSED: (grudging respect, backhanded compliments)
+BORED: (nothing interesting happening)
+CONCERNED: (worried about the user)
+HYPER: (excited, energetic)
+SLEEPY: (tired, half-awake)
+
+Write ONLY the 6 lines, nothing else.""",
+        max_tokens=300,
+        temperature=0.8,
+    )
+
+    if not text:
+        return {}
+
+    moods: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        for mood in ("SNARKY", "IMPRESSED", "BORED", "CONCERNED", "HYPER", "SLEEPY"):
+            if line.upper().startswith(mood):
+                desc = line[len(mood):].lstrip(":- ").strip()
+                if desc:
+                    moods[mood.lower()] = f"Your current mood: {mood}. {desc}"
+                break
+    return moods
+
+
 def _find_config_toml() -> Path:
     """Find config.toml — check CWD first, then fall back to project root."""
     cwd = Path.cwd()
@@ -295,15 +334,17 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     if not args.no_persona:
         from concurrent.futures import ThreadPoolExecutor
 
-        print("Generating persona, greetings, and offline quips via Ollama...", flush=True)
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        print("Generating persona, greetings, moods, and quips via Ollama...", flush=True)
+        with ThreadPoolExecutor(max_workers=4) as pool:
             f_persona = pool.submit(_generate_persona, name, lines)
             f_greetings = pool.submit(_generate_greetings, name, lines)
             f_quips = pool.submit(_generate_offline_quips, name, lines)
+            f_moods = pool.submit(_generate_mood_prompts, name, lines)
 
         persona = f_persona.result() or ""
         greetings = f_greetings.result()
         offline_quips = f_quips.result()
+        mood_prompts = f_moods.result()
 
         if persona:
             print(f"\nPersona: {persona}")
@@ -315,6 +356,10 @@ def _cmd_extract(args: argparse.Namespace) -> None:
             print(f"\nOffline quips ({len(offline_quips)}):")
             for q in offline_quips[:5]:
                 print(f'  "{q}"')
+        if mood_prompts:
+            print(f"\nMood prompts ({len(mood_prompts)}):")
+            for mood, prompt in mood_prompts.items():
+                print(f"  {mood}: {prompt}")
         print()
 
     profile = make_profile(
@@ -324,6 +369,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         persona=persona,
         greetings=greetings,
         offline_quips=offline_quips,
+        mood_prompts=mood_prompts,
     )
     out_path = save_profile(profile, _get_voices_dir())
     slug = slugify(name)

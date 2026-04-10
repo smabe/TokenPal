@@ -256,6 +256,7 @@ class PersonalityEngine:
         self._voice_persona = voice.persona if voice else ""
         self._voice_greetings = voice.greetings if voice and voice.greetings else []
         self._voice_offline_quips = voice.offline_quips if voice and voice.offline_quips else []
+        self._voice_mood_prompts: dict[str, str] = voice.mood_prompts if voice else {}
         self._recent_comments: deque[str] = deque(maxlen=5)
 
         # Voice: custom example pool from trained voice profile
@@ -299,6 +300,7 @@ class PersonalityEngine:
             self._voice_persona = voice.persona
             self._voice_greetings = voice.greetings or []
             self._voice_offline_quips = voice.offline_quips or []
+            self._voice_mood_prompts = voice.mood_prompts or {}
             if len(voice.lines) >= 10:
                 self._example_pool = voice.lines
             else:
@@ -312,6 +314,7 @@ class PersonalityEngine:
             self._voice_persona = ""
             self._voice_greetings = []
             self._voice_offline_quips = []
+            self._voice_mood_prompts = {}
             self._example_pool = list(_EXAMPLE_POOL)
         log.info("Voice switched to: %s", self._voice_name or "default")
 
@@ -445,7 +448,7 @@ class PersonalityEngine:
             hint = f"Style this time: {random.choice(_STRUCTURE_HINTS)}"
 
         # Mood line
-        mood_line = _MOOD_PROMPTS[self._mood]
+        mood_line = self._mood_line()
 
         # Late-night tone shift (guardrail §5)
         now = datetime.now()
@@ -478,6 +481,13 @@ class PersonalityEngine:
     def mood(self) -> str:
         """Current mood as a string."""
         return self._mood.value
+
+    def _mood_line(self) -> str:
+        """Get the mood prompt, preferring voice-specific if available."""
+        voice_line = self._voice_mood_prompts.get(self._mood.value)
+        if voice_line:
+            return voice_line
+        return _MOOD_PROMPTS[self._mood]
 
     def filter_response(self, text: str) -> str | None:
         """Return the cleaned response, or None if the buddy chose silence."""
@@ -579,7 +589,7 @@ class PersonalityEngine:
         """Build a prompt for responding to direct user input."""
         return _CONVERSATION_TEMPLATE.format(
             voice_block=self._voice_block(),
-            mood_line=_MOOD_PROMPTS[self._mood],
+            mood_line=self._mood_line(),
             context=context_snapshot,
             recent_comments_block=self._recent_comments_block(),
             user_message=user_message,
