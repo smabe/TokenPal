@@ -206,6 +206,7 @@ def main() -> None:
         asyncio.run(brain.stop())
         if memory:
             memory.teardown()
+        _unload_model(llm.model_name)
         log.info("TokenPal shut down cleanly")
 
 
@@ -228,6 +229,21 @@ def _print_startup_summary(
 
     summary = "\n".join(lines)
     print(f"\n\033[1mTokenPal\033[0m\n{summary}\n", file=sys.stderr)
+
+
+def _unload_model(model_name: str) -> None:
+    """Unload the model from Ollama to free RAM."""
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["ollama", "stop", model_name],
+            capture_output=True,
+            timeout=5,
+        )
+        log.info("Unloaded model '%s' from Ollama", model_name)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
 
 
 def _handle_voice_command(
