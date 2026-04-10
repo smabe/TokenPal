@@ -1050,7 +1050,24 @@ async def remote_setup(
     # Extract and install
     rdir = _wsl_cmd_dir(remote) if remote.use_wsl else scp_rdir
     if remote.use_wsl:
-        extract_cmd = f"cd {rdir} && tar xzf bundle.tar.gz && bash install.sh"
+        # SCP landed on Windows filesystem. Resolve the WSL mount path
+        # so we can access it from within WSL. install.sh will self-relocate
+        # from /mnt/c/... to ~/tokenpal-training/ automatically.
+        rc, win_home, _ = await _run_ssh(
+            remote, "echo %USERPROFILE%", timeout=10,
+        )
+        if rc != 0:
+            return _setup_fail("Failed to resolve Windows home dir", _progress)
+        win_home = win_home.strip().replace("\\", "/")
+        if len(win_home) >= 2 and win_home[1] == ":":
+            mount_path = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
+        else:
+            mount_path = win_home
+        rel = scp_rdir.lstrip("~/")
+        win_mount = f"{mount_path}/{rel}" if rel else mount_path
+        extract_cmd = (
+            f'cd "{win_mount}" && tar xzf bundle.tar.gz && bash install.sh'
+        )
     else:
         extract_cmd = (
             f"cd {shlex.quote(scp_rdir)} && tar xzf bundle.tar.gz && "
