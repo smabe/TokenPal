@@ -245,6 +245,8 @@ class ConsoleOverlay(AbstractOverlay):
         if not text:
             return
 
+        log.info("Input: %s", text)
+
         if text.startswith("/"):
             if self._command_callback:
                 self._command_callback(text)

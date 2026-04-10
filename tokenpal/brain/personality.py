@@ -488,6 +488,7 @@ class PersonalityEngine:
                 return None
 
         if not text or len(text) < 15:
+            log.debug("Filter: too short (%d chars): %r", len(text), text[:50])
             return None
 
         text = self._clean_llm_text(text)
@@ -500,10 +501,12 @@ class PersonalityEngine:
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
+            log.debug("Filter: too short after cleanup (%d chars): %r", len(text), text[:50])
             return None
 
         # Hard cap — if the model couldn't fit in 70 chars, drop it.
         if len(text) > 70:
+            log.debug("Filter: too long (%d chars): %r", len(text), text[:80])
             return None
 
         return text
