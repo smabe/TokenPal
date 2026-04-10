@@ -12,7 +12,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Per-sense polling intervals via `ClassVar[float]` on `AbstractSense` (e.g., hardware 10s, time 30s, idle 1s)
 - Interestingness scoring: per-sense weights in `context.py`, read-only scoring + explicit `acknowledge()` after comment
 - Actions: `AbstractAction` with `@register_action`, tool specs sent to LLM via OpenAI-compat tools API, multi-turn execution loop (max 3 rounds)
-- Session memory: SQLite at `~/.tokenpal/memory.db`, records app switches + idle returns, injects history into prompts
+- Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
+- Session memory: SQLite at `{data_dir}/memory.db`, records app switches + idle returns, injects history into prompts
 
 ## Key Commands
 - `python3 setup_tokenpal.py` — one-command setup (venv, deps, Ollama, config)
@@ -21,6 +22,9 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --config PATH` — use specific config file
 - `ollama serve` / `brew services start ollama` — LLM backend must be running
+- `pytest` — run tests (55 tests, asyncio_mode=auto)
+- `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
+- `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 - `tail -f ~/.tokenpal/logs/tokenpal.log` — debug log (DEBUG level, rotated at 5MB)
 
 ## Senses
@@ -79,7 +83,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - No clipboard monitoring (explicitly rejected — privacy liability)
 - Sensitive app exclusion list: banking, password managers, health apps, messaging — goes silent
 - Session memory stores only app names and timestamps, never content/URLs/keystrokes
-- SQLite db at `~/.tokenpal/memory.db` with 0o600 permissions
+- SQLite db at `{data_dir}/memory.db` with 0o600 permissions
 - Browser content guardrails deferred — needs tab title/URL awareness
 
 ## Code Style
@@ -91,7 +95,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - GitHub: github.com/smabe/TokenPal (private)
 - 4 target machines: Mac (M-series), Dell XPS 16 (Intel NPU), AMD laptop (RTX 4070), AMD desktop (RX 9070 XT)
 - Dev setup guides: `docs/dev-setup-macos.md`, `docs/dev-setup-windows-intel.md`, `docs/dev-setup-windows-amd.md`, `docs/dev-setup-windows-amd-desktop.md`
-- Brainstorm docs: `plans/next-batch-*.md` (historical — most content now shipped)
+- Plan files in `plans/` — shipped plans marked `[SHIPPED]`, `npu-buddy-exploration.md` is the original vision doc
 
 ## What's Left
 - Better ASCII art (user designing their own)
