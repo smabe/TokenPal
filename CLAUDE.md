@@ -65,9 +65,9 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Tkinter overlay: alternative, always-on-top window (less reliable than console)
 
 ## LLM Notes
-- Default model: `gemma3:4b` via Ollama. Fast (<1s), decent at short quips. Supports tool calling.
-- Qwen3 models use internal `<think>` tags → empty responses via OpenAI-compat API. Don't use.
-- `max_tokens: 40` for observations, `100` for conversation responses.
+- Default model: `gemma4` via Ollama. Supports tool calling. Uses internal reasoning (`reasoning` field in response).
+- Thinking models (gemma4, Qwen3) use internal reasoning that consumes tokens — `max_tokens` must be high (1024) so the model has room to think AND respond. The response filter enforces output length, so extra tokens don't leak.
+- Qwen3 models use `<think>` tags → empty responses via OpenAI-compat API. Don't use.
 - Response filter: strips asterisks, leaked tags, prefixes. Observation: 1 sentence, 15-70 chars. Conversation: 2 sentences, 5-150 chars.
 - Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported (model decides). Arguments come as JSON strings.
 - `AbstractLLMBackend.set_model()` for runtime model swap. `model_name` property exposed on base class.

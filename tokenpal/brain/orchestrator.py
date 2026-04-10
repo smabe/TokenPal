@@ -376,7 +376,7 @@ class Brain:
         )
 
         try:
-            response = await self._llm.generate(prompt, max_tokens=100)
+            response = await self._llm.generate(prompt, max_tokens=1024)
             log.debug("Raw conversation response: %r", response.text[:200])
             filtered = self._personality.filter_conversation_response(
                 response.text
