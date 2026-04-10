@@ -485,6 +485,7 @@ class PersonalityEngine:
 
         for marker in _SILENT_MARKERS:
             if marker in text:
+                log.debug("Filter: [SILENT] marker found")
                 return None
 
         if not text or len(text) < 15:
