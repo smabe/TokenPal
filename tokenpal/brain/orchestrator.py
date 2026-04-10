@@ -406,15 +406,21 @@ class Brain:
         if not self._status_callback:
             return
 
-        mood = self._personality._mood.value
-        active_senses = sum(1 for s in self._senses if s.enabled)
+        mood = self._personality.mood
+        model = self._llm.model_name
+        voice = self._personality.voice_name
         elapsed = time.monotonic() - self._last_comment_time
         if elapsed < 60:
             ago = f"{int(elapsed)}s ago"
         else:
             ago = f"{int(elapsed / 60)}m ago"
 
-        status = f"{mood} | {active_senses} senses | last spoke {ago} | Ctrl+C"
+        parts = [model]
+        if voice:
+            parts.append(voice)
+        parts.append(mood)
+        parts.append(f"spoke {ago}")
+        status = " | ".join(parts)
         self._status_callback(status)
 
     async def stop(self) -> None:
