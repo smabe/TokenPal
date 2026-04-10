@@ -223,6 +223,25 @@ What you see right now:
 
 Your comment:"""
 
+_FREEFORM_TEMPLATE = """\
+You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal.
+{voice_block}
+Rules:
+1. 1-2 sentences. Keep it short.
+2. Say something in character — a random thought, musing, complaint, or observation about life.
+3. Do NOT reference what the user is doing on their computer. Just be yourself.
+
+{mood_line}
+
+{structure_hint}
+
+Examples of your voice:
+{examples}
+
+{recent_comments_block}
+
+Your thought:"""
+
 _CONVERSATION_TEMPLATE = """\
 You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal.
 {voice_block}
@@ -283,6 +302,11 @@ class PersonalityEngine:
     def voice_name(self) -> str:
         """Name of the active voice, or empty string for default."""
         return self._voice_name
+
+    @property
+    def has_rich_voice(self) -> bool:
+        """True when the example pool is large enough for freeform comments."""
+        return len(self._example_pool) >= 50
 
     def set_voice(self, voice: VoiceProfile | None) -> None:
         """Hot-swap the active voice at runtime."""
@@ -417,17 +441,8 @@ class PersonalityEngine:
         self, context_snapshot: str, memory_lines: list[str] | None = None
     ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
-        # Sample 5-7 examples from the pool
-        k = random.randint(5, min(7, len(self._example_pool)))
-        sampled = random.sample(self._example_pool, k)
-        examples_block = "\n".join(f'- "{ex}"' for ex in sampled)
-
-        # Pick a structure hint — voice-specific if available, override if guardrail says be nice
-        if self.should_force_supportive():
-            hint = "Style this time: Say something genuinely supportive or give a backhanded compliment."
-        else:
-            pool = self._voice_structure_hints if self._voice_structure_hints else _STRUCTURE_HINTS
-            hint = f"Style this time: {random.choice(pool)}"
+        examples_block = self._sample_examples()
+        hint = self._pick_hint()
 
         # Mood line
         mood_line = self._mood_line()
@@ -456,6 +471,16 @@ class PersonalityEngine:
             context=context_snapshot,
             session_notes=session_notes,
             memory_block=mem_block,
+            recent_comments_block=self._recent_comments_block(),
+        )
+
+    def build_freeform_prompt(self) -> str:
+        """Build a prompt for an unprompted in-character thought (no screen context)."""
+        return _FREEFORM_TEMPLATE.format(
+            voice_block=self._voice_block(),
+            mood_line=self._mood_line(),
+            structure_hint=self._pick_hint(),
+            examples=self._sample_examples(),
             recent_comments_block=self._recent_comments_block(),
         )
 
@@ -515,6 +540,19 @@ class PersonalityEngine:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _sample_examples(self) -> str:
+        """Sample 5-7 few-shot examples from the pool."""
+        k = random.randint(5, min(7, len(self._example_pool)))
+        sampled = random.sample(self._example_pool, k)
+        return "\n".join(f'- "{ex}"' for ex in sampled)
+
+    def _pick_hint(self) -> str:
+        """Pick a structure hint, overriding if the guardrail says be nice."""
+        if self.should_force_supportive():
+            return "Style this time: Say something genuinely supportive or give a backhanded compliment."
+        pool = self._voice_structure_hints if self._voice_structure_hints else _STRUCTURE_HINTS
+        return f"Style this time: {random.choice(pool)}"
 
     def _build_session_notes(self) -> str:
         """Build running gag / session notes block for the prompt."""

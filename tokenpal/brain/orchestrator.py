@@ -29,6 +29,9 @@ class Brain:
 
     # Max tool call rounds per comment to prevent infinite loops
     _MAX_TOOL_ROUNDS = 3
+    # Freeform (unprompted) thought settings
+    _FREEFORM_MIN_GAP_S = 45.0
+    _FREEFORM_CHANCE = 0.15
 
     def __init__(
         self,
@@ -134,6 +137,8 @@ class Brain:
 
                 if self._should_comment():
                     await self._generate_comment(snapshot)
+                elif self._should_freeform():
+                    await self._generate_freeform_comment()
 
             except Exception:
                 log.exception("Error in brain loop")
@@ -232,6 +237,59 @@ class Brain:
         )
         return score >= threshold
 
+    def _should_freeform(self) -> bool:
+        """Check if we should generate an unprompted in-character thought."""
+        if self._paused:
+            return False
+        if not self._personality.has_rich_voice:
+            return False
+
+        elapsed = time.monotonic() - self._last_comment_time
+        if elapsed < self._FREEFORM_MIN_GAP_S:
+            return False
+
+        # Reuse already-pruned timestamps from _should_comment()
+        if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
+            return False
+
+        if random.random() >= self._FREEFORM_CHANCE:
+            return False
+
+        log.debug("Gate: freeform thought triggered (%.0fs since last)", elapsed)
+        return True
+
+    def _emit_comment(self, text: str, acknowledge: bool = False) -> None:
+        """Record a comment and show it to the user."""
+        self._personality.record_comment(text)
+        self._ui_callback(text)
+        if acknowledge:
+            self._context.acknowledge()
+        self._last_comment_time = time.monotonic()
+        self._consecutive_comments += 1
+        self._comment_timestamps.append(time.monotonic())
+
+    async def _generate_freeform_comment(self) -> None:
+        """Generate an unprompted in-character thought."""
+        prompt = self._personality.build_freeform_prompt()
+
+        try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            log.debug("Generating freeform comment...")
+            response = await self._llm.generate(prompt)
+            self._push_status()
+
+            filtered = self._personality.filter_response(response.text)
+            if filtered:
+                log.info("TokenPal (freeform): %s (%.0fms)", filtered, response.latency_ms)
+                self._emit_comment(filtered)
+            else:
+                log.debug("Freeform filtered out: %r", response.text[:80])
+
+        except Exception:
+            log.exception("Freeform generation failed")
+            self._push_status()
+
     async def _generate_comment(self, snapshot: str | None = None) -> None:
         if snapshot is None:
             snapshot = self._context.snapshot()
@@ -247,12 +305,7 @@ class Brain:
         egg = self._personality.check_easter_egg(snapshot)
         if egg:
             log.info("TokenPal (easter egg): %s", egg)
-            self._personality.record_comment(egg)
-            self._ui_callback(egg)
-            self._context.acknowledge()
-            self._last_comment_time = time.monotonic()
-            self._consecutive_comments += 1
-            self._comment_timestamps.append(time.monotonic())
+            self._emit_comment(egg, acknowledge=True)
             return
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None
@@ -282,12 +335,7 @@ class Brain:
                     self._tool_specs = [a.to_tool_spec() for a in self._actions.values()]
                     log.info("Re-enabled tool-calling after successful generation")
                 self._consecutive_failures = 0
-                self._personality.record_comment(filtered)
-                self._ui_callback(filtered)
-                self._context.acknowledge()
-                self._last_comment_time = time.monotonic()
-                self._consecutive_comments += 1
-                self._comment_timestamps.append(time.monotonic())
+                self._emit_comment(filtered, acknowledge=True)
                 # Record comment milestones
                 if self._memory and self._personality._total_comments % 10 == 0:
                     self._memory.record_observation(

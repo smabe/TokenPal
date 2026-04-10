@@ -13,7 +13,7 @@ _READING_TTL = 120.0
 # Per-sense weights for interestingness scoring.
 # Higher weight = this sense changing matters more for triggering comments.
 _SENSE_WEIGHTS: dict[str, float] = {
-    "app_awareness": 1.0,
+    "app_awareness": 0.5,
     "idle": 1.0,
     "clipboard": 0.8,
     "screen_capture": 0.6,
