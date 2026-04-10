@@ -25,6 +25,7 @@ class HttpBackend(AbstractLLMBackend):
         self._api_url = config.get("api_url", "http://localhost:11434/v1")
         self._model_name = config.get("model_name", "phi3:mini")
         self._temperature = config.get("temperature", 0.8)
+        self._disable_reasoning = config.get("disable_reasoning", True)
         self._client: httpx.AsyncClient | None = None
         self._reachable: bool = False
         self._model_available: bool = False
@@ -58,20 +59,25 @@ class HttpBackend(AbstractLLMBackend):
         assert self._client is not None, "Call setup() first"
 
         start = time.monotonic()
+        body: dict[str, Any] = {
+            "model": self._model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": self._temperature,
+        }
+        # Disable thinking for models that support it — we want fast, short quips
+        if self._disable_reasoning:
+            body["reasoning_effort"] = "none"
+
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",
-            json={
-                "model": self._model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": self._temperature,
-            },
+            json=body,
         )
         resp.raise_for_status()
         data = resp.json()
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        text = data["choices"][0]["message"]["content"]
+        text = data["choices"][0]["message"].get("content") or ""
         tokens = data.get("usage", {}).get("total_tokens", 0)
 
         return LLMResponse(
@@ -98,6 +104,8 @@ class HttpBackend(AbstractLLMBackend):
         }
         if tools:
             body["tools"] = tools
+        if self._disable_reasoning:
+            body["reasoning_effort"] = "none"
 
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",

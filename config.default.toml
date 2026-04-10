@@ -15,7 +15,8 @@ web_search = false
 backend = "http"
 api_url = "http://localhost:11434/v1"
 model_name = "gemma4"
-max_tokens = 1024
+max_tokens = 60
+disable_reasoning = true
 temperature = 1.0
 
 [ui]
