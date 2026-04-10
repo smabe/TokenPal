@@ -1,6 +1,6 @@
 # TokenPal
 
-A sarcastic ASCII buddy that lives in your terminal, watches what you're doing, and won't shut up about it. Powered by local LLMs via Ollama — no cloud, no data leaves your machine.
+A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — no cloud, no data leaves your machine.
 
 ## Quick Start
 
@@ -16,7 +16,7 @@ source .venv/bin/activate
 tokenpal
 ```
 
-That's it. A chonky ASCII gremlin appears in your terminal and starts roasting your workflow.
+That's it. A chonky ASCII buddy appears in your terminal and starts commentating on your workflow.
 
 ### Prerequisites
 
@@ -41,7 +41,7 @@ This tests Ollama connectivity, model availability, senses, and actions in one s
 
 ## What It Does
 
-TokenPal observes your desktop through modular **senses** and generates short, sarcastic commentary via a local LLM. You can also talk to it and ask it to do things.
+TokenPal observes your desktop through modular **senses** and generates short, witty commentary via a local LLM. You can also talk to it and ask it to do things.
 
 **Senses** (what it can see):
 - **App awareness** — foreground app + window title (macOS)
@@ -68,7 +68,7 @@ TokenPal observes your desktop through modular **senses** and generates short, s
 - 6 moods (snarky, impressed, bored, concerned, hyper, sleepy) that shift based on context
 - Easter eggs at specific times (3:33 AM, Friday 5 PM, etc.)
 - Running gags that track your app usage across sessions
-- Voice profiles trained from show transcripts — including character-specific moods
+- Voice profiles trained from show transcripts — including character-specific moods and style hints
 - Goes silent around sensitive apps (banking, passwords, health)
 
 **Status Bar** — shows current model, voice, mood, and activity:
@@ -117,7 +117,7 @@ data_dir = "~/.tokenpal"    # logs, memory, voices all live here
 
 ## Personas & Voices
 
-TokenPal ships with a default sarcastic gremlin persona. You can replace it with a character voice trained from show transcripts, or write your own persona prompt.
+TokenPal ships with a default witty buddy persona. You can replace it with a character voice trained from show transcripts, or write your own persona prompt.
 
 ### Quick: custom persona prompt
 
@@ -125,7 +125,7 @@ Edit `config.toml` to change what TokenPal sounds like without training a full v
 
 ```toml
 [brain]
-persona_prompt = "You are a grumpy pirate who judges people's computer habits. ONE sentence, under 12 words."
+persona_prompt = "You are a grumpy pirate who judges people's computer habits. 1-2 sentences, keep it short."
 ```
 
 ### Train a voice from transcripts
@@ -141,7 +141,7 @@ python -m tokenpal.tools.train_voice --wiki adventuretime "Jake"
 /voice train adventuretime "Finn"
 ```
 
-Training extracts character dialogue, then generates a persona, startup greetings, offline quips, and character-specific mood prompts via Ollama. Profiles save to `~/.tokenpal/voices/`.
+Training extracts character dialogue, then generates a persona, startup greetings, offline quips, mood prompts, and style hints via Ollama. Live progress shown in the buddy's speech bubble. Profiles save to `~/.tokenpal/voices/`.
 
 ### Manage voices
 

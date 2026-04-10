@@ -1,6 +1,6 @@
 # TokenPal
 
-Cross-platform AI desktop buddy. ASCII character observes your screen via modular "senses" and generates sarcastic commentary using a local LLM.
+Cross-platform AI desktop buddy. ASCII character observes your screen via modular "senses" and generates witty commentary using a local LLM.
 
 ## Architecture
 - Plugin discovery: `@register_sense` / `@register_backend` / `@register_overlay` / `@register_action` decorators + `pkgutil.walk_packages`
@@ -34,8 +34,9 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `idle` (pynput, cross-platform, three tiers: short/medium/long, transition-only readings)
 
 ## Brain
-- `PersonalityEngine`: rotating few-shot examples (25 pool, sample 5-7), comment history deque, structure hints, mood system (6 moods), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio, late-night tone)
-- Two prompt paths: `build_prompt()` for observations (strict: 1 sentence, 70 chars, [SILENT] allowed), `build_conversation_prompt()` for user input (relaxed: 2 sentences, 150 chars, always responds)
+- `PersonalityEngine`: rotating few-shot examples (27 pool, sample 5-7), comment history deque, voice-specific structure hints, mood system (6 moods), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio after 3, late-night tone)
+- Two prompt paths: `build_prompt()` for observations (1-2 sentences, no hard char cap, [SILENT] allowed), `build_conversation_prompt()` for user input (relaxed: 2 sentences, 150 chars, always responds)
+- `_apply_voice()` consolidates all voice field init (used by __init__ and set_voice)
 - Shared `_clean_llm_text()` with pre-compiled regex constants for response cleanup
 - `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern prevents consumed changes
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom → "Condolences.", Calculator → "Math. Voluntarily.")
@@ -68,7 +69,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Default model: `gemma4` via Ollama. Supports tool calling.
 - `disable_reasoning: true` (default) sends `reasoning_effort: "none"` to skip internal thinking. Without this, gemma4 burns ~900 tokens thinking before responding, making it slow and often returning empty content.
 - Qwen3 models use `<think>` tags → empty responses via OpenAI-compat API. Don't use.
-- Response filter: strips asterisks, leaked tags, prefixes. Observation: 1 sentence, 15-70 chars. Conversation: 2 sentences, 5-150 chars.
+- Response filter: strips asterisks, leaked tags, prefixes, orphan punctuation. Observation: 1-2 sentences, min 15 chars. Conversation: 2 sentences, 5-150 chars.
 - Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported (model decides). Arguments come as JSON strings.
 - `AbstractLLMBackend.set_model()` for runtime model swap. `model_name` property exposed on base class.
 - Prompt template in `personality.py` has mood line, structure hint, examples, session notes, memory block, context, recent comments.
