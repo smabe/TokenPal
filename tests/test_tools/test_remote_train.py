@@ -524,10 +524,14 @@ async def test_checkpoint_resume_detected():
         with pytest.raises(RemoteTrainError, match="merge"):
             await remote_finetune(_make_profile(), config)
 
-    # The tmux command should contain --resume
-    tmux_calls = [c for c in ssh_calls if "tmux new-session" in c]
-    assert tmux_calls
-    assert "--resume" in tmux_calls[0]
+    # The training script should contain --resume (written via base64)
+    script_calls = [c for c in ssh_calls if "base64" in c]
+    assert script_calls
+    # Decode the base64 payload to verify --resume is in the script
+    import base64
+    b64_data = script_calls[0].split("echo ")[1].split(" |")[0]
+    script_content = base64.b64decode(b64_data).decode()
+    assert "--resume" in script_content
 
 
 async def test_merge_failure_includes_debug_hint():

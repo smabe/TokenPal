@@ -101,16 +101,35 @@ VENV="$INSTALL_DIR/.venv"
 DESIRED_PY=$("$PYTHON" --version 2>&1)
 CURRENT_PY=$("$VENV/bin/python" --version 2>&1 || echo "none")
 
-# Recreate if Python version changed or partial install
-if [[ "$DESIRED_PY" != "$CURRENT_PY" ]] || [[ -d "$VENV" && ! -f "$SENTINEL" ]]; then
-    [[ -d "$VENV" ]] && echo "  Recreating venv..." && rm -rf "$VENV"
+# Only recreate venv if Python version changed (not for partial installs —
+# re-downloading 900MB of PyTorch on every retry is too expensive over WSL)
+if [[ "$DESIRED_PY" != "$CURRENT_PY" ]]; then
+    [[ -d "$VENV" ]] && echo "  Python changed, recreating venv..." && rm -rf "$VENV"
+    "$PYTHON" -m venv "$VENV"
+elif [[ ! -d "$VENV" ]]; then
     "$PYTHON" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --upgrade pip -q
 
 # --- Phase 4: PyTorch (backend-specific) ---
 echo "[5/6] Installing PyTorch ($GPU_BACKEND)..."
-"$VENV/bin/pip" install --extra-index-url "$TORCH_URL" torch torchvision -q
+# Check if torch is already installed and working
+if "$VENV/bin/python" -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+    echo "  PyTorch already installed and CUDA working, skipping."
+else
+    # Download first, then install from cache — avoids SSL flakes during
+    # large downloads in WSL2 (known issue with DrvFS network buffers).
+    TORCH_CACHE="$INSTALL_DIR/.torch-cache"
+    mkdir -p "$TORCH_CACHE"
+    for attempt in 1 2 3; do
+        "$VENV/bin/pip" download --extra-index-url "$TORCH_URL" \
+            torch torchvision --no-deps -d "$TORCH_CACHE" -q && break
+        echo "  Retry $attempt/3 (torch download failed)..."
+        sleep 5
+    done
+    "$VENV/bin/pip" install --extra-index-url "$TORCH_URL" \
+        --find-links "$TORCH_CACHE" torch torchvision -q
+fi
 
 # --- Phase 5: TokenPal + training deps ---
 echo "[6/6] Installing tokenpal training bundle..."
@@ -365,31 +384,30 @@ async def _ensure_base_model(
     remote: RemoteTrainConfig,
     base_model: str,
     model_dir: str,
+    venv_py: str,
     _ssh: Any,
     progress: ProgressCallback,
 ) -> str:
     """Ensure the base model is available on the remote.
 
-    Tries remote download first (huggingface-cli), falls back to
-    local download + SCP push.
+    Tries remote download first (huggingface-cli via venv), falls back
+    to local download + SCP push.
 
     Returns the remote path to the model directory.
     """
     # Check if model already exists on remote
-    rc, _, _ = await _ssh(remote, f"test -d {model_dir} && echo exists", timeout=15)
-    if rc == 0:
+    rc, out, _ = await _ssh(remote, f"test -d {model_dir} && echo exists", timeout=15)
+    if rc == 0 and "exists" in out:
         progress("Base model already on remote.")
         return model_dir
 
     progress(f"Downloading base model: {base_model}")
 
-    # Try downloading directly on the remote first
-    py_dir = f"{model_dir}"
+    # Try downloading directly on the remote first (use venv python)
     dl_cmd = (
-        f"pip install -q huggingface_hub && "
-        f"python3 -c \""
+        f'{venv_py} -c "'
         f"from huggingface_hub import snapshot_download; "
-        f"snapshot_download('{base_model}', local_dir='{py_dir}')\""
+        f"snapshot_download('{base_model}', local_dir='{model_dir}')\""
     )
     rc, _, err = await _ssh(remote, dl_cmd, progress, timeout=1800)
     if rc == 0:
@@ -406,7 +424,6 @@ async def _ensure_base_model(
             "Install huggingface_hub locally: pip install huggingface_hub",
         ) from exc
 
-    import tempfile
     local_model_dir = Path(tempfile.mkdtemp()) / "model"
     snapshot_download(base_model, local_dir=str(local_model_dir))
 
@@ -417,6 +434,27 @@ async def _ensure_base_model(
     )
     if rc != 0:
         raise RemoteTrainError("model_push", f"SCP failed: {err[:200]}")
+
+    # For WSL: SCP lands on Windows filesystem, copy to WSL-native path
+    if remote.use_wsl:
+        rc, win_home, _ = await _run_ssh(
+            remote, "echo %USERPROFILE%", timeout=10,
+        )
+        if rc == 0:
+            win_home = win_home.strip().replace("\\", "/")
+            if len(win_home) >= 2 and win_home[1] == ":":
+                mp = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
+            else:
+                mp = win_home
+            rel = scp_rdir.lstrip("~/")
+            wm = f"{mp}/{rel}" if rel else mp
+            cp_cmd = f'cp -r "{wm}/model" {model_dir}'
+            rc, _, err = await _ssh(remote, cp_cmd, timeout=300)
+            if rc != 0:
+                raise RemoteTrainError(
+                    "model_push",
+                    f"Failed to copy model to WSL: {err[:200]}",
+                )
 
     # Clean up local temp
     import shutil
@@ -519,12 +557,21 @@ async def remote_finetune(
     if rc != 0:
         raise RemoteTrainError("mkdir", err[:200])
 
-    # -- Build + push bundle if source code changed --
+    # -- Build + push bundle if source code changed or install incomplete --
     local_hash = _hash_training_sources()
     rc, remote_hash_out, _ = await _ssh(
         remote, f"cat {cmd_rdir}/.source-hash 2>/dev/null || echo none", timeout=10,
     )
     remote_hash = remote_hash_out.strip()
+
+    # Also check if install completed (sentinel file exists)
+    rc, sentinel_out, _ = await _ssh(
+        remote,
+        f"test -f {cmd_rdir}/.venv/.install-ok && echo ok || echo missing",
+        timeout=10,
+    )
+    if "missing" in sentinel_out:
+        remote_hash = "incomplete"  # force re-push
 
     import json
     from dataclasses import asdict
@@ -551,9 +598,24 @@ async def remote_finetune(
 
         # Extract and install
         if remote.use_wsl:
-            # Extract on Windows side, then install.sh self-relocates to WSL native
+            # SCP landed on Windows filesystem. Resolve the WSL mount path
+            # so we can access it from within WSL. install.sh will self-relocate
+            # from /mnt/c/... to ~/tokenpal-training/ automatically.
+            rc, win_home, _ = await _run_ssh(
+                remote, "echo %USERPROFILE%", timeout=10,
+            )
+            if rc != 0:
+                raise RemoteTrainError("wsl_bridge", "Failed to resolve Windows home dir")
+            win_home = win_home.strip().replace("\\", "/")
+            if len(win_home) >= 2 and win_home[1] == ":":
+                mount_path = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
+            else:
+                mount_path = win_home
+            rel = remote.remote_dir.lstrip("~/")
+            win_mount = f"{mount_path}/{rel}" if rel else mount_path
+
             extract_cmd = (
-                f"cd {cmd_rdir} && tar xzf bundle.tar.gz && bash install.sh"
+                f'cd "{win_mount}" && tar xzf bundle.tar.gz && bash install.sh'
             )
         else:
             extract_cmd = (
@@ -598,7 +660,9 @@ async def remote_finetune(
 
     # -- Ensure base model is available on remote --
     _progress("Checking base model on remote...")
-    await _ensure_base_model(remote, config.base_model, model_dir, _ssh, _progress)
+    await _ensure_base_model(
+        remote, config.base_model, model_dir, venv_py, _ssh, _progress,
+    )
 
     # -- Prepare training data (using installed entry point) --
     _progress(f"Preparing training data ({profile.line_count} lines)...")
@@ -612,7 +676,8 @@ async def remote_finetune(
 
     # -- LoRA training (in tmux for network resilience) --
     _progress("Starting LoRA training...")
-    q_model_dir = shlex.quote(model_dir)
+    # Don't shlex.quote — model_dir may contain $HOME which needs shell expansion
+    q_model_dir = model_dir
     tmux_session = f"tokenpal-{slug}"
     train_cmd = (
         f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
@@ -644,13 +709,33 @@ async def remote_finetune(
             "Wait for it to finish or kill it manually.",
         )
 
-    # Run training in tmux so it survives SSH drops
+    # Write training command to a script file to avoid quoting issues
+    # with tmux + flock + $HOME expansion through WSL SSH.
+    # Base64-encode to survive all quoting layers.
+    import base64
+    script_content = (
+        f"#!/bin/bash\nset -eo pipefail\n"
+        f"{train_cmd} 2>&1 | tee {cmd_rdir}/train.log\n"
+        f"echo EXIT_CODE=$? >> {cmd_rdir}/train.log\n"
+    )
+    # Resolve $HOME in the script since it will run in a non-login shell
+    # via flock — replace $HOME with the expanded path
+    rc, home_out, _ = await _ssh(remote, "echo $HOME", timeout=5)
+    if rc == 0 and home_out.strip():
+        script_content = script_content.replace("$HOME", home_out.strip())
+
+    b64 = base64.b64encode(script_content.encode()).decode()
+    write_cmd = (
+        f"echo {b64} | base64 -d > {cmd_rdir}/run_train.sh && "
+        f"chmod +x {cmd_rdir}/run_train.sh"
+    )
+    await _ssh(remote, write_cmd, timeout=10)
+
+    # Run in tmux so it survives SSH drops
     tmux_cmd = (
         f"tmux kill-session -t {tmux_session} 2>/dev/null; "
         f"tmux new-session -d -s {tmux_session} "
-        f"'flock /tmp/tokenpal-training.lock {train_cmd} "
-        f"2>&1 | tee {cmd_rdir}/train.log; "
-        f"echo EXIT_CODE=$? >> {cmd_rdir}/train.log'"
+        f"'flock /tmp/tokenpal-training.lock {cmd_rdir}/run_train.sh'"
     )
     rc, _, err = await _ssh(remote, tmux_cmd, timeout=30)
     if rc != 0:

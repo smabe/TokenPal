@@ -198,7 +198,7 @@ def train(
 
     trainer = SFTTrainer(
         model=model,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
         args=training_args,
