@@ -13,6 +13,7 @@ from tokenpal.config.schema import (
     BrainConfig,
     LLMConfig,
     MemoryConfig,
+    PathsConfig,
     PluginsConfig,
     SensesConfig,
     TokenPalConfig,
@@ -34,6 +35,7 @@ _SECTION_MAP: dict[str, type] = {
     "brain": BrainConfig,
     "memory": MemoryConfig,
     "actions": ActionsConfig,
+    "paths": PathsConfig,
     "plugins": PluginsConfig,
 }
 

@@ -73,6 +73,11 @@ class ActionsConfig:
 
 
 @dataclass
+class PathsConfig:
+    data_dir: str = "~/.tokenpal"
+
+
+@dataclass
 class PluginsConfig:
     extra_packages: list[str] = field(default_factory=list)
     sense_overrides: dict[str, str] = field(default_factory=dict)
@@ -86,4 +91,5 @@ class TokenPalConfig:
     brain: BrainConfig = field(default_factory=BrainConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     actions: ActionsConfig = field(default_factory=ActionsConfig)
+    paths: PathsConfig = field(default_factory=PathsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)

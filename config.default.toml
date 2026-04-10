@@ -49,5 +49,8 @@ timer = true
 system_info = true
 open_app = true
 
+[paths]
+data_dir = "~/.tokenpal"
+
 [plugins]
 extra_packages = []

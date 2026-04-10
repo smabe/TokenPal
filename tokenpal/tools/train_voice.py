@@ -26,9 +26,27 @@ from tokenpal.tools.voice_profile import (
     slugify,
 )
 
-_VOICES_DIR = Path.home() / ".tokenpal" / "voices"
-_OLLAMA_URL = "http://localhost:11434/v1/chat/completions"
 _MODEL = "gemma3:4b"
+
+
+def _get_voices_dir() -> Path:
+    """Resolve voices directory from config, with fallback."""
+    try:
+        from tokenpal.config.loader import load_config
+        config = load_config()
+        return Path(config.paths.data_dir).expanduser().resolve() / "voices"
+    except Exception:
+        return Path.home() / ".tokenpal" / "voices"
+
+
+def _get_ollama_url() -> str:
+    """Resolve Ollama API URL from config, with fallback."""
+    try:
+        from tokenpal.config.loader import load_config
+        config = load_config()
+        return config.llm.api_url + "/chat/completions"
+    except Exception:
+        return "http://localhost:11434/v1/chat/completions"
 
 
 def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7) -> str | None:
@@ -41,7 +59,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
     }).encode()
 
     req = urllib.request.Request(
-        _OLLAMA_URL,
+        _get_ollama_url(),
         data=payload,
         headers={"Content-Type": "application/json"},
     )
@@ -161,10 +179,10 @@ def _print_samples(lines: list[str], n: int = 5) -> None:
 
 def _cmd_list() -> None:
     """List all saved voice profiles."""
-    profiles = list_profiles(_VOICES_DIR)
+    profiles = list_profiles(_get_voices_dir())
     if not profiles:
         print("No voices saved yet.")
-        print(f"Voices directory: {_VOICES_DIR}")
+        print(f"Voices directory: {_get_voices_dir()}")
         return
     print(f"{'Slug':<25} {'Character':<25} {'Lines':>5}")
     print("-" * 57)
@@ -174,7 +192,7 @@ def _cmd_list() -> None:
 
 def _cmd_activate() -> None:
     """Interactive voice switcher — pick from saved profiles."""
-    profiles = list_profiles(_VOICES_DIR)
+    profiles = list_profiles(_get_voices_dir())
     if not profiles:
         print("No voices saved yet. Train one first:")
         print('  python -m tokenpal.tools.train_voice --wiki regularshow "Mordecai"')
@@ -307,7 +325,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         greetings=greetings,
         offline_quips=offline_quips,
     )
-    out_path = save_profile(profile, _VOICES_DIR)
+    out_path = save_profile(profile, _get_voices_dir())
     slug = slugify(name)
 
     print(f"Saved voice \"{slug}\" ({len(lines)} lines) to {out_path}")

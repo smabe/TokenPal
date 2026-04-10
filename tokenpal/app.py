@@ -28,8 +28,6 @@ from tokenpal.util.logging import setup_logging
 
 log = logging.getLogger(__name__)
 
-_DATA_DIR = Path.home() / ".tokenpal"
-
 
 def main() -> None:
     args = parse_args()
@@ -38,12 +36,15 @@ def main() -> None:
         print_version()
         return
 
-    setup_logging(verbose=args.verbose)
+    # Load config early so data_dir is available for logging
+    config = load_config(config_path=args.config)
+    data_dir = Path(config.paths.data_dir).expanduser().resolve()
+
+    setup_logging(verbose=args.verbose, log_dir=data_dir / "logs")
 
     if args.check:
         sys.exit(run_check(config_path=args.config))
 
-    config = load_config(config_path=args.config)
     log.info("TokenPal starting up...")
 
     # Discover all plugins
@@ -71,7 +72,7 @@ def main() -> None:
         from tokenpal.tools.voice_profile import load_profile
 
         try:
-            voice = load_profile(config.brain.active_voice, _DATA_DIR / "voices")
+            voice = load_profile(config.brain.active_voice, data_dir / "voices")
             log.info("Loaded voice '%s' (%d lines)", voice.character, len(voice.lines))
         except FileNotFoundError:
             log.warning("Voice '%s' not found — using defaults", config.brain.active_voice)
@@ -94,7 +95,7 @@ def main() -> None:
     memory: MemoryStore | None = None
     if config.memory.enabled:
         memory = MemoryStore(
-            db_path=_DATA_DIR / "memory.db",
+            db_path=data_dir / "memory.db",
             retention_days=config.memory.retention_days,
         )
         memory.setup()
