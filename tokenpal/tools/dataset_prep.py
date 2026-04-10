@@ -7,10 +7,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-try:
-    from tokenpal.tools.voice_profile import VoiceProfile, load_profile
-except ModuleNotFoundError:
-    from voice_profile import VoiceProfile, load_profile  # type: ignore[no-redef]
+from tokenpal.tools.voice_profile import VoiceProfile, load_profile
 
 # ---------------------------------------------------------------------------
 # Synthetic context prompts — mirrors what TokenPal senses actually produce.

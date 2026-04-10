@@ -152,6 +152,7 @@ def train(
     val_path: Path,
     config: LoRAConfig,
     output_dir: Path,
+    resume_from_checkpoint: str | None = None,
 ) -> Path:
     """Run QLoRA fine-tuning via TRL SFTTrainer.
 
@@ -206,7 +207,7 @@ def train(
     )
 
     log.info("Starting training: %d epochs, rank %d", config.epochs, config.lora_rank)
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.save_model(str(adapter_dir))
 
     return adapter_dir
@@ -275,14 +276,46 @@ def export_gguf(
     return output_path
 
 
+def merge_adapter(
+    adapter_dir: Path,
+    base_model: str,
+    output_dir: Path,
+) -> Path:
+    """Merge LoRA adapter into base model and save as safetensors.
+
+    Returns the path to the merged model directory.
+    """
+    from peft import PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    log.info("Merging LoRA adapter into base model...")
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model, torch_dtype="auto", device_map="cpu",
+    )
+    model = PeftModel.from_pretrained(model, str(adapter_dir))
+    model = model.merge_and_unload()
+
+    model.save_pretrained(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
+
+    log.info("Merged model saved: %s", output_dir)
+    return output_dir
+
+
 def generate_modelfile(
-    gguf_path: Path,
+    model_path: Path,
     system_prompt: str,
     temperature: float = 0.8,
 ) -> str:
-    """Generate an Ollama Modelfile for a custom GGUF."""
+    """Generate an Ollama Modelfile for a custom model.
+
+    model_path can be a GGUF file or a safetensors directory.
+    """
     return (
-        f"FROM {gguf_path}\n"
+        f"FROM {model_path}\n"
         f"PARAMETER temperature {temperature}\n"
         f"PARAMETER num_ctx 2048\n"
         f'SYSTEM """{system_prompt}"""\n'
@@ -290,16 +323,17 @@ def generate_modelfile(
 
 
 def register_ollama(
-    gguf_path: Path,
+    model_path: Path,
     model_name: str,
     system_prompt: str,
 ) -> bool:
-    """Register a GGUF model with Ollama.
+    """Register a model with Ollama.
 
+    model_path can be a GGUF file or a safetensors directory.
     Creates a Modelfile and runs ``ollama create``.
     Returns True on success.
     """
-    modelfile_content = generate_modelfile(gguf_path, system_prompt)
+    modelfile_content = generate_modelfile(model_path, system_prompt)
 
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".Modelfile", delete=False,
@@ -334,10 +368,7 @@ def register_ollama(
 
 def _cmd_prep(args: argparse.Namespace) -> None:
     """Prepare training data from a voice profile."""
-    try:
-        from tokenpal.tools.dataset_prep import prepare_dataset
-    except ModuleNotFoundError:
-        from dataset_prep import prepare_dataset  # type: ignore[no-redef]
+    from tokenpal.tools.dataset_prep import prepare_dataset
 
     profile_path = Path(args.profile)
     output_dir = Path(args.output) if args.output else profile_path.parent / "finetune-data"
@@ -382,8 +413,31 @@ def _cmd_train(args: argparse.Namespace) -> None:
           f"lr={config.learning_rate}, batch={config.batch_size}")
 
     model, tokenizer = setup_model(config)
-    adapter_dir = train(model, tokenizer, train_path, val_path, config, output_dir)
+    resume_from = None
+    if args.resume:
+        # Find latest checkpoint
+        adapter_dir = output_dir / "adapter"
+        checkpoints = sorted(adapter_dir.glob("checkpoint-*")) if adapter_dir.exists() else []
+        if checkpoints:
+            resume_from = str(checkpoints[-1])
+            print(f"Resuming from: {resume_from}")
+        else:
+            print("No checkpoints found, starting fresh.")
+
+    adapter_dir = train(
+        model, tokenizer, train_path, val_path, config, output_dir,
+        resume_from_checkpoint=resume_from,
+    )
     print(f"Adapter saved: {adapter_dir}")
+
+
+def _cmd_merge(args: argparse.Namespace) -> None:
+    """Merge LoRA adapter into base model as safetensors."""
+    adapter_dir = Path(args.adapter)
+    output_dir = Path(args.output)
+
+    merged_dir = merge_adapter(adapter_dir, args.base_model, output_dir)
+    print(f"Merged model saved: {merged_dir}")
 
 
 def _cmd_export(args: argparse.Namespace) -> None:
@@ -414,14 +468,8 @@ def _cmd_register(args: argparse.Namespace) -> None:
 
 def _cmd_all(args: argparse.Namespace) -> None:
     """Full pipeline: prep → train → export → register."""
-    try:
-        from tokenpal.tools.dataset_prep import prepare_dataset
-    except ModuleNotFoundError:
-        from dataset_prep import prepare_dataset  # type: ignore[no-redef]
-    try:
-        from tokenpal.tools.voice_profile import load_profile
-    except ModuleNotFoundError:
-        from voice_profile import load_profile  # type: ignore[no-redef]
+    from tokenpal.tools.dataset_prep import prepare_dataset
+    from tokenpal.tools.voice_profile import load_profile
 
     profile_path = Path(args.profile)
     voices_dir = profile_path.parent
@@ -452,26 +500,22 @@ def _cmd_all(args: argparse.Namespace) -> None:
     adapter_dir = train(model, tokenizer, train_path, val_path, config, output_dir)
     print(f"  Adapter: {adapter_dir}")
 
-    # Step 3: Export GGUF
-    gguf_path = output_dir / f"{slug}.gguf"
-    print(f"[3/4] Exporting GGUF ({config.quantization})...")
-    gguf_path = export_gguf(adapter_dir, gguf_path, config.base_model, config.quantization)
-    size_gb = gguf_path.stat().st_size / 1e9
-    print(f"  GGUF: {gguf_path} ({size_gb:.1f} GB)")
+    # Step 3: Merge adapter into base model
+    merged_dir = output_dir / "merged"
+    print("[3/4] Merging adapter into base model...")
+    merge_adapter(adapter_dir, config.base_model, merged_dir)
+    print(f"  Merged: {merged_dir}")
 
     # Step 4: Register with Ollama
-    try:
-        from tokenpal.tools.dataset_prep import build_system_prompt
-    except ModuleNotFoundError:
-        from dataset_prep import build_system_prompt  # type: ignore[no-redef]
+    from tokenpal.tools.dataset_prep import build_system_prompt
     system_prompt = build_system_prompt(profile)
     print(f"[4/4] Registering {model_name} with Ollama...")
-    if register_ollama(gguf_path, model_name, system_prompt):
+    if register_ollama(merged_dir, model_name, system_prompt):
         print(f"\nDone! Model '{model_name}' is ready.")
         print(f"  Test it:  ollama run {model_name}")
         print(f"  In app:   /model {model_name}")
     else:
-        print("\nWARNING: GGUF exported but Ollama registration failed.")
+        print("\nWARNING: Model merged but Ollama registration failed.")
         print(f"  Manual:   ollama create {model_name} -f <Modelfile>")
         sys.exit(1)
 
@@ -501,8 +545,15 @@ def main() -> None:
     p_train.add_argument("--base-model", default="google/gemma-2-9b")
     p_train.add_argument("--rank", type=int, help="override LoRA rank")
     p_train.add_argument("--epochs", type=int, help="override epoch count")
+    p_train.add_argument("--resume", action="store_true", help="resume from latest checkpoint")
 
-    # export
+    # merge
+    p_merge = sub.add_parser("merge", help="merge adapter into base model (safetensors)")
+    p_merge.add_argument("--adapter", required=True, help="adapter directory")
+    p_merge.add_argument("--output", required=True, help="output directory for merged model")
+    p_merge.add_argument("--base-model", default="google/gemma-2-9b")
+
+    # export (legacy — use merge instead for Ollama safetensors support)
     p_export = sub.add_parser("export", help="export adapter to GGUF")
     p_export.add_argument("--adapter", required=True, help="adapter directory")
     p_export.add_argument("--output", required=True, help="GGUF output path")
@@ -533,6 +584,7 @@ def main() -> None:
     commands = {
         "prep": _cmd_prep,
         "train": _cmd_train,
+        "merge": _cmd_merge,
         "export": _cmd_export,
         "register": _cmd_register,
         "all": _cmd_all,

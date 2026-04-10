@@ -89,8 +89,9 @@ class RemoteTrainConfig:
     host: str = ""
     user: str = ""
     remote_dir: str = "~/tokenpal-training"
-    python: str = "python3"
+    python: str = ""  # auto-detected from venv after install.sh runs
     use_wsl: bool = False
+    gpu_backend: str = "auto"  # auto, cuda, or rocm
 
 
 @dataclass
