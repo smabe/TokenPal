@@ -265,7 +265,7 @@ class PersonalityEngine:
         # Mood system
         self._mood: Mood = Mood.SNARKY
         self._mood_since: float = time.monotonic()
-        self._last_context: str = ""
+        self._last_mood_app: str = ""
         self._context_unchanged_count: int = 0
 
         # Running gags — app visit counters
@@ -357,12 +357,13 @@ class PersonalityEngine:
         now = datetime.now()
         elapsed_in_mood = time.monotonic() - self._mood_since
 
-        # Track context staleness
-        if context_snapshot == self._last_context:
+        # Track context staleness based on app (not hardware jitter)
+        current_app = self._last_seen_app
+        if current_app == self._last_mood_app:
             self._context_unchanged_count += 1
         else:
             self._context_unchanged_count = 0
-        self._last_context = context_snapshot
+        self._last_mood_app = current_app
 
         # Extract signals from context
         ctx_lower = context_snapshot.lower()
@@ -376,12 +377,11 @@ class PersonalityEngine:
         # Concerned: 2-5 AM usage
         elif 2 <= hour < 5:
             new_mood = Mood.CONCERNED
-        # Bored: same context for a long time (>= 10 unchanged polls)
+        # Bored: same app for a long time (>= 10 unchanged polls)
         elif self._context_unchanged_count >= 10:
             new_mood = Mood.BORED
-        # Hyper: lots of app mentions / rapid changes (context changes every cycle)
+        # Hyper: rapid app switching (app changes every cycle for 30s+)
         elif self._context_unchanged_count == 0 and elapsed_in_mood > 30:
-            # Only go hyper if we've been seeing rapid change for a bit
             if self._mood != Mood.HYPER:
                 new_mood = Mood.HYPER
         # Impressed: detect productivity signals
