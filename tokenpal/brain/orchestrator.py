@@ -251,6 +251,8 @@ class Brain:
             else:
                 response = await self._llm.generate(prompt)
 
+            if not response.text:
+                log.debug("LLM returned empty content (model may need higher max_tokens)")
             filtered = self._personality.filter_response(response.text)
 
             if filtered:
