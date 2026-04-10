@@ -167,6 +167,50 @@ Write ONLY the 6 lines, nothing else.""",
     return moods
 
 
+def train_from_wiki(
+    wiki: str,
+    character: str,
+    voices_dir: Path | None = None,
+    min_lines: int = 10,
+) -> VoiceProfile | None:
+    """Fetch transcripts from a Fandom wiki, extract lines, generate persona.
+
+    Returns the saved VoiceProfile, or None if not enough lines found.
+    """
+    from tokenpal.tools.transcript_parser import extract_lines_from_text
+    from tokenpal.tools.wiki_fetch import fetch_all_transcripts
+
+    text = fetch_all_transcripts(wiki, progress=False)
+    if not text:
+        return None
+
+    lines = extract_lines_from_text(text, character)
+    if len(lines) < min_lines:
+        return None
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_p = pool.submit(_generate_persona, character, lines)
+        f_g = pool.submit(_generate_greetings, character, lines)
+        f_q = pool.submit(_generate_offline_quips, character, lines)
+        f_m = pool.submit(_generate_mood_prompts, character, lines)
+
+    profile = make_profile(
+        character=character,
+        source=f"{wiki}.fandom.com",
+        lines=lines,
+        persona=f_p.result() or "",
+        greetings=f_g.result(),
+        offline_quips=f_q.result(),
+        mood_prompts=f_m.result(),
+    )
+
+    out_dir = voices_dir or _get_voices_dir()
+    save_profile(profile, out_dir)
+    return profile
+
+
 def _find_config_toml() -> Path:
     """Find config.toml — check CWD first, then fall back to project root."""
     cwd = Path.cwd()
@@ -331,6 +375,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     persona = ""
     greetings: list[str] = []
     offline_quips: list[str] = []
+    mood_prompts: dict[str, str] = {}
     if not args.no_persona:
         from concurrent.futures import ThreadPoolExecutor
 

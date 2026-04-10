@@ -260,14 +260,7 @@ class PersonalityEngine:
         self._recent_comments: deque[str] = deque(maxlen=5)
 
         # Voice: custom example pool from trained voice profile
-        voice_lines = voice.lines if voice else None
-        if voice_lines and len(voice_lines) >= 10:
-            self._example_pool = voice_lines
-        elif voice_lines:
-            pad = random.sample(_EXAMPLE_POOL, min(10 - len(voice_lines), len(_EXAMPLE_POOL)))
-            self._example_pool = voice_lines + pad
-        else:
-            self._example_pool = list(_EXAMPLE_POOL)
+        self._example_pool = self._build_example_pool(voice.lines if voice else None)
 
         # Mood system
         self._mood: Mood = Mood.SNARKY
@@ -301,21 +294,14 @@ class PersonalityEngine:
             self._voice_greetings = voice.greetings or []
             self._voice_offline_quips = voice.offline_quips or []
             self._voice_mood_prompts = voice.mood_prompts or {}
-            if len(voice.lines) >= 10:
-                self._example_pool = voice.lines
-            else:
-                pad = random.sample(
-                    _EXAMPLE_POOL,
-                    min(10 - len(voice.lines), len(_EXAMPLE_POOL)),
-                )
-                self._example_pool = voice.lines + pad
+            self._example_pool = self._build_example_pool(voice.lines)
         else:
             self._voice_name = ""
             self._voice_persona = ""
             self._voice_greetings = []
             self._voice_offline_quips = []
             self._voice_mood_prompts = {}
-            self._example_pool = list(_EXAMPLE_POOL)
+            self._example_pool = self._build_example_pool(None)
         log.info("Voice switched to: %s", self._voice_name or "default")
 
     def get_startup_greeting(self) -> str:
@@ -481,6 +467,19 @@ class PersonalityEngine:
     def mood(self) -> str:
         """Current mood as a string."""
         return self._mood.value
+
+    @staticmethod
+    def _build_example_pool(voice_lines: list[str] | None) -> list[str]:
+        """Build the few-shot example pool, padding with defaults if needed."""
+        if voice_lines and len(voice_lines) >= 10:
+            return voice_lines
+        if voice_lines:
+            pad = random.sample(
+                _EXAMPLE_POOL,
+                min(10 - len(voice_lines), len(_EXAMPLE_POOL)),
+            )
+            return voice_lines + pad
+        return list(_EXAMPLE_POOL)
 
     def _mood_line(self) -> str:
         """Get the mood prompt, preferring voice-specific if available."""

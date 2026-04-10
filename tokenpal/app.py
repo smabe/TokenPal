@@ -316,61 +316,26 @@ def _start_voice_training(
 
     def _train() -> None:
         try:
-            from tokenpal.tools.transcript_parser import extract_lines_from_text
-            from tokenpal.tools.voice_profile import make_profile, save_profile
-            from tokenpal.tools.wiki_fetch import fetch_all_transcripts
+            from tokenpal.tools.train_voice import train_from_wiki
 
-            text = fetch_all_transcripts(wiki, progress=False)
-            if not text:
+            profile = train_from_wiki(wiki, character, voices_dir=voices_dir)
+            if profile is None:
                 overlay.schedule_callback(
                     lambda: overlay.show_speech(
-                        SpeechBubble(text=f"No transcripts on {wiki}.fandom.com")
+                        SpeechBubble(text=f"Not enough lines for {character}.")
                     )
                 )
                 return
 
-            lines = extract_lines_from_text(text, character)
-            if len(lines) < 10:
-                overlay.schedule_callback(
-                    lambda: overlay.show_speech(
-                        SpeechBubble(text=f"Only {len(lines)} lines for {character}.")
-                    )
-                )
-                return
-
-            # Generate persona via Ollama (reuse train_voice helpers)
-            from concurrent.futures import ThreadPoolExecutor
-
-            from tokenpal.tools.train_voice import (
-                _generate_greetings,
-                _generate_mood_prompts,
-                _generate_offline_quips,
-                _generate_persona,
-            )
-
-            with ThreadPoolExecutor(max_workers=4) as pool:
-                f_p = pool.submit(_generate_persona, character, lines)
-                f_g = pool.submit(_generate_greetings, character, lines)
-                f_q = pool.submit(_generate_offline_quips, character, lines)
-                f_m = pool.submit(_generate_mood_prompts, character, lines)
-
-            profile = make_profile(
-                character=character,
-                source=f"{wiki}.fandom.com",
-                lines=lines,
-                persona=f_p.result() or "",
-                greetings=f_g.result(),
-                offline_quips=f_q.result(),
-                mood_prompts=f_m.result(),
-            )
-            save_profile(profile, voices_dir)
             personality.set_voice(profile)
-
-            msg = f"Trained {character} ({len(lines)} lines). Voice active!"
+            msg = f"Trained {character} ({len(profile.lines)} lines). Voice active!"
             overlay.schedule_callback(
                 lambda: overlay.show_speech(SpeechBubble(text=msg))
             )
-            log.info("Voice trained: %s from %s (%d lines)", character, wiki, len(lines))
+            log.info(
+                "Voice trained: %s from %s (%d lines)",
+                character, wiki, len(profile.lines),
+            )
 
         except Exception:
             log.exception("Voice training failed")
