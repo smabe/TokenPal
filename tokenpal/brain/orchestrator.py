@@ -255,6 +255,10 @@ class Brain:
 
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
+                # Re-enable tool specs if they were disabled due to failures
+                if self._consecutive_failures > 0 and self._actions and not self._tool_specs:
+                    self._tool_specs = [a.to_tool_spec() for a in self._actions.values()]
+                    log.info("Re-enabled tool-calling after successful generation")
                 self._consecutive_failures = 0
                 self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
@@ -274,7 +278,15 @@ class Brain:
 
         except Exception:
             self._consecutive_failures += 1
-            log.warning("LLM generation failed (attempt %d)", self._consecutive_failures)
+            if self._consecutive_failures <= 3:
+                log.exception("LLM generation failed (attempt %d)", self._consecutive_failures)
+            else:
+                log.warning("LLM generation failed (attempt %d)", self._consecutive_failures)
+
+            # If tool-calling keeps failing, disable it and fall back to plain generation
+            if self._consecutive_failures == 3 and self._actions:
+                log.warning("Disabling tool-calling — model may not support tools")
+                self._tool_specs = []
 
             if self._consecutive_failures == 1:
                 log.warning("Ollama appears to be down. Start it with: ollama serve")
