@@ -138,6 +138,9 @@ if [[ -z "$WHEEL" ]]; then
     echo "ERROR: No tokenpal wheel found in $INSTALL_DIR"
     exit 1
 fi
+# Force-refresh tokenpal code (even if version unchanged), then resolve
+# training extras without re-downloading PyTorch or other large deps.
+"$VENV/bin/pip" install --force-reinstall --no-deps --no-cache-dir "${WHEEL}" -q
 "$VENV/bin/pip" install "${WHEEL}[training]" -q
 
 # --- Verify ---
@@ -209,6 +212,42 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     return tarball
 
 
+async def _drain_stream(
+    stream: asyncio.StreamReader,
+    buf: list[str] | None = None,
+    callback: ProgressCallback | None = None,
+    line_filter: Callable[[str], bool] | None = None,
+) -> None:
+    """Read lines from an async stream, optionally buffering and/or calling back."""
+    while True:
+        raw = await stream.readline()
+        if not raw:
+            break
+        line = raw.decode("utf-8", errors="replace").rstrip()
+        if buf is not None:
+            buf.append(line)
+        if callback and (line_filter is None or line_filter(line)):
+            callback(line.strip())
+
+
+async def _resolve_wsl_mount(remote: RemoteTrainConfig) -> str:
+    """Resolve the Windows remote_dir as a WSL /mnt/ mount path.
+
+    SCPs to a Windows SSH host land at %USERPROFILE%\\<remote_dir>.
+    This resolves that to the WSL-accessible /mnt/c/Users/... path.
+    """
+    rc, win_home, _ = await _run_ssh(remote, "echo %USERPROFILE%", timeout=10)
+    if rc != 0:
+        raise RemoteTrainError("wsl_bridge", "Failed to resolve Windows home dir")
+    win_home = win_home.strip().replace("\\", "/")
+    if len(win_home) >= 2 and win_home[1] == ":":
+        mount_path = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
+    else:
+        mount_path = win_home
+    rel = remote.remote_dir.lstrip("~/")
+    return f"{mount_path}/{rel}" if rel else mount_path
+
+
 def _ssh_target(remote: RemoteTrainConfig) -> str:
     """Build the ssh user@host string."""
     if remote.user:
@@ -263,28 +302,14 @@ async def _run_ssh(
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
 
-    async def _read_stream(
-        stream: asyncio.StreamReader,
-        buf: list[str],
-        is_stdout: bool,
-    ) -> None:
-        while True:
-            line_bytes = await stream.readline()
-            if not line_bytes:
-                break
-            line = line_bytes.decode("utf-8", errors="replace").rstrip()
-            buf.append(line)
-            if is_stdout and progress:
-                progress(line)
-
     assert proc.stdout is not None
     assert proc.stderr is not None
 
     try:
         await asyncio.wait_for(
             asyncio.gather(
-                _read_stream(proc.stdout, stdout_lines, True),
-                _read_stream(proc.stderr, stderr_lines, False),
+                _drain_stream(proc.stdout, stdout_lines, progress),
+                _drain_stream(proc.stderr, stderr_lines),
             ),
             timeout=timeout,
         )
@@ -345,20 +370,37 @@ async def _run_wsl_ssh(
     return await _run_ssh(remote, _wsl_wrap(command), progress, timeout)
 
 
-async def _run_scp_recursive(
+async def _run_rsync(
     remote: RemoteTrainConfig,
     local_path: str,
     remote_path: str,
     *,
     pull: bool = False,
+    progress: ProgressCallback | None = None,
     timeout: float = 3600,
 ) -> tuple[int, str]:
-    """Copy directories recursively via SCP. Returns (returncode, stderr)."""
+    """Copy files/dirs via rsync with --progress and --partial (resume support).
+
+    Streams progress lines to the callback. Returns (returncode, stderr).
+    No compression (-z omitted) — safetensors are dense binary, incompressible.
+    """
     target = _ssh_target(remote)
+    ssh_cmd = "ssh -o BatchMode=yes"
+    # Trailing slash on source = copy contents, not the directory itself
     if pull:
-        args = ["scp", "-r", f"{target}:{remote_path}", local_path]
+        args = [
+            "rsync", "-a", "--partial", "--info=progress2",
+            "-e", ssh_cmd,
+            f"{target}:{remote_path}/",
+            f"{local_path}/",
+        ]
     else:
-        args = ["scp", "-r", local_path, f"{target}:{remote_path}"]
+        args = [
+            "rsync", "-a", "--partial", "--info=progress2",
+            "-e", ssh_cmd,
+            f"{local_path}/",
+            f"{target}:{remote_path}/",
+        ]
 
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -366,17 +408,50 @@ async def _run_scp_recursive(
         stderr=asyncio.subprocess.PIPE,
     )
 
+    stderr_lines: list[str] = []
+
+    async def _read_rsync_progress(stream: asyncio.StreamReader) -> None:
+        """Read rsync output in chunks — --info=progress2 uses \\r for updates."""
+        buf = b""
+        while True:
+            chunk = await stream.read(4096)
+            if not chunk:
+                break
+            buf += chunk
+            # Split on both \r and \n to catch intra-line progress updates
+            while b"\r" in buf or b"\n" in buf:
+                idx_r = buf.find(b"\r")
+                idx_n = buf.find(b"\n")
+                if idx_r == -1:
+                    idx = idx_n
+                elif idx_n == -1:
+                    idx = idx_r
+                else:
+                    idx = min(idx_r, idx_n)
+                line = buf[:idx].decode("utf-8", errors="replace").strip()
+                buf = buf[idx + 1:]
+                if progress and line and "%" in line:
+                    progress(line)
+
+    assert proc.stdout is not None
+    assert proc.stderr is not None
+
     try:
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=timeout,
+        await asyncio.wait_for(
+            asyncio.gather(
+                _read_rsync_progress(proc.stdout),
+                _drain_stream(proc.stderr, stderr_lines),
+            ),
+            timeout=timeout,
         )
     except TimeoutError:
         proc.kill()
-        return -1, "SCP timed out"
+        return -1, "rsync timed out"
 
+    await proc.wait()
     return (
         proc.returncode or 0,
-        stderr.decode("utf-8", errors="replace"),
+        "\n".join(stderr_lines),
     )
 
 
@@ -429,32 +504,23 @@ async def _ensure_base_model(
 
     progress("Pushing base model to remote (this may take a while)...")
     scp_rdir = remote.remote_dir
-    rc, err = await _run_scp_recursive(
-        remote, str(local_model_dir), f"{scp_rdir}/model", timeout=3600,
+    rc, err = await _run_rsync(
+        remote, str(local_model_dir), f"{scp_rdir}/model",
+        progress=progress, timeout=3600,
     )
     if rc != 0:
         raise RemoteTrainError("model_push", f"SCP failed: {err[:200]}")
 
     # For WSL: SCP lands on Windows filesystem, copy to WSL-native path
     if remote.use_wsl:
-        rc, win_home, _ = await _run_ssh(
-            remote, "echo %USERPROFILE%", timeout=10,
-        )
-        if rc == 0:
-            win_home = win_home.strip().replace("\\", "/")
-            if len(win_home) >= 2 and win_home[1] == ":":
-                mp = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
-            else:
-                mp = win_home
-            rel = scp_rdir.lstrip("~/")
-            wm = f"{mp}/{rel}" if rel else mp
-            cp_cmd = f'cp -r "{wm}/model" {model_dir}'
-            rc, _, err = await _ssh(remote, cp_cmd, timeout=300)
-            if rc != 0:
-                raise RemoteTrainError(
-                    "model_push",
-                    f"Failed to copy model to WSL: {err[:200]}",
-                )
+        wm = await _resolve_wsl_mount(remote)
+        cp_cmd = f'cp -r "{wm}/model" {model_dir}'
+        rc, _, err = await _ssh(remote, cp_cmd, timeout=300)
+        if rc != 0:
+            raise RemoteTrainError(
+                "model_push",
+                f"Failed to copy model to WSL: {err[:200]}",
+            )
 
     # Clean up local temp
     import shutil
@@ -598,22 +664,9 @@ async def remote_finetune(
 
         # Extract and install
         if remote.use_wsl:
-            # SCP landed on Windows filesystem. Resolve the WSL mount path
-            # so we can access it from within WSL. install.sh will self-relocate
+            # SCP landed on Windows filesystem. install.sh will self-relocate
             # from /mnt/c/... to ~/tokenpal-training/ automatically.
-            rc, win_home, _ = await _run_ssh(
-                remote, "echo %USERPROFILE%", timeout=10,
-            )
-            if rc != 0:
-                raise RemoteTrainError("wsl_bridge", "Failed to resolve Windows home dir")
-            win_home = win_home.strip().replace("\\", "/")
-            if len(win_home) >= 2 and win_home[1] == ":":
-                mount_path = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
-            else:
-                mount_path = win_home
-            rel = remote.remote_dir.lstrip("~/")
-            win_mount = f"{mount_path}/{rel}" if rel else mount_path
-
+            win_mount = await _resolve_wsl_mount(remote)
             extract_cmd = (
                 f'cd "{win_mount}" && tar xzf bundle.tar.gz && bash install.sh'
             )
@@ -638,22 +691,12 @@ async def remote_finetune(
             raise RemoteTrainError("push", f"Profile SCP failed: {err[:200]}")
         # WSL: copy profile to native path
         if remote.use_wsl:
-            rc, win_home, _ = await _run_ssh(
-                remote, "echo %USERPROFILE%", timeout=10,
+            wm = await _resolve_wsl_mount(remote)
+            await _ssh(
+                remote,
+                f'cp "{wm}/{q_slug}.json" {cmd_rdir}/',
+                timeout=15,
             )
-            if rc == 0:
-                win_home = win_home.strip().replace("\\", "/")
-                if len(win_home) >= 2 and win_home[1] == ":":
-                    mp = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
-                else:
-                    mp = win_home
-                rel = remote.remote_dir.lstrip("~/")
-                wm = f"{mp}/{rel}" if rel else mp
-                await _ssh(
-                    remote,
-                    f'cp "{wm}/{q_slug}.json" {cmd_rdir}/',
-                    timeout=15,
-                )
 
     # Clean up local temp files
     profile_json.unlink(missing_ok=True)
@@ -676,14 +719,13 @@ async def remote_finetune(
 
     # -- LoRA training (in tmux for network resilience) --
     _progress("Starting LoRA training...")
-    # Don't shlex.quote — model_dir may contain $HOME which needs shell expansion
-    q_model_dir = model_dir
+    raw_model_dir = model_dir  # not quoted — may contain $HOME for shell expansion
     tmux_session = f"tokenpal-{slug}"
     train_cmd = (
         f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
         f"tokenpal.tools.finetune_voice train "
         f"--data data/ --output output/ "
-        f"--base-model {q_model_dir}"
+        f"--base-model {raw_model_dir}"
     )
 
     # Check for existing checkpoints (resume support)
@@ -807,7 +849,7 @@ async def remote_finetune(
         f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
         f"tokenpal.tools.finetune_voice merge "
         f"--adapter output/adapter --output output/merged "
-        f"--base-model {q_model_dir}"
+        f"--base-model {raw_model_dir}"
     )
     rc, out, err = await _ssh(remote, merge_cmd, progress, timeout=3600)
     if rc != 0:
@@ -837,17 +879,7 @@ async def remote_finetune(
     # For WSL: merged dir is on WSL-native path, but SCP goes through Windows.
     # Copy it back to the Windows mount first.
     if remote.use_wsl:
-        rc, win_home, _ = await _run_ssh(
-            remote, "echo %USERPROFILE%", timeout=10,
-        )
-        win_home = win_home.strip().replace("\\", "/")
-        if len(win_home) >= 2 and win_home[1] == ":":
-            mp = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
-        else:
-            mp = win_home
-        rel = remote.remote_dir.lstrip("~/")
-        win_mount = f"{mp}/{rel}" if rel else mp
-
+        win_mount = await _resolve_wsl_mount(remote)
         rc, _, err = await _ssh(
             remote,
             f'cp -r {cmd_rdir}/output/merged "{win_mount}/merged"',
@@ -862,11 +894,12 @@ async def remote_finetune(
     else:
         pull_source = f"{scp_rdir}/output/merged"
 
-    rc, err = await _run_scp_recursive(
+    rc, err = await _run_rsync(
         remote,
         str(local_model_dir),
         pull_source,
         pull=True,
+        progress=progress,
         timeout=3600,
     )
     if rc != 0:
@@ -1050,21 +1083,11 @@ async def remote_setup(
     # Extract and install
     rdir = _wsl_cmd_dir(remote) if remote.use_wsl else scp_rdir
     if remote.use_wsl:
-        # SCP landed on Windows filesystem. Resolve the WSL mount path
-        # so we can access it from within WSL. install.sh will self-relocate
-        # from /mnt/c/... to ~/tokenpal-training/ automatically.
-        rc, win_home, _ = await _run_ssh(
-            remote, "echo %USERPROFILE%", timeout=10,
-        )
-        if rc != 0:
+        # SCP landed on Windows filesystem. install.sh will self-relocate.
+        try:
+            win_mount = await _resolve_wsl_mount(remote)
+        except RemoteTrainError:
             return _setup_fail("Failed to resolve Windows home dir", _progress)
-        win_home = win_home.strip().replace("\\", "/")
-        if len(win_home) >= 2 and win_home[1] == ":":
-            mount_path = f"/mnt/{win_home[0].lower()}{win_home[2:]}"
-        else:
-            mount_path = win_home
-        rel = scp_rdir.lstrip("~/")
-        win_mount = f"{mount_path}/{rel}" if rel else mount_path
         extract_cmd = (
             f'cd "{win_mount}" && tar xzf bundle.tar.gz && bash install.sh'
         )

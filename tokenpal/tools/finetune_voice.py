@@ -159,8 +159,7 @@ def train(
     Returns the path to the saved adapter directory.
     """
     from datasets import load_dataset
-    from transformers import TrainingArguments
-    from trl import SFTTrainer
+    from trl import SFTConfig, SFTTrainer
 
     dataset = load_dataset(
         "json",
@@ -182,18 +181,20 @@ def train(
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
 
-    training_args = TrainingArguments(
+    training_args = SFTConfig(
         output_dir=str(adapter_dir),
         per_device_train_batch_size=config.batch_size,
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         num_train_epochs=config.epochs,
         learning_rate=config.learning_rate,
         warmup_ratio=config.warmup_ratio,
-        fp16=True,
+        bf16=True,
         logging_steps=1,
         save_strategy="epoch",
         eval_strategy="epoch",
         report_to="none",
+        dataset_text_field="text",
+        max_length=config.max_seq_length,
     )
 
     trainer = SFTTrainer(
@@ -202,8 +203,6 @@ def train(
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
         args=training_args,
-        dataset_text_field="text",
-        max_seq_length=config.max_seq_length,
     )
 
     log.info("Starting training: %d epochs, rank %d", config.epochs, config.lora_rank)
@@ -225,25 +224,12 @@ def export_gguf(
     the llama.cpp repo on the remote machine.
     Returns the path to the GGUF file.
     """
-    from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
     output_path.parent.mkdir(parents=True, exist_ok=True)
     merged_dir = output_path.parent / "merged"
 
-    log.info("Merging LoRA adapter into base model...")
-    tokenizer = AutoTokenizer.from_pretrained(base_model)
-    model = AutoModelForCausalLM.from_pretrained(
-        base_model, torch_dtype="auto", device_map="cpu",
-    )
-    model = PeftModel.from_pretrained(model, str(adapter_dir))
-    model = model.merge_and_unload()
-
-    model.save_pretrained(str(merged_dir))
-    tokenizer.save_pretrained(str(merged_dir))
+    merge_adapter(adapter_dir, base_model, merged_dir)
 
     log.info("Converting to GGUF (quantization: %s)...", quantization)
-    import subprocess
     result = subprocess.run(
         [
             "python3", "-m", "llama_cpp.convert",
