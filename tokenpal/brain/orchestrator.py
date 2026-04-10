@@ -74,6 +74,9 @@ class Brain:
         self._consecutive_failures: int = 0
         self._last_confused_quip: float = 0.0
 
+        # Pause flag — suppresses comments (e.g. during voice training)
+        self._paused = False
+
         # Silence tuning state
         self._consecutive_comments: int = 0
         self._comment_timestamps: list[float] = []
@@ -164,7 +167,18 @@ class Brain:
                 log.debug("Sense poll error: %s", r)
         return readings
 
+    @property
+    def paused(self) -> bool:
+        return self._paused
+
+    @paused.setter
+    def paused(self, value: bool) -> None:
+        self._paused = value
+
     def _should_comment(self) -> bool:
+        if self._paused:
+            return False
+
         elapsed = time.monotonic() - self._last_comment_time
         if elapsed < self._cooldown:
             return False

@@ -72,6 +72,7 @@ class SpeechBubble:
     text: str
     style: str = "speech"
     max_width: int = 40
+    persistent: bool = False
 
     def render(self) -> list[str]:
         """Render text inside an ASCII speech bubble."""

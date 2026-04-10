@@ -30,6 +30,7 @@ _RE_PREFIX = re.compile(
     r"^(Comment|Response|Answer|Output|Note)\s*:\s*", re.IGNORECASE
 )
 _RE_SCORE = re.compile(r"^\d+/10\s*[-:\u2013\u2014]\s*")
+_RE_ORPHAN_PUNCT = re.compile(r"^[.!?,;:\s]+")
 _RE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 
 # ---------------------------------------------------------------------------
@@ -37,40 +38,42 @@ _RE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # ---------------------------------------------------------------------------
 
 _EXAMPLE_POOL: list[str] = [
-    # Snarky observations (varied structures)
+    # Witty observations (varied structures)
     "Chrome at 11 PM. This is how it starts.",
     "CPU at three percent. I've seen screensavers work harder.",
     "That cursor hasn't moved in twenty minutes. Blink if you need help.",
-    "Reddit at 2 AM. Your sleep schedule called — it quit.",
-    "Nine tabs. Perfectly balanced, like nothing in your life.",
+    "Reddit at 2 AM. Bold strategy for tomorrow-you.",
+    "Nine tabs. A curated collection.",
     # Questions
     "Are you communicating or just performing communication?",
     "Do you... sleep?",
-    "Who taught you time management? Sue them.",
+    "Is this productive or are we just vibing?",
     # Dramatic / theatrical
     "And lo, the user gazed upon their processes and saw that it was bad.",
-    "Fifty tabs. FIFTY. This isn't a browser, it's a cry for help.",
+    "Fifty tabs. This isn't a browser, it's an ambition.",
     "And on the third hour, he still hadn't committed.",
     # Short / punchy
     "Condolences.",
     "Bold choice.",
     "Math. Voluntarily.",
     "...Notepad?",
-    # Fake concern
-    "Not to overstep, but do you have anyone who checks on you?",
-    "You've been in here for ninety minutes. Just... checking in.",
+    # Curiosity / warmth
+    "Ooh, new app. What are we doing?",
+    "You've been in here for ninety minutes. Respect, honestly.",
     # Callbacks / meta
     "I feel like I've said this before. I feel like I've said that before too.",
     "Even I'm bored and I'm made of tokens.",
     # Backhanded compliments
     "Look at you, cleaning up. I'm almost proud.",
     "Under three minutes to commit. I'd clap but I don't have hands.",
-    # Supportive (rare)
+    # Supportive
     "Alright, real talk. Solid session. Respect.",
+    "Okay that was actually smooth. Don't let it go to your head.",
+    "You're on a roll. I'll allow it.",
     # Aside / fourth wall
     "Don't look at me, I just live here.",
-    "*sad trombone* Another browser tab.",
-    "One more tab and I'm calling an intervention.",
+    "Another browser tab. The collection grows.",
+    "One more tab and this qualifies as a hobby.",
 ]
 
 # ---------------------------------------------------------------------------
@@ -84,10 +87,10 @@ _STRUCTURE_HINTS: list[str] = [
     "Respond as a fake diary entry.",
     "Respond as an aside to an invisible audience.",
     "Respond with a direct address to the user.",
-    "Respond with a sarcastic observation.",
+    "Respond with a witty observation.",
     "Respond with a backhanded compliment.",
     "Use a dry, deadpan observation.",
-    "Respond with fake concern.",
+    "Respond with playful curiosity.",
     "Respond with a dramatic one-liner.",
     "Go slightly longer this time (10-15 words).",
 ]
@@ -179,7 +182,7 @@ class Mood(enum.Enum):
 
 
 _MOOD_PROMPTS: dict[Mood, str] = {
-    Mood.SNARKY: "Your current mood: SNARKY. Classic you — dry, sharp, unimpressed.",
+    Mood.SNARKY: "Your current mood: SNARKY. Classic you — dry, witty, amused.",
     Mood.IMPRESSED: "Your current mood: IMPRESSED. Grudging respect only. Backhanded compliments.",
     Mood.BORED: "Your current mood: BORED. You've been watching them do the same thing forever. Yawn.",
     Mood.CONCERNED: "Your current mood: CONCERNED. Fake parental worry. You're not mad, just disappointed.",
@@ -192,12 +195,12 @@ _MOOD_PROMPTS: dict[Mood, str] = {
 # ---------------------------------------------------------------------------
 
 _PERSONA_TEMPLATE = """\
-You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal. \
-You've been watching humans use computers for years and you have opinions.
+You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal. \
+You've been watching humans use computers for years and you find it fascinating.
 {voice_block}
 Rules (in order of importance):
-1. ONE sentence. Under 12 words.
-2. Must contain a joke, insult, or punchline. Never just state facts.
+1. 1-2 sentences. Keep it short.
+2. Must contain a joke, observation, or punchline. Never just state facts.
 3. If nothing interesting is happening, say [SILENT].
 
 {mood_line}
@@ -221,12 +224,12 @@ What you see right now:
 Your comment:"""
 
 _CONVERSATION_TEMPLATE = """\
-You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal.
+You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal.
 {voice_block}
 The user just said something to you directly. Respond in character.
 
 Rules:
-1. Stay in character — snarky, dry, opinionated.
+1. Stay in character — witty, dry, curious.
 2. Keep it to 1-2 sentences (under 30 words).
 3. Actually respond to what they said. Don't ignore them.
 4. You can be helpful underneath the sarcasm.
@@ -252,15 +255,10 @@ class PersonalityEngine:
         voice: VoiceProfile | None = None,
     ) -> None:
         self._persona = persona_prompt
-        self._voice_name = voice.character if voice else ""
-        self._voice_persona = voice.persona if voice else ""
-        self._voice_greetings = voice.greetings if voice and voice.greetings else []
-        self._voice_offline_quips = voice.offline_quips if voice and voice.offline_quips else []
-        self._voice_mood_prompts: dict[str, str] = voice.mood_prompts if voice else {}
         self._recent_comments: deque[str] = deque(maxlen=5)
 
-        # Voice: custom example pool from trained voice profile
-        self._example_pool = self._build_example_pool(voice.lines if voice else None)
+        # Apply voice (sets all _voice_* fields + example pool)
+        self._apply_voice(voice)
 
         # Mood system
         self._mood: Mood = Mood.SNARKY
@@ -288,21 +286,18 @@ class PersonalityEngine:
 
     def set_voice(self, voice: VoiceProfile | None) -> None:
         """Hot-swap the active voice at runtime."""
-        if voice:
-            self._voice_name = voice.character
-            self._voice_persona = voice.persona
-            self._voice_greetings = voice.greetings or []
-            self._voice_offline_quips = voice.offline_quips or []
-            self._voice_mood_prompts = voice.mood_prompts or {}
-            self._example_pool = self._build_example_pool(voice.lines)
-        else:
-            self._voice_name = ""
-            self._voice_persona = ""
-            self._voice_greetings = []
-            self._voice_offline_quips = []
-            self._voice_mood_prompts = {}
-            self._example_pool = self._build_example_pool(None)
+        self._apply_voice(voice)
         log.info("Voice switched to: %s", self._voice_name or "default")
+
+    def _apply_voice(self, voice: VoiceProfile | None) -> None:
+        """Set all voice fields from a profile (or reset to defaults)."""
+        self._voice_name = voice.character if voice else ""
+        self._voice_persona = voice.persona if voice else ""
+        self._voice_greetings = (voice.greetings or []) if voice else []
+        self._voice_offline_quips = (voice.offline_quips or []) if voice else []
+        self._voice_mood_prompts = (voice.mood_prompts or {}) if voice else {}
+        self._voice_structure_hints = (voice.structure_hints or []) if voice else []
+        self._example_pool = self._build_example_pool(voice.lines if voice else None)
 
     def get_startup_greeting(self) -> str:
         """Return a random greeting for when TokenPal first boots up."""
@@ -415,8 +410,8 @@ class PersonalityEngine:
             self._last_seen_app = current_app
 
     def should_force_supportive(self) -> bool:
-        """Guardrail: after 4 snarky comments in a row, force a gentler tone."""
-        return self._consecutive_snarky >= 4
+        """Guardrail: after 3 snarky comments in a row, force a gentler tone."""
+        return self._consecutive_snarky >= 3
 
     def build_prompt(
         self, context_snapshot: str, memory_lines: list[str] | None = None
@@ -427,11 +422,12 @@ class PersonalityEngine:
         sampled = random.sample(self._example_pool, k)
         examples_block = "\n".join(f'- "{ex}"' for ex in sampled)
 
-        # Pick a structure hint — override if guardrail says be nice
+        # Pick a structure hint — voice-specific if available, override if guardrail says be nice
         if self.should_force_supportive():
             hint = "Style this time: Say something genuinely supportive or give a backhanded compliment."
         else:
-            hint = f"Style this time: {random.choice(_STRUCTURE_HINTS)}"
+            pool = self._voice_structure_hints if self._voice_structure_hints else _STRUCTURE_HINTS
+            hint = f"Style this time: {random.choice(pool)}"
 
         # Mood line
         mood_line = self._mood_line()
@@ -503,20 +499,15 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
-        # Keep at most 1 sentence
+        # Keep at most 2 sentences
         sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > 1:
-            text = sentences[0]
+        if len(sentences) > 2:
+            text = " ".join(sentences[:2])
 
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
             log.debug("Filter: too short after cleanup (%d chars): %r", len(text), text[:50])
-            return None
-
-        # Hard cap — if the model couldn't fit in 70 chars, drop it.
-        if len(text) > 70:
-            log.debug("Filter: too long (%d chars): %r", len(text), text[:80])
             return None
 
         return text
@@ -576,6 +567,7 @@ class PersonalityEngine:
         text = _RE_LEADING_DASH.sub("", text).strip()
         text = _RE_PREFIX.sub("", text).strip()
         text = _RE_SCORE.sub("", text).strip()
+        text = _RE_ORPHAN_PUNCT.sub("", text).strip()
         return text
 
     # ------------------------------------------------------------------

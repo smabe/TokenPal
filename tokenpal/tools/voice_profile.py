@@ -19,6 +19,7 @@ class VoiceProfile:
     greetings: list[str] = field(default_factory=list)
     offline_quips: list[str] = field(default_factory=list)
     mood_prompts: dict[str, str] = field(default_factory=dict)
+    structure_hints: list[str] = field(default_factory=list)
     version: int = 1
 
     @property
@@ -55,6 +56,7 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         greetings=data.get("greetings", []),
         offline_quips=data.get("offline_quips", []),
         mood_prompts=data.get("mood_prompts", {}),
+        structure_hints=data.get("structure_hints", []),
         version=data.get("version", 1),
     )
 
@@ -81,6 +83,7 @@ def make_profile(
     greetings: list[str] | None = None,
     offline_quips: list[str] | None = None,
     mood_prompts: dict[str, str] | None = None,
+    structure_hints: list[str] | None = None,
 ) -> VoiceProfile:
     """Create a new VoiceProfile with the current timestamp."""
     return VoiceProfile(
@@ -92,4 +95,5 @@ def make_profile(
         greetings=greetings or [],
         offline_quips=offline_quips or [],
         mood_prompts=mood_prompts or {},
+        structure_hints=structure_hints or [],
     )

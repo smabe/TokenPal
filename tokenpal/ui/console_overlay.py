@@ -190,6 +190,10 @@ class ConsoleOverlay(AbstractOverlay):
         self._typing_active = False
         self._render()
 
+        # Persistent bubbles stay until replaced (e.g. training progress)
+        if self._current_bubble and self._current_bubble.persistent:
+            return
+
         # Start auto-hide timer now that typing is done
         display_s = max(10.0, len(self._full_text) * 0.15)
         self._hide_job = threading.Timer(display_s, self.hide_speech)

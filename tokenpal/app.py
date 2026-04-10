@@ -159,7 +159,7 @@ def main() -> None:
 
     def _cmd_voice(args: str) -> CommandResult:
         return _handle_voice_command(
-            args, personality, data_dir / "voices", overlay
+            args, personality, data_dir / "voices", overlay, brain
         )
 
     dispatcher.register("help", _cmd_help)
@@ -251,6 +251,7 @@ def _handle_voice_command(
     personality: PersonalityEngine,
     voices_dir: Path,
     overlay: AbstractOverlay,
+    brain: Brain | None = None,
 ) -> CommandResult:
     """Handle /voice subcommands."""
     from tokenpal.tools.voice_profile import list_profiles, load_profile
@@ -289,7 +290,7 @@ def _handle_voice_command(
 
     if subcmd == "train":
         return _start_voice_training(
-            subargs, personality, voices_dir, overlay
+            subargs, personality, voices_dir, overlay, brain
         )
 
     return CommandResult(
@@ -303,6 +304,7 @@ def _start_voice_training(
     personality: PersonalityEngine,
     voices_dir: Path,
     overlay: AbstractOverlay,
+    brain: Brain | None = None,
 ) -> CommandResult:
     """Kick off wiki voice training in a background thread."""
     parts = args.split(maxsplit=1)
@@ -314,28 +316,31 @@ def _start_voice_training(
     wiki = parts[0]
     character = parts[1].strip("\"'")
 
+    def _show(msg: str, persistent: bool = False) -> None:
+        bubble = SpeechBubble(text=msg, persistent=persistent)
+        overlay.schedule_callback(lambda: overlay.show_speech(bubble))
+
+    def _status(msg: str) -> None:
+        overlay.schedule_callback(lambda: overlay.update_status(msg))
+
     def _train() -> None:
         try:
             from tokenpal.tools.train_voice import train_from_wiki
 
-            overlay.schedule_callback(
-                lambda: overlay.update_status(f"Training {character}...")
-            )
+            def _on_progress(step: str) -> None:
+                _show(step, persistent=True)
+                _status(f"Training: {step}")
 
-            profile = train_from_wiki(wiki, character, voices_dir=voices_dir)
+            profile = train_from_wiki(
+                wiki, character, voices_dir=voices_dir,
+                progress_callback=_on_progress,
+            )
             if profile is None:
-                overlay.schedule_callback(
-                    lambda: overlay.show_speech(
-                        SpeechBubble(text=f"Not enough lines for {character}.")
-                    )
-                )
+                _show(f"Not enough lines for {character}.")
                 return
 
             personality.set_voice(profile)
-            msg = f"Trained {character} ({len(profile.lines)} lines). Voice active!"
-            overlay.schedule_callback(
-                lambda: overlay.show_speech(SpeechBubble(text=msg))
-            )
+            _show(f"I'm {character} now! ({len(profile.lines)} lines)")
             log.info(
                 "Voice trained: %s from %s (%d lines)",
                 character, wiki, len(profile.lines),
@@ -343,17 +348,16 @@ def _start_voice_training(
 
         except Exception:
             log.exception("Voice training failed")
-            overlay.schedule_callback(
-                lambda: overlay.show_speech(
-                    SpeechBubble(text="Training failed. Check logs.")
-                )
-            )
+            _show("Training failed. Check logs.")
+        finally:
+            if brain:
+                brain.paused = False
+            _status("")
 
-    overlay.schedule_callback(
-        lambda: overlay.show_speech(
-            SpeechBubble(text=f"Training {character}...")
-        )
-    )
+    _show(f"Learning to be {character}...", persistent=True)
+    _status(f"Training {character}...")
+    if brain:
+        brain.paused = True
 
     train_thread = threading.Thread(target=_train, daemon=True, name="voice-train")
     train_thread.start()

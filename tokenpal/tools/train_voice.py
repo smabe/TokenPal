@@ -16,6 +16,7 @@ import re
 import sys
 import urllib.request
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
@@ -128,6 +129,40 @@ def _generate_offline_quips(character: str, lines: list[str]) -> list[str]:
         "One per line, numbered 1-10. Each under 50 characters. Match their slang and attitude.")
 
 
+def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
+    return _generate_lines_from_prompt(character, lines,
+        "Write 10 short style directions for how this character would comment on "
+        "what someone is doing on their computer. Each should start with 'Respond' "
+        "and describe the tone/format. One per line, numbered 1-10. Each under 60 characters. "
+        "Examples: 'Respond as a casual bro observation.', 'Respond with excited slang.'\n"
+        "Match this character's personality.")
+
+
+def _generate_voice_assets(
+    character: str, lines: list[str],
+) -> tuple[str, list[str], list[str], dict[str, str], list[str]]:
+    """Run all voice generation tasks in parallel.
+
+    Returns (persona, greetings, offline_quips, mood_prompts, structure_hints).
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_p = pool.submit(_generate_persona, character, lines)
+        f_g = pool.submit(_generate_greetings, character, lines)
+        f_q = pool.submit(_generate_offline_quips, character, lines)
+        f_m = pool.submit(_generate_mood_prompts, character, lines)
+        f_s = pool.submit(_generate_structure_hints, character, lines)
+
+    return (
+        f_p.result() or "",
+        f_g.result(),
+        f_q.result(),
+        f_m.result(),
+        f_s.result(),
+    )
+
+
 def _generate_mood_prompts(character: str, lines: list[str]) -> dict[str, str]:
     """Generate character-specific mood descriptions for all 6 moods."""
     samples = random.sample(lines, min(10, len(lines)))
@@ -172,6 +207,7 @@ def train_from_wiki(
     character: str,
     voices_dir: Path | None = None,
     min_lines: int = 10,
+    progress_callback: Callable[[str], None] | None = None,
 ) -> VoiceProfile | None:
     """Fetch transcripts from a Fandom wiki, extract lines, generate persona.
 
@@ -180,30 +216,35 @@ def train_from_wiki(
     from tokenpal.tools.transcript_parser import extract_lines_from_text
     from tokenpal.tools.wiki_fetch import fetch_all_transcripts
 
+    def _progress(msg: str) -> None:
+        if progress_callback:
+            progress_callback(msg)
+
+    _progress(f"Fetching {wiki} transcripts...")
     text = fetch_all_transcripts(wiki, progress=False)
     if not text:
         return None
 
+    _progress(f"Extracting {character}'s lines...")
     lines = extract_lines_from_text(text, character)
     if len(lines) < min_lines:
         return None
 
-    from concurrent.futures import ThreadPoolExecutor
+    _progress(f"Found {len(lines)} lines. Generating voice...")
+    persona, greetings, offline_quips, mood_prompts, structure_hints = (
+        _generate_voice_assets(character, lines)
+    )
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        f_p = pool.submit(_generate_persona, character, lines)
-        f_g = pool.submit(_generate_greetings, character, lines)
-        f_q = pool.submit(_generate_offline_quips, character, lines)
-        f_m = pool.submit(_generate_mood_prompts, character, lines)
-
+    _progress("Saving profile...")
     profile = make_profile(
         character=character,
         source=f"{wiki}.fandom.com",
         lines=lines,
-        persona=f_p.result() or "",
-        greetings=f_g.result(),
-        offline_quips=f_q.result(),
-        mood_prompts=f_m.result(),
+        persona=persona,
+        greetings=greetings,
+        offline_quips=offline_quips,
+        mood_prompts=mood_prompts,
+        structure_hints=structure_hints,
     )
 
     out_dir = voices_dir or _get_voices_dir()
@@ -376,20 +417,12 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     greetings: list[str] = []
     offline_quips: list[str] = []
     mood_prompts: dict[str, str] = {}
+    structure_hints: list[str] = []
     if not args.no_persona:
-        from concurrent.futures import ThreadPoolExecutor
-
-        print("Generating persona, greetings, moods, and quips via Ollama...", flush=True)
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            f_persona = pool.submit(_generate_persona, name, lines)
-            f_greetings = pool.submit(_generate_greetings, name, lines)
-            f_quips = pool.submit(_generate_offline_quips, name, lines)
-            f_moods = pool.submit(_generate_mood_prompts, name, lines)
-
-        persona = f_persona.result() or ""
-        greetings = f_greetings.result()
-        offline_quips = f_quips.result()
-        mood_prompts = f_moods.result()
+        print("Generating voice assets via Ollama...", flush=True)
+        persona, greetings, offline_quips, mood_prompts, structure_hints = (
+            _generate_voice_assets(name, lines)
+        )
 
         if persona:
             print(f"\nPersona: {persona}")
@@ -405,6 +438,10 @@ def _cmd_extract(args: argparse.Namespace) -> None:
             print(f"\nMood prompts ({len(mood_prompts)}):")
             for mood, prompt in mood_prompts.items():
                 print(f"  {mood}: {prompt}")
+        if structure_hints:
+            print(f"\nStyle hints ({len(structure_hints)}):")
+            for h in structure_hints[:5]:
+                print(f'  "{h}"')
         print()
 
     profile = make_profile(
@@ -415,6 +452,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         greetings=greetings,
         offline_quips=offline_quips,
         mood_prompts=mood_prompts,
+        structure_hints=structure_hints,
     )
     out_path = save_profile(profile, _get_voices_dir())
     slug = slugify(name)
