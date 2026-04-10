@@ -331,14 +331,19 @@ async def _run_scp(
     remote_path: str,
     *,
     pull: bool = False,
+    recursive: bool = False,
     timeout: float = 1800,
 ) -> tuple[int, str]:
     """Copy files via SCP. Returns (returncode, stderr)."""
     target = _ssh_target(remote)
+    scp_args = ["scp"]
+    if recursive:
+        scp_args.append("-r")
     if pull:
-        args = ["scp", f"{target}:{remote_path}", local_path]
+        scp_args.extend([f"{target}:{remote_path}", local_path])
     else:
-        args = ["scp", local_path, f"{target}:{remote_path}"]
+        scp_args.extend([local_path, f"{target}:{remote_path}"])
+    args = scp_args
 
     proc = await asyncio.create_subprocess_exec(
         *args,
@@ -504,10 +509,16 @@ async def _ensure_base_model(
 
     progress("Pushing base model to remote (this may take a while)...")
     scp_rdir = remote.remote_dir
-    rc, err = await _run_rsync(
-        remote, str(local_model_dir), f"{scp_rdir}/model",
-        progress=progress, timeout=3600,
-    )
+    if remote.use_wsl:
+        rc, err = await _run_scp(
+            remote, str(local_model_dir), f"{scp_rdir}/model",
+            recursive=True, timeout=3600,
+        )
+    else:
+        rc, err = await _run_rsync(
+            remote, str(local_model_dir), f"{scp_rdir}/model",
+            progress=progress, timeout=3600,
+        )
     if rc != 0:
         raise RemoteTrainError("model_push", f"SCP failed: {err[:200]}")
 
@@ -894,14 +905,17 @@ async def remote_finetune(
     else:
         pull_source = f"{scp_rdir}/output/merged"
 
-    rc, err = await _run_rsync(
-        remote,
-        str(local_model_dir),
-        pull_source,
-        pull=True,
-        progress=progress,
-        timeout=3600,
-    )
+    if remote.use_wsl:
+        # Windows SSH has no rsync — use SCP for WSL hosts
+        rc, err = await _run_scp(
+            remote, str(local_model_dir), pull_source,
+            pull=True, recursive=True, timeout=3600,
+        )
+    else:
+        rc, err = await _run_rsync(
+            remote, str(local_model_dir), pull_source,
+            pull=True, progress=progress, timeout=3600,
+        )
     if rc != 0:
         raise RemoteTrainError("pull", f"Failed to download merged model: {err[:200]}")
 
