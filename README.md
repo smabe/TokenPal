@@ -28,7 +28,7 @@ That's it. A chonky ASCII gremlin appears in your terminal and starts roasting y
   ```
 - **A model** — the setup script offers to pull one, or:
   ```bash
-  ollama pull gemma3:4b
+  ollama pull gemma4
   ```
 
 ### Verify Everything Works
@@ -41,7 +41,7 @@ This tests Ollama connectivity, model availability, senses, and actions in one s
 
 ## What It Does
 
-TokenPal observes your desktop through modular **senses** and generates short, sarcastic commentary via a local LLM. It never takes action on your behalf — it just watches and judges.
+TokenPal observes your desktop through modular **senses** and generates short, sarcastic commentary via a local LLM. You can also talk to it and ask it to do things.
 
 **Senses** (what it can see):
 - **App awareness** — foreground app + window title (macOS)
@@ -54,12 +54,27 @@ TokenPal observes your desktop through modular **senses** and generates short, s
 - **System info** — report detailed system stats on demand
 - **Open app** — launch apps by name (safety-allowlisted)
 
-**Personality**:
+**Text Input** — type messages to the buddy while it's running. It responds conversationally in character, and can use tools when you ask ("open calculator", "set a timer for 5 minutes").
+
+**Slash Commands:**
+- `/help` — list commands
+- `/model [name]` — show or swap the LLM model at runtime
+- `/voice list|switch|off|info|train` — manage voice profiles live
+- `/mood` — show current mood
+- `/status` — show model, senses, actions
+- `/clear` — clear the speech bubble
+
+**Personality:**
 - 6 moods (snarky, impressed, bored, concerned, hyper, sleepy) that shift based on context
 - Easter eggs at specific times (3:33 AM, Friday 5 PM, etc.)
 - Running gags that track your app usage across sessions
-- Voice profiles trained from show transcripts for character-specific commentary
+- Voice profiles trained from show transcripts — including character-specific moods
 - Goes silent around sensitive apps (banking, passwords, health)
+
+**Status Bar** — shows current model, voice, mood, and activity:
+```
+gemma4 | Jake | snarky | spoke 12s ago
+```
 
 ## Configuration
 
@@ -76,12 +91,13 @@ Key settings:
 
 ```toml
 [llm]
-model_name = "gemma3:4b"    # any Ollama model that supports tool calling
+model_name = "gemma4"        # any Ollama model
 temperature = 0.8
+disable_reasoning = true     # skip internal thinking for fast responses
 
 [brain]
 comment_cooldown_s = 20.0   # seconds between comments
-active_voice = ""            # voice profile name (e.g. "bender")
+active_voice = ""            # voice profile name (e.g. "jake")
 
 [senses]
 app_awareness = true
@@ -94,6 +110,9 @@ enabled = true               # LLM tool calling
 timer = true
 system_info = true
 open_app = true
+
+[paths]
+data_dir = "~/.tokenpal"    # logs, memory, voices all live here
 ```
 
 ## Personas & Voices
@@ -111,38 +130,34 @@ persona_prompt = "You are a grumpy pirate who judges people's computer habits. O
 
 ### Train a voice from transcripts
 
-The voice trainer extracts character dialogue from transcripts (local files or Fandom wikis), then uses Ollama to generate a persona description, startup greetings, and offline quips.
+Train from the CLI or from inside the running buddy:
 
 ```bash
-# From a Fandom wiki (fetches all transcript pages automatically)
+# CLI — from a Fandom wiki
 python -m tokenpal.tools.train_voice --wiki regularshow "Mordecai"
-python -m tokenpal.tools.train_voice --wiki adventuretime "BMO"
+python -m tokenpal.tools.train_voice --wiki adventuretime "Jake"
 
-# From a local transcript file
-python -m tokenpal.tools.train_voice transcript.txt "Character Name"
-
-# From a file of raw quotes (one per line, no character names)
-python -m tokenpal.tools.train_voice quotes.txt --lines-only
+# Or live inside TokenPal:
+/voice train adventuretime "Finn"
 ```
 
-This saves a voice profile to `~/.tokenpal/voices/` and auto-activates it in `config.toml`.
+Training extracts character dialogue, then generates a persona, startup greetings, offline quips, and character-specific mood prompts via Ollama. Profiles save to `~/.tokenpal/voices/`.
 
 ### Manage voices
 
-```bash
-# List all saved voice profiles
-python -m tokenpal.tools.train_voice --list
-
-# Switch between saved voices (interactive picker)
-python -m tokenpal.tools.train_voice --activate
-
-# Or set it directly in config.toml
-# [brain]
-# active_voice = "mordecai"    # use a trained voice
-# active_voice = ""            # back to default TokenPal
+From inside TokenPal (no restart needed):
+```
+/voice list              — show saved voices
+/voice switch jake       — hot-swap to a trained voice
+/voice off               — back to default TokenPal
+/voice info              — show current voice
 ```
 
-Restart TokenPal after switching voices.
+Or from the CLI:
+```bash
+python -m tokenpal.tools.train_voice --list
+python -m tokenpal.tools.train_voice --activate
+```
 
 ### Training options
 
@@ -163,21 +178,26 @@ tokenpal --config PATH # use a specific config file
 tokenpal --version    # print version
 ```
 
-Or use `./run.sh` to skip venv activation.
+Or use `./run.sh` to skip venv activation. On shutdown, the Ollama model is automatically unloaded to free RAM.
 
 ## Architecture
 
 ```
-Senses ──▶ Brain ──▶ Overlay
-              │
-         LLM Backend ◀──▶ Actions
+                    ┌─────────┐
+User Input ──────▶  │         │
+                    │  Brain  │ ──▶ Overlay
+Senses ──────────▶  │         │
+                    └────┬────┘
+                         │
+                    LLM Backend ◀──▶ Actions
 ```
 
 - **Senses** poll for context on per-sense intervals
-- **Brain** scores interestingness, gates commentary, manages cooldowns
-- **LLM Backend** generates quips via Ollama's OpenAI-compatible API
-- **Actions** let the LLM call tools (multi-turn execution loop, max 3 rounds)
-- **Overlay** renders the ASCII buddy with typing animation and status bar
+- **Brain** scores interestingness, gates commentary, manages cooldowns and moods
+- **LLM Backend** generates quips via Ollama's OpenAI-compatible API (`reasoning_effort: none` for fast responses)
+- **Actions** let the LLM call tools (multi-turn execution loop, max 3 rounds, parallel via asyncio.gather)
+- **Overlay** renders the ASCII buddy with typing animation, input line, and status bar
+- **User Input** captured in cbreak mode, routed to brain via asyncio.Queue
 
 Everything is pluggable via `@register_sense`, `@register_backend`, `@register_overlay`, and `@register_action` decorators. Adding a new sense or action requires zero changes to core code.
 
@@ -191,7 +211,8 @@ tokenpal/
 ├── llm/             # LLM backends (HTTP/Ollama with tool-calling support)
 ├── senses/          # Pluggable sensors (app, hardware, idle, time)
 ├── tools/           # CLI utilities (voice training, wiki transcripts)
-├── ui/              # Console overlay with ASCII art and speech bubbles
+├── ui/              # Console overlay with ASCII art, input, and speech bubbles
+├── commands.py      # Slash command dispatcher
 ├── cli.py           # Argument parsing and --check command
 └── app.py           # Bootstrap and main loop
 ```
