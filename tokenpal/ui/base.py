@@ -41,6 +41,12 @@ class AbstractOverlay(abc.ABC):
     def update_status(self, text: str) -> None:
         """Update the status bar text. Optional — overlays may ignore."""
 
+    def set_input_callback(self, callback: Callable[[str], None]) -> None:
+        """Register handler for user text input. Optional."""
+
+    def set_command_callback(self, callback: Callable[[str], None]) -> None:
+        """Register handler for slash commands. Optional."""
+
     @abc.abstractmethod
     def run_loop(self) -> None:
         """Start the platform event loop. Blocks on main thread."""

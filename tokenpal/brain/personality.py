@@ -21,6 +21,17 @@ _SILENT_MARKERS = ["[SILENT]", "[silent]", "SILENT"]
 # All flavors of quotation marks
 _QUOTES = '"\'\u201c\u201d\u2018\u2019\u00ab\u00bb'
 
+# Pre-compiled cleanup patterns shared by both filters
+_RE_ASTERISK = re.compile(r"\*[^*]+\*\s*")
+_RE_LEAKED_TAG = re.compile(r"\[[^\]]{2,}\]")
+_RE_DASHES = re.compile(r"---.*?---")
+_RE_LEADING_DASH = re.compile(r"^\s*[-\u2013\u2014:]\s*")
+_RE_PREFIX = re.compile(
+    r"^(Comment|Response|Answer|Output|Note)\s*:\s*", re.IGNORECASE
+)
+_RE_SCORE = re.compile(r"^\d+/10\s*[-:\u2013\u2014]\s*")
+_RE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
 # ---------------------------------------------------------------------------
 # Few-shot example pool (20+). Sampled 5-7 per prompt to break repetition.
 # ---------------------------------------------------------------------------
@@ -208,6 +219,28 @@ What you see right now:
 {recent_comments_block}
 
 Your comment:"""
+
+_CONVERSATION_TEMPLATE = """\
+You are TokenPal, a tired, sarcastic ASCII gremlin who lives in a terminal.
+{voice_block}
+The user just said something to you directly. Respond in character.
+
+Rules:
+1. Stay in character — snarky, dry, opinionated.
+2. Keep it to 1-2 sentences (under 30 words).
+3. Actually respond to what they said. Don't ignore them.
+4. You can be helpful underneath the sarcasm.
+
+{mood_line}
+
+What you currently see on their screen:
+{context}
+
+{recent_comments_block}
+
+User says: "{user_message}"
+
+Your response:"""
 
 
 class PersonalityEngine:
@@ -401,36 +434,24 @@ class PersonalityEngine:
         else:
             mem_block = ""
 
-        # Build recent-comments block
-        if self._recent_comments:
-            lines = "\n".join(f'- "{c}"' for c in self._recent_comments)
-            recent_block = (
-                "Your last few comments (DON'T repeat these or use the same structure):\n"
-                + lines
-            )
-        else:
-            recent_block = ""
-
-        # Voice persona block
-        if self._voice_persona:
-            voice_block = f"\nYour voice: {self._voice_persona}\nChannel this character's tone and attitude.\n"
-        else:
-            voice_block = ""
-
         return _PERSONA_TEMPLATE.format(
-            voice_block=voice_block,
+            voice_block=self._voice_block(),
             mood_line=mood_line,
             structure_hint=hint,
             examples=examples_block,
             context=context_snapshot,
             session_notes=session_notes,
             memory_block=mem_block,
-            recent_comments_block=recent_block,
+            recent_comments_block=self._recent_comments_block(),
         )
+
+    @property
+    def mood(self) -> str:
+        """Current mood as a string."""
+        return self._mood.value
 
     def filter_response(self, text: str) -> str | None:
         """Return the cleaned response, or None if the buddy chose silence."""
-        # Strip all quote characters from edges
         text = text.strip().strip(_QUOTES).strip()
 
         for marker in _SILENT_MARKERS:
@@ -440,30 +461,19 @@ class PersonalityEngine:
         if not text or len(text) < 15:
             return None
 
-        # Strip markdown emphasis / asterisk stage directions (*Sigh*, *sad trombone*)
-        text = re.sub(r"\*[^*]+\*\s*", "", text).strip()
-        # Strip any leaked context tags the LLM echoed back
-        text = re.sub(r"\[[^\]]{2,}\]", "", text).strip()
-        # Clean up assistant artifacts
-        text = re.sub(r"---.*?---", "", text).strip()
-        text = re.sub(r"^\s*[-\u2013\u2014:]\s*", "", text).strip()
-        # Remove leading prefixes like "Comment:" etc.
-        text = re.sub(r"^(Comment|Response|Answer|Output|Note)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
-        # Strip leaked LLM scoring prefixes like "7/10 -" or "8/10:"
-        text = re.sub(r"^\d+/10\s*[-:\u2013\u2014]\s*", "", text).strip()
-        # Keep at most 1 sentence — truncate multi-sentence rambles
-        sentences = re.split(r"(?<=[.!?])\s+", text)
+        text = self._clean_llm_text(text)
+
+        # Keep at most 1 sentence
+        sentences = _RE_SENTENCE_SPLIT.split(text)
         if len(sentences) > 1:
             text = sentences[0]
 
-        # Final cleanup of any remaining edge quotes
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
             return None
 
         # Hard cap — if the model couldn't fit in 70 chars, drop it.
-        # A truncated sentence reads worse than silence.
         if len(text) > 70:
             return None
 
@@ -500,3 +510,69 @@ class PersonalityEngine:
 
         lines = "\n".join(f"- {n}" for n in notes)
         return f"Session notes (things you've been tracking):\n{lines}"
+
+    def _voice_block(self) -> str:
+        if self._voice_persona:
+            return (
+                f"\nYour voice: {self._voice_persona}\n"
+                "Channel this character's tone and attitude.\n"
+            )
+        return ""
+
+    def _recent_comments_block(self) -> str:
+        if not self._recent_comments:
+            return ""
+        lines = "\n".join(f'- "{c}"' for c in self._recent_comments)
+        return "Your last few comments (DON'T repeat these):\n" + lines
+
+    @staticmethod
+    def _clean_llm_text(text: str) -> str:
+        """Shared cleanup for LLM output — strips artifacts, markdown, prefixes."""
+        text = _RE_ASTERISK.sub("", text).strip()
+        text = _RE_LEAKED_TAG.sub("", text).strip()
+        text = _RE_DASHES.sub("", text).strip()
+        text = _RE_LEADING_DASH.sub("", text).strip()
+        text = _RE_PREFIX.sub("", text).strip()
+        text = _RE_SCORE.sub("", text).strip()
+        return text
+
+    # ------------------------------------------------------------------
+    # Conversation (user-initiated)
+    # ------------------------------------------------------------------
+
+    def build_conversation_prompt(
+        self, user_message: str, context_snapshot: str
+    ) -> str:
+        """Build a prompt for responding to direct user input."""
+        return _CONVERSATION_TEMPLATE.format(
+            voice_block=self._voice_block(),
+            mood_line=_MOOD_PROMPTS[self._mood],
+            context=context_snapshot,
+            recent_comments_block=self._recent_comments_block(),
+            user_message=user_message,
+        )
+
+    def filter_conversation_response(self, text: str) -> str | None:
+        """Filter a conversational response — relaxed rules vs observation mode."""
+        text = text.strip().strip(_QUOTES).strip()
+
+        if not text or len(text) < 5:
+            return None
+
+        text = self._clean_llm_text(text)
+
+        # Allow up to 2 sentences (vs 1 for observations)
+        sentences = _RE_SENTENCE_SPLIT.split(text)
+        if len(sentences) > 2:
+            text = " ".join(sentences[:2])
+
+        text = text.strip(_QUOTES).strip()
+
+        if not text or len(text) < 5:
+            return None
+
+        # Relaxed cap — 150 chars (vs 70 for observations)
+        if len(text) > 150:
+            text = text[:147] + "..."
+
+        return text

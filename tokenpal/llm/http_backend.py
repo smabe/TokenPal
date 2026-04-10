@@ -134,6 +134,15 @@ class HttpBackend(AbstractLLMBackend):
             tool_calls=tool_calls,
         )
 
+    @property
+    def model_name(self) -> str:
+        return self._model_name
+
+    def set_model(self, model_name: str) -> None:
+        """Swap the active model. Next generation call uses the new model."""
+        self._model_name = model_name
+        log.info("Model swapped to: %s", model_name)
+
     async def teardown(self) -> None:
         if self._client:
             await self._client.aclose()

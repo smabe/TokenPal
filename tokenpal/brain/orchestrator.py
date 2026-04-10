@@ -45,6 +45,9 @@ class Brain:
         context_max_tokens: int = 2048,
         sense_intervals: dict[str, float] | None = None,
     ) -> None:
+        # User input queue (thread-safe, fed from main thread)
+        self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._senses = senses
         self._llm = llm
         self._ui_callback = ui_callback
@@ -78,6 +81,7 @@ class Brain:
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
+        self._loop = asyncio.get_running_loop()
 
         for sense in self._senses:
             try:
@@ -114,6 +118,14 @@ class Brain:
                 self._personality.update_gags(snapshot)
                 self._record_memory_events(snapshot, readings)
                 self._push_status()
+
+                # Process any pending user input
+                while not self._user_input_queue.empty():
+                    try:
+                        user_msg = self._user_input_queue.get_nowait()
+                        await self._handle_user_input(user_msg)
+                    except asyncio.QueueEmpty:
+                        break
 
                 if self._should_comment():
                     await self._generate_comment(snapshot)
@@ -336,6 +348,35 @@ class Brain:
         except Exception as e:
             log.warning("Action '%s' failed: %s", tc.name, e)
             return f"Error: {e}"
+
+    def submit_user_input(self, text: str) -> None:
+        """Thread-safe: enqueue user text from the main thread."""
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(
+                self._user_input_queue.put_nowait, text
+            )
+
+    async def _handle_user_input(self, user_message: str) -> None:
+        """Respond to direct user input with a conversational prompt."""
+        snapshot = self._context.snapshot()
+        prompt = self._personality.build_conversation_prompt(
+            user_message, snapshot
+        )
+
+        try:
+            response = await self._llm.generate(prompt, max_tokens=100)
+            filtered = self._personality.filter_conversation_response(
+                response.text
+            )
+            if filtered:
+                log.info("TokenPal (reply): %s", filtered)
+                self._personality.record_comment(filtered)
+                self._ui_callback(filtered)
+                self._last_comment_time = time.monotonic()
+        except Exception:
+            log.exception("Failed to generate conversation response")
+            quip = self._personality.get_confused_quip()
+            self._ui_callback(quip)
 
     def _record_memory_events(
         self, snapshot: str, readings: list[SenseReading]

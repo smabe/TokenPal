@@ -42,6 +42,17 @@ class AbstractLLMBackend(abc.ABC):
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
 
+    @property
+    def model_name(self) -> str:
+        """Current model name."""
+        return self._config.get("model_name", "unknown")
+
+    def set_model(self, model_name: str) -> None:
+        """Swap the active model. Override in backends that support it."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support model swapping"
+        )
+
     @abc.abstractmethod
     async def setup(self) -> None:
         """Load model / connect to server."""

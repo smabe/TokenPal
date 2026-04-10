@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
-import os
+import select
 import shutil
 import sys
 import threading
 import time
-from typing import Any, Callable
+import tty
+from collections.abc import Callable
+from typing import Any
 
-from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble, render_buddy_with_bubble
+from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.registry import register_overlay
 
@@ -27,6 +30,13 @@ _SHOW_CURSOR = "\033[?25h"
 
 # Typing animation speed (seconds per character)
 _TYPING_SPEED = 0.03
+
+# Try to import termios (Unix only)
+try:
+    import termios
+    _HAS_TERMIOS = True
+except ImportError:
+    _HAS_TERMIOS = False
 
 
 @register_overlay
@@ -51,11 +61,39 @@ class ConsoleOverlay(AbstractOverlay):
         self._typing_active: bool = False
         self._last_type_time: float = 0.0
 
+        # Input state
+        self._input_buffer: str = ""
+        self._input_callback: Callable[[str], None] | None = None
+        self._command_callback: Callable[[str], None] | None = None
+        self._orig_termios: list[Any] | None = None
+        self._render_dirty: bool = False
+
     def setup(self) -> None:
+        # Enter cbreak mode for character-by-character input
+        if _HAS_TERMIOS and sys.stdin.isatty():
+            self._orig_termios = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            atexit.register(self._restore_terminal)
+
         sys.stdout.write(_HIDE_CURSOR)
         sys.stdout.flush()
         self._render()
         log.info("ConsoleOverlay ready")
+
+    def _restore_terminal(self) -> None:
+        """Restore terminal to original state. Safe to call multiple times."""
+        if self._orig_termios is not None:
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._orig_termios)
+            except (termios.error, ValueError):
+                pass
+            self._orig_termios = None
+
+    def set_input_callback(self, callback: Callable[[str], None]) -> None:
+        self._input_callback = callback
+
+    def set_command_callback(self, callback: Callable[[str], None]) -> None:
+        self._command_callback = callback
 
     def _render(self) -> None:
         """Redraw the entire console display, bottom-anchored."""
@@ -68,7 +106,11 @@ class ConsoleOverlay(AbstractOverlay):
         header = f" {self._buddy_name} "
         hpad = (term_width - len(header)) // 2
         content.append("")
-        content.append(f"{_DIM}{'─' * hpad}{_RESET}{_GREEN}{header}{_RESET}{_DIM}{'─' * hpad}{_RESET}")
+        content.append(
+            f"{_DIM}{'─' * hpad}{_RESET}"
+            f"{_GREEN}{header}{_RESET}"
+            f"{_DIM}{'─' * hpad}{_RESET}"
+        )
         content.append("")
 
         # Speech bubble or status (above buddy)
@@ -103,6 +145,12 @@ class ConsoleOverlay(AbstractOverlay):
 
         # Bottom border
         content.append(f"{_DIM}{'─' * term_width}{_RESET}")
+
+        # Input line
+        prompt = "> "
+        max_input = term_width - len(prompt) - 2  # room for cursor + margin
+        visible_buf = self._input_buffer[-max_input:] if max_input > 0 else ""
+        content.append(f"  {_WHITE}{prompt}{visible_buf}_{_RESET}")
 
         # Status bar (bottom-most)
         content.append(f"{_DIM}  {self._status_text}{_RESET}")
@@ -160,11 +208,63 @@ class ConsoleOverlay(AbstractOverlay):
         self._typing_active = False
         self._render()
 
+    def _poll_input(self) -> None:
+        """Non-blocking stdin read. Processes one character per call."""
+        if not _HAS_TERMIOS or not sys.stdin.isatty():
+            return
+
+        ready, _, _ = select.select([sys.stdin], [], [], 0)
+        if not ready:
+            return
+
+        ch = sys.stdin.read(1)
+
+        if ch == "\r" or ch == "\n":
+            self._on_submit()
+        elif ch in ("\x7f", "\x08"):  # Backspace
+            if self._input_buffer:
+                self._input_buffer = self._input_buffer[:-1]
+                self._render_dirty = True
+        elif ch == "\x1b":
+            # Escape sequence — drain all trailing bytes (variable length)
+            while True:
+                trail, _, _ = select.select([sys.stdin], [], [], 0.01)
+                if not trail:
+                    break
+                sys.stdin.read(1)
+        elif ch.isprintable():
+            self._input_buffer += ch
+            self._render_dirty = True
+
+    def _on_submit(self) -> None:
+        """Handle Enter key — dispatch command or send to brain."""
+        text = self._input_buffer.strip()
+        self._input_buffer = ""
+        self._render()
+
+        if not text:
+            return
+
+        if text.startswith("/"):
+            if self._command_callback:
+                self._command_callback(text)
+        else:
+            if self._input_callback:
+                self._input_callback(text)
+
     def run_loop(self) -> None:
         """Block the main thread, processing scheduled callbacks."""
         self._running = True
         try:
             while self._running:
+                # Poll for keyboard input
+                self._poll_input()
+
+                # Coalesce input redraws into the main loop tick
+                if self._render_dirty:
+                    self._render_dirty = False
+                    self._render()
+
                 # Advance typing animation
                 if self._typing_active:
                     now = time.monotonic()
@@ -180,7 +280,9 @@ class ConsoleOverlay(AbstractOverlay):
                 with self._lock:
                     now = time.monotonic()
                     ready = [(cb, t) for cb, t in self._callbacks if t <= now]
-                    self._callbacks = [(cb, t) for cb, t in self._callbacks if t > now]
+                    self._callbacks = [
+                        (cb, t) for cb, t in self._callbacks if t > now
+                    ]
 
                 for cb, _ in ready:
                     try:
@@ -193,7 +295,9 @@ class ConsoleOverlay(AbstractOverlay):
         except KeyboardInterrupt:
             self._running = False
 
-    def schedule_callback(self, callback: Callable[[], None], delay_ms: int = 0) -> None:
+    def schedule_callback(
+        self, callback: Callable[[], None], delay_ms: int = 0
+    ) -> None:
         with self._lock:
             run_at = time.monotonic() + (delay_ms / 1000.0)
             self._callbacks.append((callback, run_at))
@@ -202,5 +306,6 @@ class ConsoleOverlay(AbstractOverlay):
         self._running = False
         if self._hide_job:
             self._hide_job.cancel()
+        self._restore_terminal()
         sys.stdout.write(_SHOW_CURSOR + "\n")
         sys.stdout.flush()

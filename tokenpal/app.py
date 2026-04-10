@@ -16,6 +16,7 @@ from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check
+from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
 from tokenpal.llm.registry import discover_backends, resolve_backend
@@ -124,6 +125,55 @@ def main() -> None:
         context_max_tokens=config.brain.context_max_tokens,
         sense_intervals=config.brain.sense_intervals,
     )
+
+    # Slash command dispatcher
+    dispatcher = CommandDispatcher()
+
+    def _cmd_help(_args: str) -> CommandResult:
+        return CommandResult(dispatcher.help_text())
+
+    def _cmd_clear(_args: str) -> CommandResult:
+        overlay.schedule_callback(overlay.hide_speech)
+        return CommandResult("")
+
+    def _cmd_mood(_args: str) -> CommandResult:
+        return CommandResult(f"Mood: {personality.mood}")
+
+    def _cmd_status(_args: str) -> CommandResult:
+        sense_names = ", ".join(s.sense_name for s in senses)
+        action_names = ", ".join(a.action_name for a in actions)
+        return CommandResult(
+            f"Model: {llm.model_name} | "
+            f"Senses: {sense_names} | "
+            f"Actions: {action_names or 'none'}"
+        )
+
+    def _cmd_model(args: str) -> CommandResult:
+        name = args.strip()
+        if not name:
+            return CommandResult(f"Current model: {llm.model_name}")
+        llm.set_model(name)
+        return CommandResult(f"Switched to {name}")
+
+    dispatcher.register("help", _cmd_help)
+    dispatcher.register("clear", _cmd_clear)
+    dispatcher.register("mood", _cmd_mood)
+    dispatcher.register("status", _cmd_status)
+    dispatcher.register("model", _cmd_model)
+
+    # Wire input callbacks
+    def _on_command(raw_input: str) -> None:
+        result = dispatcher.dispatch(raw_input)
+        if result.message:
+            overlay.schedule_callback(
+                lambda: overlay.show_speech(SpeechBubble(text=result.message))
+            )
+
+    def _on_user_input(text: str) -> None:
+        brain.submit_user_input(text)
+
+    overlay.set_command_callback(_on_command)
+    overlay.set_input_callback(_on_user_input)
 
     # Brain runs in a background thread with its own asyncio loop
     brain_thread = threading.Thread(
