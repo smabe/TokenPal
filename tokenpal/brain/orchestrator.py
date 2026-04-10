@@ -91,6 +91,8 @@ class Brain:
                 log.exception("Failed to set up sense '%s'", sense.sense_name)
                 sense.disable()
 
+        if self._status_callback:
+            self._status_callback(f"Loading {self._llm.model_name}...")
         await self._llm.setup()
         log.info("Brain started — polling every %.1fs", self._poll_interval)
 
@@ -245,11 +247,15 @@ class Brain:
         prompt = self._personality.build_prompt(snapshot, memory_lines=memory_lines)
 
         try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            log.debug("Generating observation comment...")
             # Use tool-calling path if actions are available
             if self._actions and self._tool_specs:
                 response = await self._generate_with_tools(prompt)
             else:
                 response = await self._llm.generate(prompt)
+            self._push_status()
 
             if not response.text:
                 log.debug("LLM returned empty content (model may need higher max_tokens)")
@@ -378,7 +384,11 @@ class Brain:
         )
 
         try:
+            if self._status_callback:
+                self._status_callback("replying...")
+            log.debug("Generating conversation reply to: %s", user_message)
             response = await self._llm.generate(prompt, max_tokens=150)
+            self._push_status()
             log.debug("Raw conversation response: %r", response.text[:200])
             filtered = self._personality.filter_conversation_response(
                 response.text
