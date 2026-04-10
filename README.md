@@ -59,7 +59,7 @@ TokenPal observes your desktop through modular **senses** and generates short, w
 **Slash Commands:**
 - `/help` — list commands
 - `/model [name|list|pull|browse]` — show, swap, download, or browse models
-- `/voice list|switch|off|info|train` — manage voice profiles live
+- `/voice list|switch|off|info|train|finetune` — manage voice profiles live
 - `/mood` — show current mood
 - `/status` — show model, senses, actions
 - `/clear` — clear the speech bubble
@@ -177,16 +177,19 @@ For deeper character embodiment, fine-tune a model on the voice's dialogue lines
 
 1. Configure your GPU box in `config.toml`:
    ```toml
+   [finetune]
+   base_model = "google/gemma-2-2b-it"  # recommended (needs HF token)
+
    [finetune.remote]
    host = "gpu-box.local"
    user = "you"
-   use_wsl = true  # if Windows + WSL
+   port = 2222       # direct WSL SSH (recommended)
    ```
 
 2. One-time setup: `/voice finetune-setup`
-3. Fine-tune: `/voice finetune mordecai`
+3. Fine-tune: `/voice finetune bmo`
 
-Training runs on the remote GPU via SSH (survives disconnects). The merged model is automatically downloaded and registered with Ollama. See [docs/remote-training-guide.md](docs/remote-training-guide.md) for the full guide.
+Training runs on the remote GPU via SSH (survives disconnects). The merged model is automatically downloaded and registered with Ollama. See [docs/remote-training-guide.md](docs/remote-training-guide.md) for setup details and model options.
 
 ## CLI
 
@@ -252,7 +255,7 @@ tokenpal/
 pip install -e ".[macos,dev]"   # macOS
 pip install -e ".[windows,dev]" # Windows
 
-# Run tests
+# Run tests (135 tests)
 pytest
 
 # Lint
@@ -267,3 +270,4 @@ Platform-specific setup guides:
 - [Windows + Intel NPU](docs/dev-setup-windows-intel.md)
 - [Windows + AMD + NVIDIA](docs/dev-setup-windows-amd.md)
 - [Windows + AMD desktop](docs/dev-setup-windows-amd-desktop.md)
+- [Remote GPU training](docs/remote-training-guide.md)
