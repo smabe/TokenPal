@@ -33,6 +33,15 @@ mlx = [
     "mlx>=0.16",
     "mlx-lm>=0.16",
 ]
+training = [
+    "unsloth>=2024.12",
+    "trl>=0.12",
+    "transformers>=4.46",
+    "datasets>=3.0",
+    "bitsandbytes>=0.44",
+    "accelerate>=1.0",
+    "peft>=0.13",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -42,6 +51,7 @@ dev = [
 
 [project.scripts]
 tokenpal = "tokenpal.app:main"
+tokenpal-finetune = "tokenpal.tools.finetune_voice:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

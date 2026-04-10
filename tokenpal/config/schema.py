@@ -85,6 +85,28 @@ class PluginsConfig:
 
 
 @dataclass
+class RemoteTrainConfig:
+    host: str = ""
+    user: str = ""
+    remote_dir: str = "~/tokenpal-training"
+    python: str = "python3"
+    use_wsl: bool = False
+
+
+@dataclass
+class FinetuneConfig:
+    base_model: str = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    lora_rank: int = 16
+    lora_alpha: int = 32
+    epochs: int = 3
+    batch_size: int = 4
+    learning_rate: float = 2e-4
+    quantization: str = "q4_k_m"
+    output_dir: str = "~/.tokenpal/finetune"
+    remote: RemoteTrainConfig = field(default_factory=RemoteTrainConfig)
+
+
+@dataclass
 class TokenPalConfig:
     senses: SensesConfig = field(default_factory=SensesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -94,3 +116,4 @@ class TokenPalConfig:
     actions: ActionsConfig = field(default_factory=ActionsConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
+    finetune: FinetuneConfig = field(default_factory=FinetuneConfig)

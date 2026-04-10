@@ -55,3 +55,9 @@ data_dir = "~/.tokenpal"
 
 [plugins]
 extra_packages = []
+
+[finetune]
+# Remote GPU training — set host/user in config.toml (machine-specific)
+# [finetune.remote]
+# host = ""
+# user = ""

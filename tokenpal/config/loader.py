@@ -11,10 +11,12 @@ from typing import Any
 from tokenpal.config.schema import (
     ActionsConfig,
     BrainConfig,
+    FinetuneConfig,
     LLMConfig,
     MemoryConfig,
     PathsConfig,
     PluginsConfig,
+    RemoteTrainConfig,
     SensesConfig,
     TokenPalConfig,
     UIConfig,
@@ -37,6 +39,7 @@ _SECTION_MAP: dict[str, type] = {
     "actions": ActionsConfig,
     "paths": PathsConfig,
     "plugins": PluginsConfig,
+    "finetune": FinetuneConfig,
 }
 
 
@@ -51,10 +54,28 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return merged
 
 
+# Nested dataclass fields that need recursive conversion.
+# Maps (parent_cls, field_name) → child_cls.
+_NESTED_FIELDS: dict[tuple[type, str], type] = {
+    (FinetuneConfig, "remote"): RemoteTrainConfig,
+}
+
+
 def _dict_to_dataclass(cls: type, data: dict[str, Any]) -> Any:
-    """Convert a dict to a dataclass, ignoring unknown keys."""
+    """Convert a dict to a dataclass, ignoring unknown keys.
+
+    Recursively converts nested dicts using ``_NESTED_FIELDS``.
+    """
     valid_fields = {f.name for f in fields(cls)}
-    filtered = {k: v for k, v in data.items() if k in valid_fields}
+    filtered: dict[str, Any] = {}
+    for k, v in data.items():
+        if k not in valid_fields:
+            continue
+        child_cls = _NESTED_FIELDS.get((cls, k))
+        if isinstance(v, dict) and child_cls is not None:
+            filtered[k] = _dict_to_dataclass(child_cls, v)
+        else:
+            filtered[k] = v
     return cls(**filtered)
 
 

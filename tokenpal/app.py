@@ -156,7 +156,8 @@ def main() -> None:
 
     def _cmd_voice(args: str) -> CommandResult:
         return _handle_voice_command(
-            args, personality, data_dir / "voices", overlay, brain
+            args, personality, data_dir / "voices", overlay, brain,
+            llm, config,
         )
 
     dispatcher.register("help", _cmd_help)
@@ -355,6 +356,8 @@ def _handle_voice_command(
     voices_dir: Path,
     overlay: AbstractOverlay,
     brain: Brain | None = None,
+    llm: AbstractLLMBackend | None = None,
+    config: TokenPalConfig | None = None,
 ) -> CommandResult:
     """Handle /voice subcommands."""
     from tokenpal.tools.voice_profile import list_profiles, load_profile
@@ -374,10 +377,13 @@ def _handle_voice_command(
         name = personality.voice_name
         if not name:
             return CommandResult("Using default TokenPal voice.")
-        return CommandResult(f"Voice: {name}")
+        ft = " (fine-tuned)" if personality.is_finetuned else ""
+        return CommandResult(f"Voice: {name}{ft}")
 
     if subcmd == "off":
         personality.set_voice(None)
+        if llm and config:
+            llm.set_model(config.llm.model_name)
         return CommandResult("Back to default TokenPal.")
 
     if subcmd == "switch":
@@ -387,6 +393,10 @@ def _handle_voice_command(
             from tokenpal.tools.voice_profile import slugify
             profile = load_profile(slugify(subargs), voices_dir)
             personality.set_voice(profile)
+            if profile.finetuned_model and llm:
+                llm.set_model(profile.finetuned_model)
+            elif llm and config:
+                llm.set_model(config.llm.model_name)
             return CommandResult(f"Switched to {profile.character}.")
         except FileNotFoundError:
             return CommandResult(f"Voice '{subargs}' not found.")
@@ -396,10 +406,36 @@ def _handle_voice_command(
             subargs, personality, voices_dir, overlay, brain
         )
 
+    if subcmd == "finetune":
+        return _start_voice_finetune(
+            subargs, personality, voices_dir, overlay, brain,
+            llm, config,
+        )
+
+    if subcmd == "finetune-setup":
+        return _start_finetune_setup(overlay, config)
+
+    if subcmd == "import":
+        return _import_gguf(
+            subargs, personality, voices_dir, overlay, llm,
+        )
+
     return CommandResult(
         "Usage: /voice list | switch <name> | off | info"
-        " | train <wiki> <character>"
+        " | train <wiki> <character> | finetune <name>"
+        " | finetune-setup | import <gguf_path>"
     )
+
+
+def _overlay_show(overlay: AbstractOverlay, msg: str, persistent: bool = False) -> None:
+    """Show a speech bubble via the overlay (thread-safe)."""
+    bubble = SpeechBubble(text=msg, persistent=persistent)
+    overlay.schedule_callback(lambda: overlay.show_speech(bubble))
+
+
+def _overlay_status(overlay: AbstractOverlay, msg: str) -> None:
+    """Update the status bar via the overlay (thread-safe)."""
+    overlay.schedule_callback(lambda: overlay.update_status(msg))
 
 
 def _start_voice_training(
@@ -419,31 +455,24 @@ def _start_voice_training(
     wiki = parts[0]
     character = parts[1].strip("\"'")
 
-    def _show(msg: str, persistent: bool = False) -> None:
-        bubble = SpeechBubble(text=msg, persistent=persistent)
-        overlay.schedule_callback(lambda: overlay.show_speech(bubble))
-
-    def _status(msg: str) -> None:
-        overlay.schedule_callback(lambda: overlay.update_status(msg))
-
     def _train() -> None:
         try:
             from tokenpal.tools.train_voice import train_from_wiki
 
             def _on_progress(step: str) -> None:
-                _show(step, persistent=True)
-                _status(f"Training: {step}")
+                _overlay_show(overlay, step, persistent=True)
+                _overlay_status(overlay, f"Training: {step}")
 
             profile = train_from_wiki(
                 wiki, character, voices_dir=voices_dir,
                 progress_callback=_on_progress,
             )
             if profile is None:
-                _show(f"Not enough lines for {character}.")
+                _overlay_show(overlay, f"Not enough lines for {character}.")
                 return
 
             personality.set_voice(profile)
-            _show(f"I'm {character} now! ({len(profile.lines)} lines)")
+            _overlay_show(overlay, f"I'm {character} now! ({len(profile.lines)} lines)")
             log.info(
                 "Voice trained: %s from %s (%d lines)",
                 character, wiki, len(profile.lines),
@@ -451,17 +480,186 @@ def _start_voice_training(
 
         except Exception:
             log.exception("Voice training failed")
-            _show("Training failed. Check logs.")
+            _overlay_show(overlay, "Training failed. Check logs.")
         finally:
             if brain:
                 brain.paused = False
-            _status("")
+            _overlay_status(overlay, "")
 
-    _show(f"Learning to be {character}...", persistent=True)
-    _status(f"Training {character}...")
+    _overlay_show(overlay, f"Learning to be {character}...", persistent=True)
+    _overlay_status(overlay, f"Training {character}...")
     if brain:
         brain.paused = True
 
     train_thread = threading.Thread(target=_train, daemon=True, name="voice-train")
     train_thread.start()
     return CommandResult("")
+
+
+def _start_voice_finetune(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+    brain: Brain | None = None,
+    llm: AbstractLLMBackend | None = None,
+    config: TokenPalConfig | None = None,
+) -> CommandResult:
+    """Kick off remote LoRA fine-tuning in a background thread."""
+    from tokenpal.tools.voice_profile import load_profile, save_profile, slugify
+
+    if not args:
+        return CommandResult("Usage: /voice finetune <voice_name>")
+
+    slug = slugify(args)
+    try:
+        profile = load_profile(slug, voices_dir)
+    except FileNotFoundError:
+        return CommandResult(f"Voice '{args}' not found. Train it first with /voice train.")
+
+    if not config or not config.finetune.remote.host:
+        return CommandResult(
+            "No remote GPU configured. Set [finetune.remote] host in config.toml"
+        )
+
+    def _finetune() -> None:
+        try:
+            from tokenpal.tools.remote_train import remote_finetune
+
+            def _on_progress(step: str) -> None:
+                _overlay_show(overlay, step, persistent=True)
+                _overlay_status(overlay, f"Fine-tuning: {step}")
+
+            loop = asyncio.new_event_loop()
+            loop.run_until_complete(
+                remote_finetune(profile, config.finetune, _on_progress)
+            )
+            loop.close()
+
+            from datetime import datetime
+            model_name = f"tokenpal-{slug}"
+            profile.finetuned_model = model_name
+            profile.finetuned_base = config.finetune.base_model
+            profile.finetuned_date = datetime.now().isoformat(timespec="seconds")
+            save_profile(profile, voices_dir)
+
+            personality.set_voice(profile)
+            if llm:
+                llm.set_model(model_name)
+
+            _overlay_show(overlay, f"{profile.character} fine-tuned! Model: {model_name}")
+            log.info("Fine-tuning complete: %s → %s", slug, model_name)
+
+        except Exception:
+            log.exception("Fine-tuning failed")
+            _overlay_show(overlay, "Fine-tuning failed. Check logs.")
+        finally:
+            if brain:
+                brain.paused = False
+            _overlay_status(overlay, "")
+
+    _overlay_show(overlay, f"Fine-tuning {profile.character}...", persistent=True)
+    _overlay_status(overlay, f"Fine-tuning {profile.character}...")
+    if brain:
+        brain.paused = True
+
+    ft_thread = threading.Thread(target=_finetune, daemon=True, name="voice-finetune")
+    ft_thread.start()
+    return CommandResult("")
+
+
+def _start_finetune_setup(
+    overlay: AbstractOverlay,
+    config: TokenPalConfig | None = None,
+) -> CommandResult:
+    """Run one-time remote training environment setup."""
+    if not config or not config.finetune.remote.host:
+        return CommandResult(
+            "No remote GPU configured. Set [finetune.remote] host in config.toml"
+        )
+
+    def _setup() -> None:
+        try:
+            from tokenpal.tools.remote_train import remote_setup
+
+            def _on_progress(step: str) -> None:
+                _overlay_show(overlay, step, persistent=True)
+                _overlay_status(overlay, f"Setup: {step}")
+
+            loop = asyncio.new_event_loop()
+            ok = loop.run_until_complete(
+                remote_setup(config.finetune.remote, _on_progress)
+            )
+            loop.close()
+
+            if ok:
+                _overlay_show(overlay, "Remote training environment ready!")
+            else:
+                _overlay_show(overlay, "Setup failed. Check tokenpal.log for details.")
+        except Exception:
+            log.exception("Finetune setup failed")
+            _overlay_show(overlay, "Setup failed. Check logs.")
+        finally:
+            _overlay_status(overlay, "")
+
+    _overlay_show(overlay, "Setting up remote training environment...", persistent=True)
+    _overlay_status(overlay, "Setting up remote training...")
+
+    setup_thread = threading.Thread(target=_setup, daemon=True, name="finetune-setup")
+    setup_thread.start()
+    return CommandResult("")
+
+
+def _import_gguf(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+    llm: AbstractLLMBackend | None = None,
+) -> CommandResult:
+    """Import a GGUF file trained on another machine."""
+    from tokenpal.tools.voice_profile import load_profile, save_profile
+
+    if not args:
+        return CommandResult("Usage: /voice import <gguf_path>")
+
+    gguf_path = Path(args).expanduser().resolve()
+    if not gguf_path.exists():
+        return CommandResult(f"File not found: {gguf_path}")
+    if not gguf_path.suffix == ".gguf":
+        return CommandResult("Expected a .gguf file.")
+
+    # Derive voice name from GGUF filename (e.g., mordecai.gguf → mordecai)
+    slug = gguf_path.stem
+    model_name = f"tokenpal-{slug}"
+
+    # Try to find matching voice profile
+    try:
+        profile = load_profile(slug, voices_dir)
+    except FileNotFoundError:
+        return CommandResult(
+            f"No voice profile for '{slug}'. "
+            f"Train the voice first with /voice train."
+        )
+
+    # Register with Ollama
+    from tokenpal.tools.dataset_prep import build_system_prompt
+    from tokenpal.tools.finetune_voice import register_ollama
+
+    system_prompt = build_system_prompt(profile)
+    if not register_ollama(gguf_path, model_name, system_prompt):
+        return CommandResult("Failed to register with Ollama. Is it running?")
+
+    # Update profile
+    from datetime import datetime
+    profile.finetuned_model = model_name
+    profile.finetuned_base = "imported"
+    profile.finetuned_date = datetime.now().isoformat(timespec="seconds")
+    save_profile(profile, voices_dir)
+
+    # Activate
+    personality.set_voice(profile)
+    if llm:
+        llm.set_model(model_name)
+
+    return CommandResult(f"Imported and activated: {model_name}")

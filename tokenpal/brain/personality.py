@@ -264,6 +264,60 @@ User says: "{user_message}"
 
 Your response:"""
 
+# ---------------------------------------------------------------------------
+# Simplified templates for fine-tuned models.
+# The model already carries the character voice, so we skip few-shot
+# examples and structure hints — just context + rules.
+# ---------------------------------------------------------------------------
+
+_FINETUNED_OBSERVE_TEMPLATE = """\
+Rules:
+1. 1-2 sentences. Keep it short.
+2. If nothing interesting is happening, say [SILENT].
+
+{mood_line}
+
+{session_notes}
+
+{memory_block}
+
+What you see right now:
+{context}
+
+{recent_comments_block}
+
+Your comment:"""
+
+_FINETUNED_FREEFORM_TEMPLATE = """\
+Rules:
+1. 1-2 sentences. Keep it short.
+2. Say something in character — a random thought, musing, or observation.
+3. Do NOT reference what the user is doing on their computer.
+
+{mood_line}
+
+{recent_comments_block}
+
+Your thought:"""
+
+_FINETUNED_CONVERSATION_TEMPLATE = """\
+The user just said something to you. Respond in character.
+
+Rules:
+1. 1-2 sentences (under 30 words).
+2. Actually respond to what they said.
+
+{mood_line}
+
+What you currently see on their screen:
+{context}
+
+{recent_comments_block}
+
+User says: "{user_message}"
+
+Your response:"""
+
 
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
@@ -308,6 +362,16 @@ class PersonalityEngine:
         """True when the example pool is large enough for freeform comments."""
         return len(self._example_pool) >= 50
 
+    @property
+    def is_finetuned(self) -> bool:
+        """True when the active voice has a fine-tuned model."""
+        return bool(self._finetuned_model)
+
+    @property
+    def finetuned_model(self) -> str:
+        """Ollama model name for the fine-tuned voice, or empty string."""
+        return self._finetuned_model
+
     def set_voice(self, voice: VoiceProfile | None) -> None:
         """Hot-swap the active voice at runtime."""
         self._apply_voice(voice)
@@ -321,6 +385,7 @@ class PersonalityEngine:
         self._voice_offline_quips = (voice.offline_quips or []) if voice else []
         self._voice_mood_prompts = (voice.mood_prompts or {}) if voice else {}
         self._voice_structure_hints = (voice.structure_hints or []) if voice else []
+        self._finetuned_model = voice.finetuned_model if voice else ""
         self._example_pool = self._build_example_pool(voice.lines if voice else None)
 
     def get_startup_greeting(self) -> str:
@@ -441,9 +506,6 @@ class PersonalityEngine:
         self, context_snapshot: str, memory_lines: list[str] | None = None
     ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
-        examples_block = self._sample_examples()
-        hint = self._pick_hint()
-
         # Mood line
         mood_line = self._mood_line()
 
@@ -463,11 +525,21 @@ class PersonalityEngine:
         else:
             mem_block = ""
 
+        # Fine-tuned models carry the voice — use a simpler prompt
+        if self.is_finetuned:
+            return _FINETUNED_OBSERVE_TEMPLATE.format(
+                mood_line=mood_line,
+                session_notes=session_notes,
+                memory_block=mem_block,
+                context=context_snapshot,
+                recent_comments_block=self._recent_comments_block(),
+            )
+
         return _PERSONA_TEMPLATE.format(
             voice_block=self._voice_block(),
             mood_line=mood_line,
-            structure_hint=hint,
-            examples=examples_block,
+            structure_hint=self._pick_hint(),
+            examples=self._sample_examples(),
             context=context_snapshot,
             session_notes=session_notes,
             memory_block=mem_block,
@@ -476,6 +548,12 @@ class PersonalityEngine:
 
     def build_freeform_prompt(self) -> str:
         """Build a prompt for an unprompted in-character thought (no screen context)."""
+        if self.is_finetuned:
+            return _FINETUNED_FREEFORM_TEMPLATE.format(
+                mood_line=self._mood_line(),
+                recent_comments_block=self._recent_comments_block(),
+            )
+
         return _FREEFORM_TEMPLATE.format(
             voice_block=self._voice_block(),
             mood_line=self._mood_line(),
@@ -616,6 +694,14 @@ class PersonalityEngine:
         self, user_message: str, context_snapshot: str
     ) -> str:
         """Build a prompt for responding to direct user input."""
+        if self.is_finetuned:
+            return _FINETUNED_CONVERSATION_TEMPLATE.format(
+                mood_line=self._mood_line(),
+                context=context_snapshot,
+                recent_comments_block=self._recent_comments_block(),
+                user_message=user_message,
+            )
+
         return _CONVERSATION_TEMPLATE.format(
             voice_block=self._voice_block(),
             mood_line=self._mood_line(),

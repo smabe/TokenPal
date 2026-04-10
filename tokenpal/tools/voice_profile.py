@@ -20,6 +20,9 @@ class VoiceProfile:
     offline_quips: list[str] = field(default_factory=list)
     mood_prompts: dict[str, str] = field(default_factory=dict)
     structure_hints: list[str] = field(default_factory=list)
+    finetuned_model: str = ""
+    finetuned_base: str = ""
+    finetuned_date: str = ""
     version: int = 1
 
     @property
@@ -57,6 +60,9 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         offline_quips=data.get("offline_quips", []),
         mood_prompts=data.get("mood_prompts", {}),
         structure_hints=data.get("structure_hints", []),
+        finetuned_model=data.get("finetuned_model", ""),
+        finetuned_base=data.get("finetuned_base", ""),
+        finetuned_date=data.get("finetuned_date", ""),
         version=data.get("version", 1),
     )
 
