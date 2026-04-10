@@ -23,6 +23,7 @@ from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
 from tokenpal.ui.ascii_renderer import SpeechBubble
+from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.registry import discover_overlays, resolve_overlay
 from tokenpal.util.logging import setup_logging
 
@@ -156,11 +157,17 @@ def main() -> None:
         llm.set_model(name)
         return CommandResult(f"Switched to {name}")
 
+    def _cmd_voice(args: str) -> CommandResult:
+        return _handle_voice_command(
+            args, personality, data_dir / "voices", overlay
+        )
+
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("mood", _cmd_mood)
     dispatcher.register("status", _cmd_status)
     dispatcher.register("model", _cmd_model)
+    dispatcher.register("voice", _cmd_voice)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:
@@ -221,3 +228,139 @@ def _print_startup_summary(
 
     summary = "\n".join(lines)
     print(f"\n\033[1mTokenPal\033[0m\n{summary}\n", file=sys.stderr)
+
+
+def _handle_voice_command(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+) -> CommandResult:
+    """Handle /voice subcommands."""
+    from tokenpal.tools.voice_profile import list_profiles, load_profile
+
+    parts = args.strip().split(maxsplit=1)
+    subcmd = parts[0].lower() if parts else ""
+    subargs = parts[1].strip() if len(parts) > 1 else ""
+
+    if subcmd == "list":
+        profiles = list_profiles(voices_dir)
+        if not profiles:
+            return CommandResult("No voices saved yet.")
+        items = [f"{name} ({count} lines)" for _, name, count in profiles]
+        return CommandResult("Voices: " + ", ".join(items))
+
+    if subcmd == "info":
+        name = personality.voice_name
+        if not name:
+            return CommandResult("Using default TokenPal voice.")
+        return CommandResult(f"Voice: {name}")
+
+    if subcmd == "off":
+        personality.set_voice(None)
+        return CommandResult("Back to default TokenPal.")
+
+    if subcmd == "switch":
+        if not subargs:
+            return CommandResult("Usage: /voice switch <name>")
+        try:
+            from tokenpal.tools.voice_profile import slugify
+            profile = load_profile(slugify(subargs), voices_dir)
+            personality.set_voice(profile)
+            return CommandResult(f"Switched to {profile.character}.")
+        except FileNotFoundError:
+            return CommandResult(f"Voice '{subargs}' not found.")
+
+    if subcmd == "train":
+        return _start_voice_training(
+            subargs, personality, voices_dir, overlay
+        )
+
+    return CommandResult(
+        "Usage: /voice list | switch <name> | off | info"
+        " | train <wiki> <character>"
+    )
+
+
+def _start_voice_training(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+) -> CommandResult:
+    """Kick off wiki voice training in a background thread."""
+    parts = args.split(maxsplit=1)
+    if len(parts) < 2:
+        return CommandResult(
+            'Usage: /voice train <wiki> "<character>"'
+        )
+
+    wiki = parts[0]
+    character = parts[1].strip("\"'")
+
+    def _train() -> None:
+        try:
+            from tokenpal.tools.transcript_parser import extract_lines_from_text
+            from tokenpal.tools.voice_profile import make_profile, save_profile
+            from tokenpal.tools.wiki_fetch import fetch_all_transcripts
+
+            text = fetch_all_transcripts(wiki, progress=False)
+            if not text:
+                overlay.schedule_callback(
+                    lambda: overlay.show_speech(
+                        SpeechBubble(text=f"No transcripts on {wiki}.fandom.com")
+                    )
+                )
+                return
+
+            lines = extract_lines_from_text(text, character)
+            if len(lines) < 10:
+                overlay.schedule_callback(
+                    lambda: overlay.show_speech(
+                        SpeechBubble(text=f"Only {len(lines)} lines for {character}.")
+                    )
+                )
+                return
+
+            # Generate persona via Ollama (reuse train_voice helpers)
+            from concurrent.futures import ThreadPoolExecutor
+
+            from tokenpal.tools.train_voice import (
+                _generate_greetings,
+                _generate_offline_quips,
+                _generate_persona,
+            )
+
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                f_p = pool.submit(_generate_persona, character, lines)
+                f_g = pool.submit(_generate_greetings, character, lines)
+                f_q = pool.submit(_generate_offline_quips, character, lines)
+
+            profile = make_profile(
+                character=character,
+                source=f"{wiki}.fandom.com",
+                lines=lines,
+                persona=f_p.result() or "",
+                greetings=f_g.result(),
+                offline_quips=f_q.result(),
+            )
+            save_profile(profile, voices_dir)
+            personality.set_voice(profile)
+
+            msg = f"Trained {character} ({len(lines)} lines). Voice active!"
+            overlay.schedule_callback(
+                lambda: overlay.show_speech(SpeechBubble(text=msg))
+            )
+            log.info("Voice trained: %s from %s (%d lines)", character, wiki, len(lines))
+
+        except Exception:
+            log.exception("Voice training failed")
+            overlay.schedule_callback(
+                lambda: overlay.show_speech(
+                    SpeechBubble(text="Training failed. Check logs.")
+                )
+            )
+
+    train_thread = threading.Thread(target=_train, daemon=True, name="voice-train")
+    train_thread.start()
+    return CommandResult(f"Training {character} from {wiki}...")

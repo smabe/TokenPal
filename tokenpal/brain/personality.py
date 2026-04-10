@@ -252,6 +252,7 @@ class PersonalityEngine:
         voice: VoiceProfile | None = None,
     ) -> None:
         self._persona = persona_prompt
+        self._voice_name = voice.character if voice else ""
         self._voice_persona = voice.persona if voice else ""
         self._voice_greetings = voice.greetings if voice and voice.greetings else []
         self._voice_offline_quips = voice.offline_quips if voice and voice.offline_quips else []
@@ -285,6 +286,34 @@ class PersonalityEngine:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    @property
+    def voice_name(self) -> str:
+        """Name of the active voice, or empty string for default."""
+        return self._voice_name
+
+    def set_voice(self, voice: VoiceProfile | None) -> None:
+        """Hot-swap the active voice at runtime."""
+        if voice:
+            self._voice_name = voice.character
+            self._voice_persona = voice.persona
+            self._voice_greetings = voice.greetings or []
+            self._voice_offline_quips = voice.offline_quips or []
+            if len(voice.lines) >= 10:
+                self._example_pool = voice.lines
+            else:
+                pad = random.sample(
+                    _EXAMPLE_POOL,
+                    min(10 - len(voice.lines), len(_EXAMPLE_POOL)),
+                )
+                self._example_pool = voice.lines + pad
+        else:
+            self._voice_name = ""
+            self._voice_persona = ""
+            self._voice_greetings = []
+            self._voice_offline_quips = []
+            self._example_pool = list(_EXAMPLE_POOL)
+        log.info("Voice switched to: %s", self._voice_name or "default")
 
     def get_startup_greeting(self) -> str:
         """Return a random greeting for when TokenPal first boots up."""
