@@ -15,25 +15,35 @@ log = logging.getLogger(__name__)
 # Allowlist of safe-to-open application names (lowercase for matching).
 # Only common productivity/dev apps — no system utilities, no terminals.
 _ALLOWED_APPS = frozenset({
+    "activity monitor",
     "calculator",
     "calendar",
     "chrome",
+    "cursor",
     "discord",
+    "edge",
     "finder",
     "firefox",
+    "ghostty",
     "google chrome",
+    "iterm",
+    "iterm2",
     "messages",
+    "microsoft edge",
     "music",
     "notes",
     "preview",
     "safari",
+    "signal",
     "slack",
     "spotify",
     "system preferences",
     "system settings",
     "terminal",
     "visual studio code",
+    "warp",
     "xcode",
+    "zed",
 })
 
 
