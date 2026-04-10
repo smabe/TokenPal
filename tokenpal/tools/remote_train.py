@@ -395,14 +395,14 @@ async def _run_rsync(
     # Trailing slash on source = copy contents, not the directory itself
     if pull:
         args = [
-            "rsync", "-a", "--partial", "--info=progress2",
+            "rsync", "-a", "--partial", "--progress",
             "-e", ssh_cmd,
             f"{target}:{remote_path}/",
             f"{local_path}/",
         ]
     else:
         args = [
-            "rsync", "-a", "--partial", "--info=progress2",
+            "rsync", "-a", "--partial", "--progress",
             "-e", ssh_cmd,
             f"{local_path}/",
             f"{target}:{remote_path}/",
@@ -417,7 +417,7 @@ async def _run_rsync(
     stderr_lines: list[str] = []
 
     async def _read_rsync_progress(stream: asyncio.StreamReader) -> None:
-        """Read rsync output in chunks — --info=progress2 uses \\r for updates."""
+        """Read rsync output in chunks — --progress uses \\r for updates."""
         buf = b""
         while True:
             chunk = await stream.read(4096)
