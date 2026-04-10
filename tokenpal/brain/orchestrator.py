@@ -387,7 +387,10 @@ class Brain:
             if self._status_callback:
                 self._status_callback("replying...")
             log.debug("Generating conversation reply to: %s", user_message)
-            response = await self._llm.generate(prompt, max_tokens=150)
+            if self._actions and self._tool_specs:
+                response = await self._generate_with_tools(prompt)
+            else:
+                response = await self._llm.generate(prompt, max_tokens=150)
             self._push_status()
             log.debug("Raw conversation response: %r", response.text[:200])
             filtered = self._personality.filter_conversation_response(
