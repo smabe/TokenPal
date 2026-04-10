@@ -318,6 +318,10 @@ def _start_voice_training(
         try:
             from tokenpal.tools.train_voice import train_from_wiki
 
+            overlay.schedule_callback(
+                lambda: overlay.update_status(f"Training {character}...")
+            )
+
             profile = train_from_wiki(wiki, character, voices_dir=voices_dir)
             if profile is None:
                 overlay.schedule_callback(
@@ -345,6 +349,12 @@ def _start_voice_training(
                 )
             )
 
+    overlay.schedule_callback(
+        lambda: overlay.show_speech(
+            SpeechBubble(text=f"Training {character}...")
+        )
+    )
+
     train_thread = threading.Thread(target=_train, daemon=True, name="voice-train")
     train_thread.start()
-    return CommandResult(f"Training {character} from {wiki}...")
+    return CommandResult("")
