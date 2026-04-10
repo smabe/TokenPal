@@ -14,6 +14,8 @@ Prompt-based voices work but the model still has its own personality underneath.
 - **Hugging Face TRL** — `SFTTrainer` with ShareGPT-format data
 - **Merge to safetensors** → register with Ollama via `FROM ./merged` Modelfile
 - Dropped Unsloth (compatibility issues, PEFT+bitsandbytes is sufficient)
+- **Pinned**: `transformers==4.56.1` (4.57.2 has a bug with local model paths)
+- **TRL 0.23 fix**: `remove_columns=["conversations"]` when mapping dataset to prevent TRL from re-applying chat template
 
 ### Dataset
 
@@ -51,7 +53,7 @@ Voice lines from `~/.tokenpal/voices/*.json` converted to ShareGPT-format JSONL 
 ## Open Questions (answered)
 
 - **Minimum voice lines?** — `auto_tune()` adjusts: <200 lines warns (rank=8, epochs=5), 200-500 (rank=8, epochs=4), 500-2000 (rank=16, epochs=3), 2000+ (rank=32, epochs=2)
-- **Training time on RTX 4070?** — ~2.5 min for 587 samples (3 epochs) with TinyLlama 1.1B. Expect 5-15 min with Llama 3.2 3B
+- **Training time on RTX 4070?** — ~2.5 min for 587 samples (3 epochs) with TinyLlama 1.1B. ~5-10 min with Gemma-2 2B IT for 587 samples (~7.1GB VRAM used)
 - **Full model vs LoRA adapter?** — LoRA adapter merged into base model for Ollama (safetensors dir)
 - **ROCm for RX 9070 XT?** — install.sh detects ROCm and selects correct PyTorch index, but end-to-end training not yet validated
 

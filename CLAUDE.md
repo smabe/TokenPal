@@ -88,13 +88,16 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
 ## Fine-Tuning
-- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with TinyLlama + BMO, ROCm detected but not yet validated)
+- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with Gemma-2 2B IT + BMO, ROCm detected but not yet validated)
 - Stack: PEFT + bitsandbytes (QLoRA) + TRL `SFTConfig`/`SFTTrainer` (bf16), merged to safetensors (not GGUF)
+- **Recommended model**: `google/gemma-2-2b-it` — strong for size, fits 8GB VRAM (~7.1GB used), ~5-10 min training on RTX 4070
+- **Pinned deps**: `transformers==4.56.1` (4.57.2 has a bug with local model paths), `remove_columns=["conversations"]` when mapping dataset to prevent TRL from re-applying chat template
+- **Gemma-2 note**: does not support system role in chat template
 - `tokenpal/tools/remote_train.py`: SSH/SCP orchestrator, wheel bundle builder, tmux training wrapper
 - `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all. `export_gguf()` delegates merge to `merge_adapter()`
 - `tokenpal/tools/dataset_prep.py`: voice lines → ShareGPT-format JSONL (observation 75%, conversation 15%, freeform 10%)
-- Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, use_wsl, gpu_backend)
-- Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Llama 3.2 3B Instruct (ungated, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token)
+- Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, port, use_wsl, gpu_backend)
+- Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Gemma-2 2B IT (gated but strong, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token + more VRAM)
 - Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
 - Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. `--force-reinstall --no-cache-dir` ensures fresh code lands even without version bump
 - `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection, sentinel file (`.install-ok`) for partial-install recovery, skips PyTorch download if already installed
@@ -107,7 +110,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Disk space preflight: warns if < 25GB free on remote
 - Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions
 - Shared helpers: `_drain_stream()` (async stream reading), `_resolve_wsl_mount()` (WSL path resolution)
-- WSL-specific: base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), `_resolve_wsl_mount()` for SCP↔WSL bridge
+- SSH/SCP/rsync: `RemoteTrainConfig` has `port: int = 22` field; `_run_ssh` uses `-p`, `_run_scp` uses `-P`, `_run_rsync` passes `-p` in ssh command
+- Direct WSL SSH (recommended): run `openssh-server` inside WSL on port 2222, set `use_wsl = false` + `port = 2222` — treats WSL as native Linux, eliminates Windows path resolution, PowerShell quoting, and `/mnt/c/` copies. Needs Windows firewall rule for port 2222 and `/usr/lib/wsl/lib` in PATH (via `/etc/environment`)
+- WSL-specific (legacy): base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), `_resolve_wsl_mount()` for SCP↔WSL bridge
+- Model validation: `_ensure_base_model` checks `config.json` has `model_type` field via grep (not just directory existence) to catch stale/incomplete downloads
+- HF_TOKEN: `source ~/.bashrc` before download commands to pick up token. Most models are gated (Llama 3.2, Gemma-2) — need HF token + license acceptance on huggingface.co
 - See `docs/remote-training-guide.md` for user-facing setup and usage
 
 ## Platform Notes

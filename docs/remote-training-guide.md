@@ -35,7 +35,7 @@ That's it. The pipeline handles everything: building the training package, insta
 
 ```toml
 [finetune]
-base_model = "meta-llama/Llama-3.2-3B-Instruct"  # recommended
+base_model = "google/gemma-2-2b-it"  # recommended (ungated, strong for size)
 # lora_rank = 16           # auto-tuned by dataset size
 # epochs = 3               # auto-tuned by dataset size
 # batch_size = 4
@@ -49,15 +49,15 @@ LoRA rank and epochs are auto-tuned based on voice line count. You generally don
 | Model | Size | Quality | Auth |
 |-------|------|---------|------|
 | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | 2GB | Low (testing only) | None |
-| `meta-llama/Llama-3.2-1B-Instruct` | 2.5GB | Decent | None |
-| **`meta-llama/Llama-3.2-3B-Instruct`** | 6GB | **Good (recommended)** | **None** |
-| `google/gemma-2-2b-it` | 5GB | Strong for size | None |
+| **`google/gemma-2-2b-it`** | 5GB | **Strong (recommended)** | **HF token + license** |
 | `microsoft/Phi-3.5-mini-instruct` | 7.5GB | Very capable | None |
-| `google/gemma-2-9b-it` | 18GB | Best quality, tight fit | HF token |
+| `meta-llama/Llama-3.2-3B-Instruct` | 6GB | Good | HF token + license |
+| `google/gemma-2-9b-it` | 18GB | Best quality, tight fit | HF token + license |
 
-For gated models (Gemma-2 9B), set `HF_TOKEN` on the remote:
+Most models (Gemma-2, Llama 3.2) are gated — you need an HF token and to accept the license on huggingface.co. Set `HF_TOKEN` on the remote:
 ```bash
-ssh you@gpu-box "wsl -e bash -lc \"echo 'export HF_TOKEN=hf_yourtoken' >> ~/.bashrc\""
+# Add to ~/.bashrc so it's picked up automatically:
+ssh you@gpu-box "echo 'export HF_TOKEN=hf_yourtoken' >> ~/.bashrc"
 ```
 
 ### `[finetune.remote]` — GPU box connection
@@ -66,12 +66,42 @@ ssh you@gpu-box "wsl -e bash -lc \"echo 'export HF_TOKEN=hf_yourtoken' >> ~/.bas
 [finetune.remote]
 host = "gpu-box.local"              # SSH hostname or IP
 user = "you"                        # SSH user (optional)
+# port = 22                           # SSH port (default 22)
 # remote_dir = "~/tokenpal-training"  # working directory on remote
 # use_wsl = false                     # set true for Windows + WSL hosts
 # gpu_backend = "auto"                # auto, cuda, or rocm
 ```
 
-### Windows + WSL example
+### Direct WSL SSH (recommended)
+
+Instead of SSH-ing to Windows and shelling into WSL, run an SSH server **inside WSL** on port 2222. This treats WSL as a native Linux box — no Windows path resolution, no PowerShell quoting, no `/mnt/c/` copies.
+
+**One-time WSL setup:**
+```bash
+# Inside WSL:
+sudo apt install openssh-server
+sudo sed -i 's/^#Port 22/Port 2222/' /etc/ssh/sshd_config
+sudo service ssh start
+
+# Add CUDA libs to PATH (needed for nvidia-smi inside WSL):
+echo 'PATH="/usr/lib/wsl/lib:$PATH"' | sudo tee -a /etc/environment
+```
+
+**Windows firewall rule** (run in PowerShell as admin):
+```powershell
+New-NetFirewallRule -DisplayName "WSL SSH" -Direction Inbound -LocalPort 2222 -Protocol TCP -Action Allow
+```
+
+**Config:**
+```toml
+[finetune.remote]
+host = "gaming-pc.local"
+user = "smabe"
+port = 2222
+# use_wsl = false  (default — treats it as native Linux)
+```
+
+### Windows + WSL via Windows SSH (legacy)
 
 ```toml
 [finetune.remote]
@@ -80,7 +110,7 @@ user = "smabe"
 use_wsl = true
 ```
 
-WSL is handled automatically — files are SCP'd to the Windows filesystem, then `install.sh` copies them to the WSL-native ext4 filesystem for performance.
+WSL is handled automatically — files are SCP'd to the Windows filesystem, then `install.sh` copies them to the WSL-native ext4 filesystem for performance. This path works but is more fragile due to PowerShell quoting and path translation.
 
 ## How It Works
 
@@ -174,6 +204,13 @@ nvidia-smi
 ### SSL errors during PyTorch download (WSL)
 - Known WSL2 networking issue with large downloads. install.sh retries 3 times and skips if torch is already installed.
 - Manual fix: download torch wheel separately and install from file (see WSL setup lessons in project memory)
+
+### Training fails with transformers/model path errors
+- Pin `transformers==4.56.1` — version 4.57.2 has a bug with local model paths. The install script handles this, but if you're running manually on the remote, check your version.
+
+### "System role not supported" or chat template errors with Gemma-2
+- Gemma-2 models don't support the system role in their chat template. The dataset prep handles this by omitting system messages for Gemma-2.
+- If you see this with a custom dataset, ensure your JSONL doesn't include `{"from": "system", ...}` entries.
 
 ### Training fails with OutOfMemoryError
 - Reduce `batch_size` in `[finetune]` config (try 2 or 1)

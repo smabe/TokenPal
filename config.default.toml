@@ -69,6 +69,7 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 # [finetune.remote]
 # host = "gpu-box.local"     # SSH hostname or IP
 # user = ""                  # SSH user (optional, uses default)
+# port = 22                  # SSH port (use 2222 for direct WSL SSH)
 # remote_dir = "~/tokenpal-training"
-# use_wsl = false            # true for Windows + WSL hosts
+# use_wsl = false            # true for Windows + WSL hosts (not needed with direct WSL SSH)
 # gpu_backend = "auto"       # auto, cuda, or rocm

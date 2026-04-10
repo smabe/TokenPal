@@ -293,8 +293,9 @@ async def _run_ssh(
     Returns (returncode, stdout, stderr).
     """
     target = _ssh_target(remote)
+    ssh_args = ["ssh", "-o", "BatchMode=yes", "-p", str(remote.port), target, command]
     proc = await asyncio.create_subprocess_exec(
-        "ssh", "-o", "BatchMode=yes", target, command,
+        *ssh_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -336,7 +337,7 @@ async def _run_scp(
 ) -> tuple[int, str]:
     """Copy files via SCP. Returns (returncode, stderr)."""
     target = _ssh_target(remote)
-    scp_args = ["scp"]
+    scp_args = ["scp", "-P", str(remote.port)]
     if recursive:
         scp_args.append("-r")
     if pull:
@@ -390,7 +391,7 @@ async def _run_rsync(
     No compression (-z omitted) — safetensors are dense binary, incompressible.
     """
     target = _ssh_target(remote)
-    ssh_cmd = "ssh -o BatchMode=yes"
+    ssh_cmd = f"ssh -o BatchMode=yes -p {remote.port}"
     # Trailing slash on source = copy contents, not the directory itself
     if pull:
         args = [
@@ -475,16 +476,23 @@ async def _ensure_base_model(
 
     Returns the remote path to the model directory.
     """
-    # Check if model already exists on remote
-    rc, out, _ = await _ssh(remote, f"test -d {model_dir} && echo exists", timeout=15)
-    if rc == 0 and "exists" in out:
+    # Check if model already exists AND has a valid config.json with model_type
+    check_cmd = (
+        f"test -f {model_dir}/config.json && "
+        f"grep -o '\"model_type\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' "
+        f"{model_dir}/config.json 2>/dev/null || echo ''"
+    )
+    rc, out, _ = await _ssh(remote, check_cmd, timeout=15)
+    if rc == 0 and "model_type" in out:
         progress("Base model already on remote.")
         return model_dir
 
     progress(f"Downloading base model: {base_model}")
 
-    # Try downloading directly on the remote first (use venv python)
+    # Try downloading directly on the remote first (use venv python).
+    # Source .bashrc for HF_TOKEN (may not be in the login shell env).
     dl_cmd = (
+        f"source ~/.bashrc 2>/dev/null; "
         f'{venv_py} -c "'
         f"from huggingface_hub import snapshot_download; "
         f"snapshot_download('{base_model}', local_dir='{model_dir}')\""

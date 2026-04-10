@@ -176,7 +176,7 @@ def train(
         ]
         return {"text": texts}
 
-    dataset = dataset.map(_format, batched=True)
+    dataset = dataset.map(_format, batched=True, remove_columns=["conversations"])
 
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)

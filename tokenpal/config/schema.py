@@ -88,6 +88,7 @@ class PluginsConfig:
 class RemoteTrainConfig:
     host: str = ""
     user: str = ""
+    port: int = 22
     remote_dir: str = "~/tokenpal-training"
     python: str = ""  # auto-detected from venv after install.sh runs
     use_wsl: bool = False
