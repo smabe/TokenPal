@@ -69,6 +69,7 @@ TokenPal observes your desktop through modular **senses** and generates short, w
 - Easter eggs at specific times (3:33 AM, Friday 5 PM, etc.)
 - Running gags that track your app usage across sessions
 - Voice profiles trained from show transcripts — including character-specific moods and style hints
+- Freeform thoughts — trained voices occasionally say things unprompted, in character
 - Goes silent around sensitive apps (banking, passwords, health)
 
 **Status Bar** — shows current model, voice, mood, and activity:
@@ -86,6 +87,8 @@ cp config.default.toml config.toml  # config.toml is gitignored
 
 Config is found automatically — you can run `tokenpal` from any directory.
 Search order: `~/.tokenpal/config.toml` > project root > current directory.
+
+Browse and download models from inside TokenPal with `/model browse` and `/model pull <name>`.
 
 Key settings:
 
