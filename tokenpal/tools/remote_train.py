@@ -194,6 +194,247 @@ echo "Install complete."
 """
 
 
+# Native Windows installer — parallel to _INSTALL_SH for hosts where
+# platform="windows" is configured (or auto-detected). Targets CUDA only
+# (ROCm on Windows via HIP SDK is out of scope; see plans/shipped/remote-
+# pipeline-windows.md non-goals). Uses the 'py' launcher from python.org,
+# not Microsoft Store Python or Anaconda.
+#
+# Phases mirror _INSTALL_SH where possible:
+#   1. PowerShell version + execution policy self-check
+#   2. Python 3.12+ check via `py -3.12`
+#   3. nvidia-smi GPU detection (Windows + CUDA only, no ROCm path)
+#   4. venv create/reuse under %USERPROFILE%\tokenpal-training\.venv
+#   5. PyTorch CUDA install (cu124 wheel, skip if already working)
+#   6. tokenpal wheel install + training extras
+#   7. Verification (torch.cuda.is_available())
+_INSTALL_PS1 = r"""#Requires -Version 5.1
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+if ($env:TOKENPAL_TRAINING_DIR) {
+    $InstallDir = $env:TOKENPAL_TRAINING_DIR
+} else {
+    $InstallDir = "$env:USERPROFILE\tokenpal-training"
+}
+
+Write-Host "Install dir: $InstallDir"
+
+# --- Phase 1: Python launcher check ---
+Write-Host "[1/6] Checking Python..."
+if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: Python launcher 'py' not found." -ForegroundColor Red
+    Write-Host "  Install Python 3.12+ from python.org/downloads/" -ForegroundColor Yellow
+    Write-Host "  (installer includes 'py' launcher by default)" -ForegroundColor Yellow
+    exit 1
+}
+$pyVersion = py -3.12 --version 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: Python 3.12 not installed via the py launcher." -ForegroundColor Red
+    Write-Host "  Run: winget install Python.Python.3.12" -ForegroundColor Yellow
+    Write-Host "  Or download from: https://www.python.org/downloads/" -ForegroundColor Yellow
+    exit 1
+}
+Write-Host "  Found: $pyVersion"
+
+# --- Phase 2: GPU detection (CUDA only on Windows) ---
+Write-Host "[2/6] Detecting GPU..."
+if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
+    Write-Host "ERROR: nvidia-smi not found in PATH." -ForegroundColor Red
+    Write-Host "  Install NVIDIA drivers from nvidia.com/download" -ForegroundColor Yellow
+    Write-Host "  (CUDA only on Windows — ROCm/HIP out of scope)" -ForegroundColor Yellow
+    exit 1
+}
+$gpuName = nvidia-smi --query-gpu=name --format=csv,noheader 2>&1 | Select-Object -First 1
+Write-Host "  GPU: $gpuName"
+$TorchUrl = "https://download.pytorch.org/whl/cu124"
+Write-Host "  PyTorch index: $TorchUrl"
+
+# --- Phase 3: Venv setup ---
+Write-Host "[3/6] Setting up venv..."
+$VenvDir = "$InstallDir\.venv"
+$VenvPython = "$VenvDir\Scripts\python.exe"
+$VenvPip = "$VenvDir\Scripts\pip.exe"
+
+if (-not (Test-Path $InstallDir)) {
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+}
+
+# Recreate venv only if Python version changed (saves 900MB torch re-download)
+$desiredPy = py -3.12 --version 2>&1
+$currentPy = "none"
+if (Test-Path $VenvPython) {
+    $currentPy = & $VenvPython --version 2>&1
+}
+if ($desiredPy -ne $currentPy) {
+    if (Test-Path $VenvDir) {
+        Write-Host "  Python changed ($currentPy -> $desiredPy), recreating venv..."
+        Remove-Item -Recurse -Force $VenvDir
+    }
+    py -3.12 -m venv $VenvDir
+}
+& $VenvPip install --upgrade pip -q
+
+# --- Phase 4: PyTorch (CUDA) ---
+Write-Host "[4/6] Installing PyTorch (CUDA)..."
+# Check if torch is already installed and CUDA is working
+$torchOk = $false
+try {
+    $check = & $VenvPython -c "import torch; print(1 if torch.cuda.is_available() else 0)" 2>&1
+    if ($LASTEXITCODE -eq 0 -and $check -eq "1") {
+        $torchOk = $true
+    }
+} catch {
+    $torchOk = $false
+}
+
+if ($torchOk) {
+    Write-Host "  PyTorch already installed and CUDA working, skipping."
+} else {
+    & $VenvPip install --extra-index-url $TorchUrl torch torchvision -q
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: PyTorch install failed." -ForegroundColor Red
+        Write-Host "  Common cause: Defender blocking DLLs." -ForegroundColor Yellow
+        Write-Host "  Add exclusion for $VenvDir and retry." -ForegroundColor Yellow
+        exit 1
+    }
+}
+
+# --- Phase 5: TokenPal wheel + training extras ---
+Write-Host "[5/6] Installing tokenpal training bundle..."
+$wheelPattern = "$InstallDir\tokenpal-*.whl"
+$Wheel = Get-ChildItem $wheelPattern -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $Wheel) {
+    Write-Host "ERROR: No tokenpal wheel found in $InstallDir" -ForegroundColor Red
+    Write-Host "  Bundle push must complete before install.ps1 runs." -ForegroundColor Yellow
+    exit 1
+}
+# Force-refresh tokenpal code, then resolve training extras without re-downloading torch
+& $VenvPip install --force-reinstall --no-deps --no-cache-dir $Wheel.FullName -q
+& $VenvPip install "$($Wheel.FullName)[training]" -q
+
+# --- Phase 6: Verification ---
+Write-Host "[6/6] Verifying..."
+$verifyScript = @"
+import torch
+assert torch.cuda.is_available(), 'GPU not available to PyTorch'
+print(f'  GPU OK: {torch.cuda.get_device_name(0)}')
+"@
+& $VenvPython -c $verifyScript
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "ERROR: PyTorch CUDA verification failed." -ForegroundColor Red
+    exit 1
+}
+Write-Host "  Python: $VenvPython"
+Write-Host "Install complete."
+"""
+
+
+def _build_windows_base_model_check(model_dir: str) -> str:
+    """Build a PowerShell command that emits 'BASE_MODEL_OK' iff the model
+    directory at `model_dir` has config.json with a model_type field AND at
+    least one nonzero weight shard (.safetensors or .bin).
+
+    Parallel to the bash `check_cmd` inside `_ensure_base_model` — caught
+    interrupted HF downloads where config.json landed but weight shards didn't.
+    Uses Windows-native PowerShell primitives (Test-Path, Select-String,
+    Get-ChildItem) instead of POSIX `test -f`, `grep -q`, `find -size`.
+
+    Returned string is a single semicolon-separated PowerShell one-liner so it
+    survives SSH command transport without heredoc quoting.
+    """
+    # Use single quotes around paths to avoid PowerShell variable expansion
+    # in interpolation. The model_dir is already absolute by the time this
+    # is called — no %USERPROFILE% resolution needed here.
+    return (
+        f"if ((Test-Path '{model_dir}\\config.json' -PathType Leaf)"
+        f" -and (Select-String -Pattern '\"model_type\"' -Path '{model_dir}\\config.json' -Quiet)"
+        f" -and (Get-ChildItem '{model_dir}' -Include *.safetensors,*.bin -Recurse"
+        f" -ErrorAction SilentlyContinue | Where-Object {{ $_.Length -gt 0 }}"
+        f" | Select-Object -First 1)) {{ Write-Output 'BASE_MODEL_OK' }}"
+    )
+
+
+async def _ensure_base_model_windows(
+    remote: RemoteTrainConfig,
+    base_model: str,
+    model_dir: str,
+    venv_py: str,
+    _ssh: Any,
+    progress: ProgressCallback,
+) -> str:
+    """Windows-native equivalent of `_ensure_base_model`.
+
+    Differences from the Linux version:
+      - Uses PowerShell `Test-Path` + `Select-String` + `Get-ChildItem`
+        instead of POSIX `test -f` + `grep -q` + `find -size +0c`
+      - HF_TOKEN from `$env:HF_TOKEN` (persistent via `setx` in user env)
+        instead of `source ~/.bashrc`
+      - Windows venv python path: `.venv\\Scripts\\python.exe` not
+        `.venv/bin/python`
+      - Local fallback (download locally, push to remote) is NOT implemented
+        for the Windows path in commit 3 — a pure-remote download is the
+        only supported flow. If the remote can't reach HF, the user must
+        fix HF_TOKEN or network on the remote. The Linux fallback worked
+        because macOS controllers could scp into a Linux host; pushing a
+        multi-GB model to a Windows host over plain SCP is slow and
+        brittle enough that we deliberately punt.
+
+    Returns the remote model directory path on success.
+    """
+    # Check if model already exists and has intact config + weight shards
+    check_cmd = _build_windows_base_model_check(model_dir)
+    rc, out, _ = await _ssh(remote, check_cmd, timeout=15)
+    if rc == 0 and "BASE_MODEL_OK" in out:
+        progress("Base model already on remote (config + weights verified).")
+        return model_dir
+
+    progress(f"Downloading base model: {base_model}")
+
+    # Remote download via venv python. Pull HF_TOKEN from the user env
+    # (set via `setx HF_TOKEN ...` or a one-shot in the same PS session).
+    # The $env expansion happens on the remote PowerShell.
+    dl_cmd = (
+        f"$env:HF_TOKEN = [System.Environment]::GetEnvironmentVariable('HF_TOKEN', 'User'); "
+        f"& '{venv_py}' -c "
+        f'"from huggingface_hub import snapshot_download; '
+        f"snapshot_download('{base_model}', local_dir='{model_dir}')\""
+    )
+    rc, _, err = await _ssh(remote, dl_cmd, progress, timeout=1800)
+    if rc == 0:
+        progress("Base model downloaded on remote.")
+        return model_dir
+
+    # Detect auth failures and surface with actionable hint. No local
+    # fallback on the Windows path — see docstring above.
+    if _looks_like_hf_auth_error(err):
+        target = _ssh_target(remote)
+        raise RemoteTrainError(
+            "auth",
+            f"HuggingFace auth failed for {base_model}.",
+            hint=(
+                f"The remote couldn't access {base_model}.\n"
+                f"Fix on the Windows remote:\n"
+                f"  ssh {target}\n"
+                f"  # Set the token persistently:\n"
+                f"  setx HF_TOKEN hf_your_token_here\n"
+                f"  # Then restart your SSH session (persistent env needs a new shell)\n"
+                f"  # Also accept the license at: https://huggingface.co/{base_model}"
+            ),
+        )
+
+    raise RemoteTrainError(
+        "model_push",
+        f"Remote download failed: {err[:200]}",
+        hint=(
+            "Native Windows path has no local fallback for base model push. "
+            "Fix HF_TOKEN or network on the remote and retry."
+        ),
+    )
+
+
 def _hash_training_sources() -> str:
     """Hash the training-related source files to detect changes.
 

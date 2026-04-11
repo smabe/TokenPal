@@ -13,9 +13,12 @@ from tokenpal.tools.voice_profile import VoiceProfile
 
 from tokenpal.tools.remote_train import (
     RemoteTrainError,
+    _INSTALL_PS1,
     _INSTALL_SH,
+    _build_windows_base_model_check,
     _detect_remote_platform,
     _ensure_base_model,
+    _ensure_base_model_windows,
     _hash_training_sources,
     _ssh_target,
     _wsl_cmd_dir,
@@ -208,6 +211,196 @@ def test_install_sh_no_sentinel_file():
     go through `_preflight_remote_state` instead."""
     assert ".install-ok" not in _INSTALL_SH
     assert "SENTINEL" not in _INSTALL_SH
+
+
+# ---------------------------------------------------------------------------
+# _INSTALL_PS1 content tests (commit 3 of remote-pipeline-windows)
+# ---------------------------------------------------------------------------
+
+
+def test_install_ps1_has_expected_phases():
+    """The PS installer must cover the same 6 phases as install.sh."""
+    assert "[1/6] Checking Python" in _INSTALL_PS1
+    assert "[2/6] Detecting GPU" in _INSTALL_PS1
+    assert "[3/6] Setting up venv" in _INSTALL_PS1
+    assert "[4/6] Installing PyTorch" in _INSTALL_PS1
+    assert "[5/6] Installing tokenpal" in _INSTALL_PS1
+    assert "[6/6] Verifying" in _INSTALL_PS1
+
+
+def test_install_ps1_targets_cuda_only():
+    """Windows path is CUDA-only per plan non-goals. No ROCm install logic."""
+    assert "cu124" in _INSTALL_PS1
+    assert "download.pytorch.org/whl/cu124" in _INSTALL_PS1
+    # Must NOT contain a ROCm install URL or ROCm detection command.
+    # (The script does mention "ROCm/HIP out of scope" as a user-facing
+    # error when nvidia-smi is missing — that's a documentation string,
+    # not install logic.)
+    assert "download.pytorch.org/whl/rocm" not in _INSTALL_PS1
+    assert "rocm-smi" not in _INSTALL_PS1
+    assert "rocminfo" not in _INSTALL_PS1
+
+
+def test_install_ps1_uses_py_launcher():
+    """Use the python.org 'py' launcher, not Microsoft Store / Anaconda."""
+    assert "py -3.12" in _INSTALL_PS1
+    assert "Get-Command py" in _INSTALL_PS1
+
+
+def test_install_ps1_requires_powershell_5_plus():
+    """#Requires prevents accidental run on legacy PowerShell v2."""
+    assert "#Requires -Version 5.1" in _INSTALL_PS1
+
+
+def test_install_ps1_verifies_cuda_available():
+    """Must sanity-check torch.cuda.is_available() before declaring success."""
+    assert "torch.cuda.is_available()" in _INSTALL_PS1
+
+
+def test_install_ps1_no_sentinel_file():
+    """Same retirement guard as _INSTALL_SH — no .install-ok in the new script."""
+    assert ".install-ok" not in _INSTALL_PS1
+    assert "SENTINEL" not in _INSTALL_PS1
+
+
+def test_install_ps1_handles_execution_policy():
+    """$ErrorActionPreference = 'Stop' makes the script fail-fast like `set -e`."""
+    assert '$ErrorActionPreference = "Stop"' in _INSTALL_PS1
+
+
+# ---------------------------------------------------------------------------
+# _build_windows_base_model_check tests (commit 3)
+# ---------------------------------------------------------------------------
+
+
+def test_build_windows_base_model_check_uses_powershell_primitives():
+    """Parallel to the bash check in _ensure_base_model but with PS commands."""
+    cmd = _build_windows_base_model_check("C:\\Users\\smabe\\tokenpal-training\\model")
+    assert "Test-Path" in cmd
+    assert "Select-String" in cmd
+    assert "Get-ChildItem" in cmd
+    # Must check for both safetensors and .bin shards
+    assert "*.safetensors" in cmd
+    assert "*.bin" in cmd
+    # Must reject zero-byte shards (the whole point vs the old config.json grep)
+    assert "Length -gt 0" in cmd
+
+
+def test_build_windows_base_model_check_emits_base_model_ok_marker():
+    """The bash check emits BASE_MODEL_OK; Windows check must match for a
+    consistent parsing contract in callers."""
+    cmd = _build_windows_base_model_check("C:\\x\\model")
+    assert "BASE_MODEL_OK" in cmd
+
+
+def test_build_windows_base_model_check_embeds_model_dir():
+    """Interpolated path must be present verbatim so the remote check hits
+    the right directory."""
+    cmd = _build_windows_base_model_check("D:\\custom\\path\\model")
+    assert "D:\\custom\\path\\model" in cmd
+
+
+# ---------------------------------------------------------------------------
+# _ensure_base_model_windows tests (commit 3)
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_base_model_windows_skips_when_present():
+    """Config + weights verified → skip download path entirely."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (0, "BASE_MODEL_OK\n", ""),
+    })
+    progress_msgs: list[str] = []
+
+    result = await _ensure_base_model_windows(
+        remote,
+        base_model="google/gemma-2-2b-it",
+        model_dir="C:\\Users\\smabe\\tokenpal-training\\model",
+        venv_py="C:\\Users\\smabe\\tokenpal-training\\.venv\\Scripts\\python.exe",
+        _ssh=ssh,
+        progress=lambda msg: progress_msgs.append(msg),
+    )
+
+    assert result == "C:\\Users\\smabe\\tokenpal-training\\model"
+    assert not any("snapshot_download" in call for call in ssh.calls)
+    assert any("already on remote" in msg.lower() for msg in progress_msgs)
+
+
+async def test_ensure_base_model_windows_downloads_when_missing():
+    """Missing weights → HF snapshot_download on the remote."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", "no weights found"),
+        "snapshot_download": (0, "downloaded", ""),
+    })
+    progress_msgs: list[str] = []
+
+    result = await _ensure_base_model_windows(
+        remote,
+        base_model="google/gemma-2-2b-it",
+        model_dir="C:\\Users\\smabe\\tokenpal-training\\model",
+        venv_py="C:\\Users\\smabe\\tokenpal-training\\.venv\\Scripts\\python.exe",
+        _ssh=ssh,
+        progress=lambda msg: progress_msgs.append(msg),
+    )
+
+    assert result == "C:\\Users\\smabe\\tokenpal-training\\model"
+    assert any("snapshot_download" in call for call in ssh.calls)
+    # HF_TOKEN must be pulled from Windows user env, not ~/.bashrc
+    dl_call = next(c for c in ssh.calls if "snapshot_download" in c)
+    assert "GetEnvironmentVariable('HF_TOKEN'" in dl_call
+    assert "~/.bashrc" not in dl_call
+    assert any("downloading" in msg.lower() for msg in progress_msgs)
+
+
+async def test_ensure_base_model_windows_surfaces_hf_auth_error():
+    """Remote download fails with 401/403 → RemoteTrainError('auth') with hint
+    pointing at `setx HF_TOKEN` (not `~/.bashrc`)."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", ""),
+        "snapshot_download": (1, "", "HTTPError: 401 Client Error: Unauthorized"),
+    })
+
+    with pytest.raises(RemoteTrainError) as exc_info:
+        await _ensure_base_model_windows(
+            remote,
+            base_model="google/gemma-2-2b-it",
+            model_dir="C:\\x\\model",
+            venv_py="C:\\x\\.venv\\Scripts\\python.exe",
+            _ssh=ssh,
+            progress=lambda _: None,
+        )
+
+    err = exc_info.value
+    assert err.step == "auth"
+    assert "setx HF_TOKEN" in err.hint
+    # Must NOT suggest the Linux workaround
+    assert "~/.bashrc" not in err.hint
+
+
+async def test_ensure_base_model_windows_no_local_fallback():
+    """Non-auth failure → hard error (no SCP push fallback on Windows path)."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", ""),
+        "snapshot_download": (1, "", "Connection timed out"),
+    })
+
+    with pytest.raises(RemoteTrainError) as exc_info:
+        await _ensure_base_model_windows(
+            remote,
+            base_model="google/gemma-2-2b-it",
+            model_dir="C:\\x\\model",
+            venv_py="C:\\x\\.venv\\Scripts\\python.exe",
+            _ssh=ssh,
+            progress=lambda _: None,
+        )
+
+    err = exc_info.value
+    assert err.step == "model_push"
+    assert "no local fallback" in err.hint.lower()
 
 
 # ---------------------------------------------------------------------------
