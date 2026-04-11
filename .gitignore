@@ -41,3 +41,6 @@ htmlcov/
 
 # Claude
 .claude/
+
+# Graphify outputs (build artifacts, not source)
+graphify-out/
