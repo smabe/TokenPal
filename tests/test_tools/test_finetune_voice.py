@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 from tokenpal.tools.finetune_voice import (
     LoRAConfig,
+    _resolve_batch_params,
+    _should_use_qlora,
     auto_tune,
     generate_modelfile,
     register_ollama,
@@ -116,3 +118,59 @@ def test_register_ollama_no_ollama(mock_run: MagicMock):
         Path("/tmp/test.gguf"), "tokenpal-test", "System prompt.",
     )
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# Platform-aware training config (commit 2 of remote-pipeline-windows)
+# ---------------------------------------------------------------------------
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=True)
+@patch("tokenpal.tools.finetune_voice._is_rocm", return_value=False)
+def test_should_use_qlora_windows_skips(_rocm, _windows):
+    """Windows+CUDA must NOT trigger QLoRA — bitsandbytes-windows is broken.
+    Non-optional regression test per remote-pipeline-windows plan."""
+    assert _should_use_qlora() is False
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=False)
+@patch("tokenpal.tools.finetune_voice._is_rocm", return_value=True)
+def test_should_use_qlora_rocm_skips(_rocm, _windows):
+    """ROCm must NOT trigger QLoRA — bitsandbytes on ROCm is unreliable."""
+    assert _should_use_qlora() is False
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=False)
+@patch("tokenpal.tools.finetune_voice._is_rocm", return_value=False)
+def test_should_use_qlora_linux_cuda_uses_qlora(_rocm, _windows):
+    """Linux+CUDA is the happy path — QLoRA enabled."""
+    assert _should_use_qlora() is True
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=True)
+def test_resolve_batch_params_clamps_on_windows(_windows):
+    """Windows forces bs=1/accum=4 regardless of config. VRAM-verified at
+    bs=1 (7.43 GB), OOMs at bs=2 (9.64 GB) on 8 GB RTX 4070."""
+    config = LoRAConfig(batch_size=4, gradient_accumulation_steps=2)
+    batch_size, grad_accum = _resolve_batch_params(config)
+    assert batch_size == 1
+    assert grad_accum == 4
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=False)
+def test_resolve_batch_params_passes_through_on_linux(_windows):
+    """Linux honors config.batch_size and config.gradient_accumulation_steps."""
+    config = LoRAConfig(batch_size=4, gradient_accumulation_steps=2)
+    batch_size, grad_accum = _resolve_batch_params(config)
+    assert batch_size == 4
+    assert grad_accum == 2
+
+
+@patch("tokenpal.tools.finetune_voice._is_windows", return_value=True)
+def test_resolve_batch_params_clamps_even_with_small_config(_windows):
+    """On Windows, clamping is absolute — if config is already bs=1, stay at 1
+    but reset gradient_accumulation to 4 (which is the tested config)."""
+    config = LoRAConfig(batch_size=1, gradient_accumulation_steps=1)
+    batch_size, grad_accum = _resolve_batch_params(config)
+    assert batch_size == 1
+    assert grad_accum == 4

@@ -99,20 +99,69 @@ def _is_rocm() -> bool:
         return False
 
 
+def _is_windows() -> bool:
+    """Detect if we're running on native Windows (not WSL).
+
+    When use_wsl=true in remote config, the training script runs inside
+    WSL bash, so platform.system() returns 'Linux' and this returns False.
+    Only returns True when training code is executing in a native Windows
+    Python process — which is the case we need to dodge bitsandbytes on.
+    """
+    import platform
+    return platform.system() == "Windows"
+
+
+def _should_use_qlora() -> bool:
+    """Use QLoRA (4-bit via bitsandbytes) only when the environment supports it.
+
+    ROCm: bitsandbytes ROCm is unreliable on RDNA 3/4. Skip.
+    Windows: `bitsandbytes-windows` is community-maintained and frequently
+             broken. Skip — use bf16 LoRA with gradient checkpointing instead
+             (VRAM-verified: 7.43 GB on RTX 4070 8GB card for Gemma-2 2B).
+    Linux CUDA: the happy path.
+    """
+    return not (_is_rocm() or _is_windows())
+
+
+def _resolve_batch_params(config: LoRAConfig) -> tuple[int, int]:
+    """Return (batch_size, gradient_accumulation_steps) respecting platform limits.
+
+    On Windows, forces batch_size=1 and gradient_accumulation_steps=4
+    regardless of config, because bf16 LoRA + gradient checkpointing only
+    fits at bs=1 on an 8 GB RTX 4070 (measured: 7.43 GB at bs=1, 9.64 GB
+    at bs=2 which OOMs). auto_tune()'s output for these two fields is
+    overridden on Windows; lora_rank and epochs are still auto-tuned normally.
+
+    On any other platform (Linux CUDA QLoRA, Linux ROCm bf16), honors the
+    config values as-is.
+    """
+    if _is_windows():
+        return 1, 4
+    return config.batch_size, config.gradient_accumulation_steps
+
+
 def setup_model(
     config: LoRAConfig,
 ) -> tuple[Any, Any]:
-    """Load base model with LoRA (QLoRA on CUDA, full-precision on ROCm).
+    """Load base model with LoRA (QLoRA on CUDA-Linux, full-precision bf16 elsewhere).
 
-    bitsandbytes doesn't reliably support ROCm/RDNA 4, so we skip
-    quantization there — 16GB VRAM fits Gemma-2 2B in bf16 comfortably.
+    Gate matrix:
+      Linux + CUDA → QLoRA (4-bit, ~1.3 GB weights)
+      Linux + ROCm → bf16 LoRA (bitsandbytes unreliable on ROCm)
+      Windows + CUDA → bf16 LoRA (bitsandbytes-windows unreliable)
+      Windows + ROCm → bf16 LoRA (both reasons apply)
+
+    On bf16 paths, uses `attn_implementation="eager"` and gradient
+    checkpointing (enabled via SFTConfig in train()) to fit Gemma-2 2B
+    in 8 GB VRAM. Eager is unconditional on the bf16 path because
+    Gemma-2 is the committed target model.
 
     Returns (model, tokenizer).
     """
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    use_quantization = not _is_rocm()
+    use_quantization = _should_use_qlora()
 
     tokenizer = AutoTokenizer.from_pretrained(config.base_model)
     if tokenizer.pad_token is None:
@@ -138,12 +187,21 @@ def setup_model(
     else:
         import torch
 
+        # VRAM-critical config — if you change ANY of the three knobs below
+        # (bf16, eager attention, gradient checkpointing via SFTConfig) you
+        # must re-measure VRAM on the 8 GB card. Measured peak: 7.43 GB at
+        # bs=1/seq=512, 1.16 GB headroom. See plans/shipped/remote-pipeline-windows.md
         model = AutoModelForCausalLM.from_pretrained(
             config.base_model,
             torch_dtype=torch.bfloat16,
             device_map="auto",
+            attn_implementation="eager",  # Gemma-2 recommendation
         )
-        log.info("Using full-precision bf16 LoRA (ROCm backend detected)")
+        reason = "ROCm backend" if _is_rocm() else "Windows host"
+        log.info(
+            "Using full-precision bf16 LoRA with eager attention (%s detected)",
+            reason,
+        )
 
     lora_config = LoraConfig(
         r=config.lora_rank,
@@ -208,14 +266,27 @@ def train(
     adapter_dir = output_dir / "adapter"
     adapter_dir.mkdir(parents=True, exist_ok=True)
 
+    # Platform-aware batch params. On Windows, bf16 LoRA + grad checkpointing
+    # fits at bs=1 only (9.64 GB at bs=2 → OOM on 8 GB card). On Linux+CUDA
+    # QLoRA, config values pass through unchanged.
+    batch_size, grad_accum = _resolve_batch_params(config)
+
+    # Gradient checkpointing only needed on the bf16 path. QLoRA's 4-bit
+    # weights are small enough that grad_checkpointing adds compute overhead
+    # with no memory payoff. Enable via SFTConfig so TRL handles the
+    # PEFT wiring (enable_input_require_grads etc).
+    use_grad_checkpoint = not _should_use_qlora()
+
     training_args = SFTConfig(
         output_dir=str(adapter_dir),
-        per_device_train_batch_size=config.batch_size,
-        gradient_accumulation_steps=config.gradient_accumulation_steps,
+        per_device_train_batch_size=batch_size,
+        gradient_accumulation_steps=grad_accum,
         num_train_epochs=config.epochs,
         learning_rate=config.learning_rate,
         warmup_ratio=config.warmup_ratio,
         bf16=True,
+        gradient_checkpointing=use_grad_checkpoint,
+        gradient_checkpointing_kwargs={"use_reentrant": False},
         logging_steps=1,
         save_strategy="epoch",
         eval_strategy="epoch",
