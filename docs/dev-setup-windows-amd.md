@@ -123,8 +123,9 @@ python -c "from llama_cpp import Llama; print('llama.cpp loaded')"
 
 ### LLM backend — PyTorch + transformers (alternative for vision models)
 ```powershell
-# Install PyTorch with CUDA
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+# Install PyTorch with CUDA — match the index to your driver's CUDA version
+# (check `nvidia-smi` top right: CUDA 12.6→cu126, 12.8→cu128, 13.x→cu130)
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
 # Verify CUDA
 python -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
@@ -245,7 +246,26 @@ Same as Intel setup:
 
 ---
 
-## 10. Known Gotchas
+## 10. LoRA Fine-Tuning (Native Windows)
+
+This machine can fine-tune voice models directly — no WSL needed. The training pipeline auto-detects Windows and uses PowerShell/cmd.exe natively. See [remote-training-guide.md](remote-training-guide.md) for full setup.
+
+Quick version: add to `config.toml`:
+```toml
+[finetune]
+base_model = "google/gemma-2-2b-it"
+
+[finetune.remote]
+host = "geefourteen.sm.abe"
+user = "smabe"
+platform = "windows"
+```
+
+Training uses bf16 LoRA + gradient checkpointing + eager attention. Measured: 7.9 GB peak VRAM, ~15 min for 773 lines on Gemma-2 2B IT.
+
+---
+
+## 11. Known Gotchas
 
 - **VRAM budget:** RTX 4070 Laptop has 8 GB VRAM. A Q4 7B model uses ~4.5 GB, leaving room for a small vision model OR the OS, not both. Plan model loading carefully.
 - **llama-cpp-python CUDA wheels:** Must match your CUDA toolkit version exactly. If `pip install` gives CPU-only builds, you need the `--extra-index-url` flag.
