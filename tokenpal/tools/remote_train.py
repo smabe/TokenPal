@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,9 @@ ProgressCallback = Callable[[str], None]
 # Module-level constant so tests can monkeypatch it to 0 for fast runs —
 # a conftest fixture in tests/test_tools/ patches it automatically.
 POLL_INTERVAL_SECONDS = 30
+
+# UTF-8 BOM — PowerShell 5.1 reads .ps1 files as Windows-1252 without it.
+_UTF8_BOM = b"\xef\xbb\xbf"
 
 
 # ---------------------------------------------------------------------------
@@ -251,7 +256,6 @@ Write-Host "  GPU: $gpuName"
 # Detect CUDA version from nvidia-smi to pick the right PyTorch index.
 # nvidia-smi reports the max CUDA version the driver supports (e.g. 13.2).
 # Map to the closest PyTorch wheel index (cu126, cu128, cu130).
-$cudaVer = nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>&1 | Select-Object -First 1
 $nvOut = nvidia-smi 2>&1 | Out-String
 if ($nvOut -match 'CUDA Version:\s+(\d+)\.(\d+)') {
     $major = [int]$Matches[1]; $minor = [int]$Matches[2]
@@ -692,7 +696,6 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     #      as Windows-1252. UTF-8 byte \x94 (part of the em dash U+2014)
     #      maps to a right double quote in 1252, prematurely closing any
     #      double-quoted string and cascading parser errors.
-    _UTF8_BOM = b"\xef\xbb\xbf"
     install_ps1 = bundle_dir / "install.ps1"
     install_ps1.write_bytes(
         _UTF8_BOM + _INSTALL_PS1.replace("\n", "\r\n").encode("utf-8")
@@ -856,10 +859,8 @@ async def _run_scp(
         scp_args.extend([f"{target}:{remote_path}", local_path])
     else:
         scp_args.extend([local_path, f"{target}:{remote_path}"])
-    args = scp_args
-
     proc = await asyncio.create_subprocess_exec(
-        *args,
+        *scp_args,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
@@ -1127,7 +1128,6 @@ async def _ensure_base_model(
             )
 
     # Clean up local temp
-    import shutil
     shutil.rmtree(local_model_dir.parent, ignore_errors=True)
 
     progress("Base model pushed to remote.")
@@ -1207,7 +1207,7 @@ async def _preflight_remote_state(
     remote: RemoteTrainConfig,
     slug: str,
     cmd_rdir: str,
-    platform: str = "linux",
+    platform: str,
 ) -> RemoteState:
     """Check remote side for stale state that would break a fresh training run.
 
@@ -1460,9 +1460,6 @@ async def remote_finetune(
     # where the sentinel was touched but the venv is broken (WSL SSL flake, pip bomb).
     if not state.venv_functional:
         remote_hash = "incomplete"  # force re-push + reinstall
-
-    import json
-    from dataclasses import asdict
 
     # Write profile JSON to a temp file for inclusion in bundle
     profile_data = asdict(profile)
@@ -1804,22 +1801,19 @@ async def remote_finetune(
         # delimiter. Windows OpenSSH accepts forward slashes.
         #
         # SCP -r copies the remote dir AS a subdirectory of the local
-        # target (scp -r host:merged/ parent/ → parent/merged/). So we
-        # pull into the parent dir and then rename the created "merged"
-        # directory to the desired local_model_dir name. Remove any
-        # stale local_model_dir first to avoid nesting.
-        import shutil
-        if local_model_dir.exists():
-            shutil.rmtree(local_model_dir)
+        # target (scp -r host:merged/ parent/ → parent/merged/). Pull
+        # into the parent, then atomically rename on success — keeps any
+        # existing local_model_dir intact until the transfer completes.
         scp_pull = pull_source.replace("\\", "/")
         rc, err = await _run_scp(
             remote, str(local_model_dir.parent), scp_pull,
             pull=True, recursive=True, timeout=3600,
         )
-        # Rename: parent/merged → parent/tokenpal-<slug>
         if rc == 0:
             scp_landed = local_model_dir.parent / Path(pull_source).name
             if scp_landed.exists() and scp_landed != local_model_dir:
+                if local_model_dir.exists():
+                    shutil.rmtree(local_model_dir)
                 scp_landed.rename(local_model_dir)
     else:
         rc, err = await _run_rsync(
