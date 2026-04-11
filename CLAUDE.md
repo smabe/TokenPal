@@ -88,36 +88,38 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
 ## Fine-Tuning
-- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with Gemma-2 2B IT + BMO). ROCm pipeline works for RDNA 3; RDNA 4 / gfx1201 (RX 9070 XT) blocked by ROCm 7.2 kernel dispatch — detected but can't run compute, waiting on ROCm 7.3+
-- Stack: PEFT + bitsandbytes (QLoRA on CUDA) or bf16 full-precision LoRA (on ROCm, since bitsandbytes ROCm is unreliable) + TRL `SFTConfig`/`SFTTrainer`, merged to safetensors (not GGUF)
-- **Recommended model**: `google/gemma-2-2b-it` — strong for size, fits 8GB VRAM (~7.1GB used), ~5-10 min training on RTX 4070
+- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with Gemma-2 2B IT + BMO). Two paths: native Windows (recommended for Windows hosts) and Linux/WSL. ROCm pipeline works for RDNA 3; RDNA 4 / gfx1201 (RX 9070 XT) blocked by ROCm 7.2 kernel dispatch — detected but can't run compute, waiting on ROCm 7.3+
+- Stack: PEFT + bitsandbytes (QLoRA on Linux CUDA) or bf16 full-precision LoRA (on ROCm, Windows, since bitsandbytes is unreliable/unavailable) + TRL `SFTConfig`/`SFTTrainer`, merged to safetensors (not GGUF)
+- **Recommended model**: `google/gemma-2-2b-it` — strong for size, fits 8GB VRAM (~7.9GB peak on Windows bf16, ~7.1GB on Linux QLoRA), ~15 min training on Windows RTX 4070, ~7 min on Linux
 - **Pinned deps**: `transformers==4.56.1` (4.57.2 has a bug with local model paths), `remove_columns=["conversations"]` when mapping dataset to prevent TRL from re-applying chat template
 - **Gemma-2 note**: does not support system role in chat template
-- `tokenpal/tools/remote_train.py`: SSH/SCP orchestrator, wheel bundle builder, tmux training wrapper
-- `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all. `export_gguf()` delegates merge to `merge_adapter()`
+- `tokenpal/tools/remote_train.py`: SSH/SCP orchestrator, wheel bundle builder, platform-aware (Linux tmux / Windows PowerShell)
+- `tokenpal/tools/finetune_voice.py`: standalone CLI (`tokenpal-finetune`) with subcommands: prep, train, merge, export, register, all. `_count_lines()` helper for JSONL line counting. `_is_windows()` routes Windows to bf16 LoRA (no QLoRA)
 - `tokenpal/tools/dataset_prep.py`: voice lines → ShareGPT-format JSONL (observation 75%, conversation 15%, freeform 10%)
-- Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, port, use_wsl, gpu_backend)
+- Config: `[finetune]` (base_model, lora_rank, epochs, batch_size) + `[finetune.remote]` (host, user, port, use_wsl, gpu_backend, platform)
+- `platform: str = "auto"` in `RemoteTrainConfig` — auto-detects via SSH probe (`uname -s 2>/dev/null || ver`), or set explicitly to `"linux"` / `"windows"`
 - Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Gemma-2 2B IT (gated but strong, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token + more VRAM)
-- Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
-- Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. `--force-reinstall --no-cache-dir` ensures fresh code lands even without version bump
-- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection (ROCm version aware: 7.2 vs 6.2), HSA env var exports (`HSA_ENABLE_DXG_DETECTION`, `HSA_OVERRIDE_GFX_VERSION=11.0.0` on gfx12xx), skips PyTorch download if already installed. Partial-install recovery is handled on the Python side by `_preflight_remote_state` running `python -c "import torch"` — no sentinel file
-- Training runs in `tmux` session (survives SSH drops), polled every 30s, output tee'd to `train.log`
+- Pipeline: build wheel → push bundle → install.sh/install.ps1 → push base model → prep data → train (tmux on Linux, synchronous SSH on Windows) → merge adapter → pull safetensors → register Ollama
+- Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. Bundle includes both install.sh and install.ps1 so it works on any platform
+- **Linux installer** (`install.sh`, embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection (ROCm version aware: 7.2 vs 6.2), HSA env var exports, skips PyTorch download if already installed
+- **Windows installer** (`install.ps1`, embedded as `_INSTALL_PS1`): Python `py` launcher check, CUDA-only (no ROCm on Windows), auto-detects CUDA version from nvidia-smi for PyTorch index URL (cu126/cu128/cu130). Phase order: training extras first, CUDA torch last (transitive deps pull CPU torch from PyPI otherwise). Uninstalls triton after torch install (broken Windows binaries). UTF-8 BOM required for PS 5.1 (without BOM, reads as Windows-1252, em dashes become quote chars)
+- **Windows training runner** (`run_train.ps1`, embedded as `_TRAIN_PS1`): parameterized, sets `TORCHDYNAMO_DISABLE=1` (triton import crashes), `HF_HUB_OFFLINE=1`, pipes to `Tee-Object` for real-time progress. `$LASTEXITCODE` is reliable through `Tee-Object` pipelines (tested)
+- Training: Linux runs in `tmux` session (survives SSH drops), polled every 30s. Windows runs synchronously in the SSH session (no tmux, documented non-goal). Both tee output to `train.log`
 - Checkpoint resume: `--resume` flag auto-detected from existing `checkpoint-*` dirs, passed to HF Trainer
-- `flock /tmp/tokenpal-training.lock` prevents concurrent training
+- Concurrent training: `flock` on Linux, skipped on Windows (no equivalent, documented non-goal)
 - Merge: `merge_adapter()` loads base + LoRA adapter via PEFT, saves merged safetensors. Ollama registers via `FROM ./merged` Modelfile
-- Model pull: rsync with `--info=progress2` + `--partial` for Linux hosts (progress + resume), SCP `-r` for WSL hosts (no rsync on Windows)
-- Model integrity: sha256 of safetensors verified after pull. **Mismatch is a hard error** (not warning) — corrupted local files are rejected before Ollama registration. Error includes `rm -rf LOCAL_DIR` recovery hint.
-- Base model integrity: `_ensure_base_model` check requires `config.json` with `model_type` AND at least one nonzero `.safetensors`/`.bin` shard. Catches interrupted HF downloads where config landed but weights didn't
-- Disk space preflight: warns if < 25GB free on remote
-- Preflight remote state: `_preflight_remote_state` gathers `{lock_file, lock_held, tmux_session_alive, venv_functional}` in one SSH round-trip before any training run. Auto-removes stale flock files (kernel lock released after SIGKILL, file lingers), kills orphan tmux sessions, forces reinstall on broken venv, raises `RemoteTrainError("preflight")` with `tmux attach` hint on detected live training
-- HF auth errors detected via `_looks_like_hf_auth_error` heuristic (401/403/gated/etc) on both remote and local download paths → `RemoteTrainError("auth")` with HF_TOKEN / license-acceptance fix instructions
-- Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions. Ollama register failure → hint with local safetensors path + manual `ollama create` command so training isn't lost
-- Shared helpers: `_drain_stream()` (async stream reading), `_resolve_wsl_mount()` (WSL path resolution)
-- SSH/SCP/rsync: `RemoteTrainConfig` has `port: int = 22` field; `_run_ssh` uses `-p`, `_run_scp` uses `-P`, `_run_rsync` passes `-p` in ssh command
-- Direct WSL SSH (recommended): run `openssh-server` inside WSL on port 2222, set `use_wsl = false` + `port = 2222` — treats WSL as native Linux, eliminates Windows path resolution, PowerShell quoting, and `/mnt/c/` copies. Needs Windows firewall rule for port 2222 and `/usr/lib/wsl/lib` in PATH (via `/etc/environment`)
+- Model pull: rsync for Linux (progress + resume), SCP for Windows/WSL (no rsync). SCP remote paths must use forward slashes (backslash `C:\` breaks the host:path delimiter). SCP `-r` creates a nested subdir — code renames atomically on success
+- Model integrity: sha256 of safetensors verified after pull. **Mismatch is a hard error**. Hash computation uses `\n` line separators (not `[Environment]::NewLine` which is `\r\n` on Windows)
+- Base model integrity: `_ensure_base_model` (Linux, bash) / `_ensure_base_model_windows` (PowerShell via `_build_windows_base_model_check`): config.json with `model_type` + nonzero weight shards. Windows variant wrapped in `powershell -Command "..."` (SSH default shell is cmd.exe)
+- Disk space preflight: warns if < 25GB free on remote. Windows uses `Get-PSDrive`, Linux uses `df -BG`
+- Preflight remote state: `_preflight_remote_state` takes `platform` param (no default). Linux: flock/tmux/venv probe in one round-trip. Windows: venv-only (cmd.exe `echo` + python, no flock/tmux)
+- All PowerShell command builders avoid `\"` escaping inside `powershell -Command "..."` — cmd.exe misparses `\"` as string terminators. Use single-quoted strings, string concatenation, `[char]10` for newlines
+- All file I/O across tools uses `encoding="utf-8"` explicitly — Windows defaults to cp1252 which can't handle Unicode characters (e.g., musical notes in voice profiles)
+- HF auth errors detected via `_looks_like_hf_auth_error` heuristic on both remote and local paths. Windows HF_TOKEN via `setx` (persistent) or `$env:HF_TOKEN` (session), Linux via `~/.bashrc`
+- Actionable errors: `RemoteTrainError` includes `hint` with platform-appropriate debug commands (`.venv\Scripts\activate` + `type train.log` on Windows, `source .venv/bin/activate` + `cat train.log` on Linux)
+- SSH/SCP/rsync: `RemoteTrainConfig` has `port: int = 22` field; `_run_ssh` uses `-p`, `_run_scp` uses `-P`, `_run_rsync` passes `-p` in ssh command. Local `scp.exe` must be in PATH on the controller machine
+- Direct WSL SSH (recommended for WSL users): run `openssh-server` inside WSL on port 2222, set `use_wsl = false` + `port = 2222` — treats WSL as native Linux
 - WSL-specific (legacy): base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), `_resolve_wsl_mount()` for SCP↔WSL bridge
-- Model validation: `_ensure_base_model` checks `config.json` has `model_type` field via grep (not just directory existence) to catch stale/incomplete downloads
-- HF_TOKEN: `source ~/.bashrc` before download commands to pick up token. Most models are gated (Llama 3.2, Gemma-2) — need HF token + license acceptance on huggingface.co
 - See `docs/remote-training-guide.md` for user-facing setup and usage
 
 ## Platform Notes

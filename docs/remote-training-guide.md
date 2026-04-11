@@ -4,7 +4,7 @@ Fine-tune a voice model on a remote GPU box. Training runs over SSH, survives di
 
 ## Prerequisites
 
-- **Local machine** (macOS): Ollama running, `build` package installed (`pip install build`)
+- **Local machine** (macOS or Windows): Ollama running, `build` package installed (`pip install build`), `scp` in PATH
 - **Remote GPU box**: SSH key access, Python 3.12+, NVIDIA (CUDA) or AMD (ROCm) GPU
 - **Voice profile**: Train one first with `/voice train <wiki> "<character>"`
 
@@ -68,11 +68,45 @@ host = "gpu-box.local"              # SSH hostname or IP
 user = "you"                        # SSH user (optional)
 # port = 22                           # SSH port (default 22)
 # remote_dir = "~/tokenpal-training"  # working directory on remote
-# use_wsl = false                     # set true for Windows + WSL hosts
+# platform = "auto"                   # auto, linux, or windows
+# use_wsl = false                     # set true for Windows + WSL hosts (legacy)
 # gpu_backend = "auto"                # auto, cuda, or rocm
 ```
 
-### Direct WSL SSH (recommended)
+### Windows Native (recommended for Windows GPU hosts)
+
+SSH directly to the Windows host. The pipeline auto-detects Windows and uses PowerShell for installation and cmd.exe for commands. No WSL needed.
+
+**Prerequisites on the Windows GPU host:**
+- OpenSSH Server enabled (Settings → Optional Features → OpenSSH Server)
+- Python 3.12+ installed from python.org (the `py` launcher is required)
+- NVIDIA drivers installed (`nvidia-smi` must be in PATH)
+
+**HF_TOKEN setup** (for gated models like Gemma-2):
+```powershell
+# Set persistently (needs a new SSH session to take effect):
+setx HF_TOKEN hf_your_token_here
+# Accept the model license at https://huggingface.co/google/gemma-2-2b-it
+```
+
+**Config:**
+```toml
+[finetune.remote]
+host = "gaming-pc.local"
+user = "smabe"
+platform = "windows"    # or leave as "auto" — detected via SSH probe
+```
+
+**What's different from the Linux path:**
+- Training runs synchronously in the SSH session (~15 min for Gemma-2 2B). Keep the session open — no tmux on Windows.
+- Uses bf16 LoRA with gradient checkpointing + eager attention (7.9 GB peak VRAM on RTX 4070 8GB)
+- No concurrent-training lock (no `flock` equivalent)
+- CUDA index auto-detected from `nvidia-smi` output (cu126/cu128/cu130)
+- Model pull via SCP (no rsync on Windows)
+
+**Migrating from `use_wsl=true`:** Set `platform = "windows"` and `use_wsl = false`. The two flags are incompatible — `platform = "windows"` means native cmd.exe + PowerShell, not WSL bash.
+
+### Direct WSL SSH (recommended for WSL users)
 
 Instead of SSH-ing to Windows and shelling into WSL, run an SSH server **inside WSL** on port 2222. This treats WSL as a native Linux box — no Windows path resolution, no PowerShell quoting, no `/mnt/c/` copies.
 
@@ -116,38 +150,49 @@ WSL is handled automatically — files are SCP'd to the Windows filesystem, then
 
 ### 1. Wheel Bundle
 
-Your local TokenPal code is packaged into a Python wheel and bundled with an `install.sh` script. This bundle is SCP'd to the remote as a single tarball. A source hash is stored on the remote — subsequent runs skip the push if nothing changed.
+Your local TokenPal code is packaged into a Python wheel and bundled with both `install.sh` (Linux) and `install.ps1` (Windows). This bundle is SCP'd to the remote as a single tarball. A source hash is stored on the remote — subsequent runs skip the push if nothing changed.
 
-### 2. install.sh
+### 2. Install (platform-specific)
 
-The install script runs 6 phases:
+**Linux** (`install.sh`) — 6 phases:
 1. **WSL relocation** — if on `/mnt/c/`, copies to native Linux filesystem
 2. **Python check** — verifies Python 3.12+
-3. **GPU detection** — CUDA (via `nvidia-smi`), ROCm (via `rocm-smi` / `rocminfo` / `/opt/rocm*/bin`), or Intel NPU (error). ROCm version is detected to pick the right PyTorch index (`rocm7.2` for ROCm 7+, `rocm6.2` otherwise). On RDNA 4 (gfx12xx), sets `HSA_OVERRIDE_GFX_VERSION=11.0.0`.
+3. **GPU detection** — CUDA, ROCm, or Intel NPU. ROCm version detected for correct PyTorch index.
 4. **Venv setup** — creates/reuses `~/tokenpal-training/.venv`
 5. **PyTorch** — installs with the correct CUDA/ROCm index URL (skips if already working)
 6. **TokenPal** — installs the wheel with training dependencies
 
-Completion is verified on the next run by `_preflight_remote_state` running `python -c "import torch"` on the remote. If install was interrupted or the venv is broken (partial pip install, SSL flake), the next run detects it and forces a fresh bundle push + reinstall automatically.
+**Windows** (`install.ps1`) — 6 phases:
+1. **Python check** — verifies `py -3.12` launcher
+2. **GPU detection** — CUDA only (no ROCm on Windows). Auto-detects CUDA version from `nvidia-smi` for PyTorch index URL.
+3. **Venv setup** — creates/reuses `%USERPROFILE%\tokenpal-training\.venv`
+4. **TokenPal** — installs the wheel with training extras (before PyTorch, so CUDA torch overwrites any CPU-only transitive deps)
+5. **PyTorch (CUDA)** — force-installs from the detected CUDA index. Removes triton (broken Windows binaries, not needed with eager attention).
+6. **Verification** — asserts `torch.cuda.is_available()`
+
+Completion is verified on the next run by `_preflight_remote_state` running `python -c "import torch"` on the remote. If install was interrupted or the venv is broken, the next run forces a fresh bundle push + reinstall automatically.
 
 ### 3. Base Model
 
-The base model is downloaded directly on the remote if it has internet access. If that fails, it's downloaded locally and pushed via SCP. The model is cached at `~/tokenpal-training/model/` and reused across runs.
+The base model is downloaded directly on the remote if it has internet access. On Linux, a local download + SCP fallback exists if the remote can't reach HuggingFace. On Windows, only remote download is supported — fix HF_TOKEN or network on the remote if it fails.
 
 ### 4. Training
 
-Training runs inside a `tmux` session on the remote, so it survives SSH disconnects. Progress is polled every 30 seconds and streamed to your terminal/UI.
+**Linux**: Training runs inside a `tmux` session, so it survives SSH disconnects. Progress is polled every 30 seconds.
 
+**Windows**: Training runs synchronously in the SSH session (~15 min for Gemma-2 2B). Keep the session open — SSH-survivable training is a documented non-goal for the Windows MVP.
+
+Both platforms:
 - Checkpoints are saved per epoch
 - If a previous run was interrupted, training resumes from the last checkpoint automatically
-- A `flock` lockfile prevents accidental concurrent training
+- Linux uses `flock` to prevent concurrent training; Windows skips this (no equivalent)
 
 ### 5. Merge + Pull
 
 After training, the LoRA adapter is merged back into the base model and saved as safetensors. The merged directory is pulled back to `~/.tokenpal/finetune/models/tokenpal-<name>/`:
 
 - **Linux hosts**: rsync with `--info=progress2` and `--partial` (shows progress, supports resume)
-- **WSL hosts**: SCP with `-r` (Windows SSH has no rsync)
+- **Windows/WSL hosts**: SCP with `-r` (no rsync on Windows). Remote paths use forward slashes to avoid breaking SCP's host:path delimiter
 
 ### 6. Ollama Registration
 
@@ -159,12 +204,12 @@ A Modelfile is generated pointing to the merged safetensors directory, and the m
 Progress messages appear in the speech bubble and terminal output.
 
 ### SSH in directly
+
+**Linux:**
 ```bash
 ssh you@gpu-box.local
 cd ~/tokenpal-training
 source .venv/bin/activate
-
-# View training log
 cat train.log
 
 # Attach to the live training session
@@ -174,19 +219,33 @@ tmux attach -t tokenpal-mordecai
 nvidia-smi
 ```
 
+**Windows:**
+```powershell
+ssh you@gaming-pc.local
+cd %USERPROFILE%\tokenpal-training
+.venv\Scripts\activate
+type train.log
+
+# Check GPU usage
+nvidia-smi
+```
+
 ### Remote directory layout
 ```
-~/tokenpal-training/
-  .venv/                  # Python venv with training deps
-  .source-hash            # hash of installed training code
-  model/                  # base model (cached)
-  data/                   # train.jsonl + val.jsonl (per-run)
-  output/adapter/         # LoRA checkpoints (per-run)
-  output/merged/          # merged safetensors (per-run)
-  train.log               # training output
-  run_train.sh            # generated training script
-  install.sh              # bootstrap script
-  tokenpal-*.whl          # installed package
+~/tokenpal-training/          # Linux: ~/tokenpal-training
+                              # Windows: %USERPROFILE%\tokenpal-training
+  .venv/                      # Python venv with training deps
+  .source-hash                # hash of installed training code
+  model/                      # base model (cached)
+  data/                       # train.jsonl + val.jsonl (per-run)
+  output/adapter/             # LoRA checkpoints (per-run)
+  output/merged/              # merged safetensors (per-run)
+  train.log                   # training output
+  run_train.sh                # generated training script (Linux)
+  run_train.ps1               # parameterized training runner (Windows)
+  install.sh                  # bootstrap script (Linux)
+  install.ps1                 # bootstrap script (Windows)
+  tokenpal-*.whl              # installed package
 ```
 
 ## Troubleshooting

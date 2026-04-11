@@ -183,13 +183,13 @@ For deeper character embodiment, fine-tune a model on the voice's dialogue lines
    [finetune.remote]
    host = "gpu-box.local"
    user = "you"
-   port = 2222       # direct WSL SSH (recommended)
+   # platform = "auto"  # auto-detects Linux vs Windows
    ```
 
 2. One-time setup: `/voice finetune-setup`
 3. Fine-tune: `/voice finetune bmo`
 
-Training runs on the remote GPU via SSH (survives disconnects). The merged model is automatically downloaded and registered with Ollama. See [docs/remote-training-guide.md](docs/remote-training-guide.md) for setup details and model options.
+Training runs on the remote GPU via SSH. Linux hosts use tmux (survives disconnects); Windows hosts run synchronously (~15 min). The merged model is automatically downloaded and registered with Ollama. See [docs/remote-training-guide.md](docs/remote-training-guide.md) for setup details and model options.
 
 ## CLI
 
