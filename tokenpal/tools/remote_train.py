@@ -1966,8 +1966,9 @@ async def remote_setup(
 ) -> bool:
     """One-time setup of the remote training environment.
 
-    Builds a bundle, pushes it, and runs install.sh which handles:
-    venv creation, CUDA/ROCm detection, PyTorch + deps installation.
+    Builds a bundle, pushes it, and runs install.sh (Linux) or
+    install.ps1 (Windows) which handles: venv creation, GPU detection,
+    PyTorch + deps installation.
 
     When use_wsl is True, bootstraps WSL+Ubuntu first.
     Returns True on success.
@@ -1993,16 +1994,40 @@ async def remote_setup(
 
     _ssh = _run_wsl_ssh if remote.use_wsl else _run_ssh
 
+    # Detect platform (same logic as remote_finetune)
+    if remote.platform == "auto":
+        platform = await _detect_remote_platform(_ssh, remote)
+        _progress(f"Detected platform: {platform}")
+    else:
+        platform = remote.platform
+
     _progress("Checking GPU...")
     rc, out, _ = await _ssh(remote, "nvidia-smi --query-gpu=name --format=csv,noheader")
     if rc != 0:
         return _setup_fail(f"No GPU detected on {remote.host}", _progress)
     _progress(f"GPU: {out.strip()}")
 
-    # Create remote directory
+    # Create remote directory — resolve Windows paths if needed
     scp_rdir = remote.remote_dir
-    if remote.use_wsl:
-        win_path = _to_windows_path(scp_rdir)
+    if platform == "windows":
+        _rc, win_home_out, _err = await _ssh(
+            remote, "echo %USERPROFILE%", timeout=10,
+        )
+        win_home = win_home_out.strip()
+        if not win_home or win_home == "%USERPROFILE%":
+            return _setup_fail(
+                "Could not resolve %USERPROFILE% on Windows remote.", _progress,
+            )
+        if scp_rdir.startswith("~/"):
+            rel = scp_rdir[2:].replace("/", "\\")
+            scp_rdir = f"{win_home}\\{rel}"
+        elif scp_rdir == "~":
+            scp_rdir = win_home
+        else:
+            scp_rdir = scp_rdir.replace("/", "\\")
+        mkdir_cmd = f'if not exist "{scp_rdir}" mkdir "{scp_rdir}"'
+    elif remote.use_wsl:
+        win_path = _to_windows_path(remote.remote_dir)
         mkdir_cmd = f'if not exist "{win_path}" mkdir "{win_path}"'
     else:
         mkdir_cmd = f"mkdir -p {shlex.quote(scp_rdir)}"
@@ -2032,10 +2057,15 @@ async def remote_setup(
     if rc != 0:
         return _setup_fail(f"SCP failed: {err[:200]}", _progress)
 
-    # Extract and install
-    rdir = _wsl_cmd_dir(remote) if remote.use_wsl else scp_rdir
-    if remote.use_wsl:
-        # SCP landed on Windows filesystem. install.sh will self-relocate.
+    # Extract and install (platform-specific)
+    if platform == "windows":
+        extract_cmd = (
+            f'cd /d "{scp_rdir}" && tar xzf bundle.tar.gz && '
+            f'powershell -ExecutionPolicy Bypass -File install.ps1'
+        )
+        rdir = scp_rdir
+    elif remote.use_wsl:
+        rdir = _wsl_cmd_dir(remote)
         try:
             win_mount = await _resolve_wsl_mount(remote)
         except RemoteTrainError:
@@ -2044,6 +2074,7 @@ async def remote_setup(
             f'cd "{win_mount}" && tar xzf bundle.tar.gz && bash install.sh'
         )
     else:
+        rdir = scp_rdir
         extract_cmd = (
             f"cd {shlex.quote(scp_rdir)} && tar xzf bundle.tar.gz && "
             f"bash install.sh"
@@ -2053,6 +2084,9 @@ async def remote_setup(
     if rc != 0:
         return _setup_fail(f"Install failed:\n{err[-500:]}", _progress)
 
-    venv_python = f"{rdir}/.venv/bin/python"
+    if platform == "windows":
+        venv_python = f"{rdir}\\.venv\\Scripts\\python.exe"
+    else:
+        venv_python = f"{rdir}/.venv/bin/python"
     _progress(f"Setup complete! Remote python: {venv_python}")
     return True
