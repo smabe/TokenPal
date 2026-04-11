@@ -14,6 +14,7 @@ import hashlib
 import logging
 import shlex
 import subprocess
+import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
@@ -81,9 +82,32 @@ if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     elif (( MAJOR == 12 && MINOR <= 1 )); then TORCH_IDX="cu121"
     else TORCH_IDX="cu124"; fi
     TORCH_URL="https://download.pytorch.org/whl/$TORCH_IDX"
-elif command -v rocm-smi &>/dev/null || command -v rocminfo &>/dev/null; then
+elif command -v rocm-smi &>/dev/null || command -v rocminfo &>/dev/null || ls /opt/rocm*/bin/rocminfo &>/dev/null; then
     GPU_BACKEND="rocm"
-    TORCH_URL="https://download.pytorch.org/whl/rocm6.2"
+    # Determine ROCm version for correct PyTorch index URL
+    ROCM_VER=""
+    if [[ -f /opt/rocm/.info/version ]]; then
+        ROCM_VER=$(cat /opt/rocm/.info/version | grep -oP '^\d+\.\d+' || true)
+    fi
+    if [[ -z "$ROCM_VER" ]]; then
+        # Check versioned install directories (e.g. /opt/rocm-7.2.0)
+        ROCM_DIR=$(ls -d /opt/rocm-[0-9]* 2>/dev/null | sort -V | tail -1 || true)
+        if [[ -n "$ROCM_DIR" ]]; then
+            ROCM_VER=$(basename "$ROCM_DIR" | grep -oP '\d+\.\d+' || true)
+        fi
+    fi
+    if [[ -z "$ROCM_VER" ]]; then
+        # Try rocminfo (needs HSA_ENABLE_DXG_DETECTION=1 on WSL)
+        ROCM_VER=$(HSA_ENABLE_DXG_DETECTION=1 rocminfo --version 2>/dev/null | grep -oP '\d+\.\d+' || true)
+    fi
+    ROCM_MAJOR=${ROCM_VER%%.*}
+    if [[ -n "$ROCM_MAJOR" ]] && (( ROCM_MAJOR >= 7 )); then
+        TORCH_URL="https://download.pytorch.org/whl/rocm7.2"
+        echo "  ROCm $ROCM_VER detected, using rocm7.2 PyTorch index"
+    else
+        TORCH_URL="https://download.pytorch.org/whl/rocm6.2"
+        echo "  ROCm ${ROCM_VER:-unknown} detected, using rocm6.2 PyTorch index"
+    fi
 else
     if lspci 2>/dev/null | grep -qi "neural\|NPU"; then
         echo "ERROR: Intel NPU detected but not supported for training."
@@ -94,6 +118,17 @@ else
     exit 1
 fi
 echo "  GPU backend: $GPU_BACKEND (index: $TORCH_URL)"
+
+# ROCm: export HSA env vars for GPU access and RDNA 4 compat
+if [[ "$GPU_BACKEND" == "rocm" ]]; then
+    export HSA_ENABLE_DXG_DETECTION=1
+    GFX_ARCH=$(rocminfo 2>/dev/null \
+        | grep -oP 'gfx\d+' | grep -v 'gfx0' | head -1 || true)
+    if [[ "$GFX_ARCH" == gfx12* ]]; then
+        export HSA_OVERRIDE_GFX_VERSION=11.0.0
+        echo "  RDNA 4 ($GFX_ARCH) detected, setting HSA_OVERRIDE_GFX_VERSION=11.0.0"
+    fi
+fi
 
 # --- Phase 3: Venv ---
 echo "[4/6] Setting up venv..."
@@ -182,7 +217,7 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     # Build wheel
     project_root = Path(__file__).parent.parent.parent
     result = subprocess.run(
-        ["python3", "-m", "build", "--wheel", "--outdir", str(bundle_dir)],
+        [sys.executable, "-m", "build", "--wheel", "--outdir", str(bundle_dir)],
         cwd=str(project_root),
         capture_output=True, text=True, timeout=120,
     )
@@ -608,7 +643,11 @@ async def remote_finetune(
 
     # -- Preflight: verify GPU access --
     _progress("Connecting to remote GPU...")
-    rc, _out, err = await _ssh(remote, "nvidia-smi", timeout=30)
+    rc, _out, err = await _ssh(
+        remote,
+        "nvidia-smi 2>/dev/null || HSA_ENABLE_DXG_DETECTION=1 rocminfo 2>/dev/null | grep -q 'Device Type:.*GPU'",
+        timeout=30,
+    )
     if rc != 0:
         raise RemoteTrainError(
             "preflight",
@@ -691,7 +730,7 @@ async def remote_finetune(
             )
         else:
             extract_cmd = (
-                f"cd {shlex.quote(scp_rdir)} && tar xzf bundle.tar.gz && "
+                f"cd {cmd_rdir} && tar xzf bundle.tar.gz && "
                 f"bash install.sh"
             )
         _progress("Installing training environment...")
@@ -784,6 +823,23 @@ async def remote_finetune(
     rc, home_out, _ = await _ssh(remote, "echo $HOME", timeout=5)
     if rc == 0 and home_out.strip():
         script_content = script_content.replace("$HOME", home_out.strip())
+
+    # ROCm/WSL needs these env vars for GPU access and RDNA 4 compat
+    if remote.gpu_backend != "cuda":
+        rc, gfx_out, _ = await _ssh(
+            remote,
+            "HSA_ENABLE_DXG_DETECTION=1 rocminfo 2>/dev/null"
+            " | grep -oP 'gfx\\d+' | grep -v gfx0 | head -1",
+            timeout=15,
+        )
+        gfx_arch = gfx_out.strip() if rc == 0 else ""
+        if gfx_arch:
+            env_lines = "export HSA_ENABLE_DXG_DETECTION=1\n"
+            if gfx_arch.startswith("gfx12"):
+                env_lines += "export HSA_OVERRIDE_GFX_VERSION=11.0.0\n"
+            script_content = script_content.replace(
+                "#!/bin/bash\n", f"#!/bin/bash\n{env_lines}"
+            )
 
     b64 = base64.b64encode(script_content.encode()).decode()
     write_cmd = (

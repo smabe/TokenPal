@@ -90,33 +90,60 @@ def _check_gpu() -> bool:
         return False
 
 
+def _is_rocm() -> bool:
+    """Detect if PyTorch is using ROCm (HIP) backend."""
+    try:
+        import torch
+        return hasattr(torch.version, "hip") and torch.version.hip is not None
+    except ImportError:
+        return False
+
+
 def setup_model(
     config: LoRAConfig,
 ) -> tuple[Any, Any]:
-    """Load base model with QLoRA via PEFT + bitsandbytes.
+    """Load base model with LoRA (QLoRA on CUDA, full-precision on ROCm).
+
+    bitsandbytes doesn't reliably support ROCm/RDNA 4, so we skip
+    quantization there — 16GB VRAM fits Gemma-2 2B in bf16 comfortably.
 
     Returns (model, tokenizer).
     """
-    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
-    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from peft import LoraConfig, get_peft_model
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype="float16",
-        bnb_4bit_use_double_quant=True,
-    )
+    use_quantization = not _is_rocm()
 
     tokenizer = AutoTokenizer.from_pretrained(config.base_model)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        config.base_model,
-        quantization_config=bnb_config,
-        device_map="auto",
-    )
-    model = prepare_model_for_kbit_training(model)
+    if use_quantization:
+        from peft import prepare_model_for_kbit_training
+        from transformers import BitsAndBytesConfig
+
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype="float16",
+            bnb_4bit_use_double_quant=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            config.base_model,
+            quantization_config=bnb_config,
+            device_map="auto",
+        )
+        model = prepare_model_for_kbit_training(model)
+        log.info("Using QLoRA (4-bit quantization via bitsandbytes)")
+    else:
+        import torch
+
+        model = AutoModelForCausalLM.from_pretrained(
+            config.base_model,
+            torch_dtype=torch.bfloat16,
+            device_map="auto",
+        )
+        log.info("Using full-precision bf16 LoRA (ROCm backend detected)")
 
     lora_config = LoraConfig(
         r=config.lora_rank,

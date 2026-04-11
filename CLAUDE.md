@@ -88,8 +88,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
 ## Fine-Tuning
-- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with Gemma-2 2B IT + BMO, ROCm detected but not yet validated)
-- Stack: PEFT + bitsandbytes (QLoRA) + TRL `SFTConfig`/`SFTTrainer` (bf16), merged to safetensors (not GGUF)
+- Remote LoRA fine-tuning via SSH to a GPU box (RTX 4070 tested end-to-end with Gemma-2 2B IT + BMO). ROCm pipeline works for RDNA 3; RDNA 4 / gfx1201 (RX 9070 XT) blocked by ROCm 7.2 kernel dispatch — detected but can't run compute, waiting on ROCm 7.3+
+- Stack: PEFT + bitsandbytes (QLoRA on CUDA) or bf16 full-precision LoRA (on ROCm, since bitsandbytes ROCm is unreliable) + TRL `SFTConfig`/`SFTTrainer`, merged to safetensors (not GGUF)
 - **Recommended model**: `google/gemma-2-2b-it` — strong for size, fits 8GB VRAM (~7.1GB used), ~5-10 min training on RTX 4070
 - **Pinned deps**: `transformers==4.56.1` (4.57.2 has a bug with local model paths), `remove_columns=["conversations"]` when mapping dataset to prevent TRL from re-applying chat template
 - **Gemma-2 note**: does not support system role in chat template
@@ -100,7 +100,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Gemma-2 2B IT (gated but strong, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token + more VRAM)
 - Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
 - Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. `--force-reinstall --no-cache-dir` ensures fresh code lands even without version bump
-- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection, sentinel file (`.install-ok`) for partial-install recovery, skips PyTorch download if already installed
+- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection (ROCm version aware: 7.2 vs 6.2), HSA env var exports (`HSA_ENABLE_DXG_DETECTION`, `HSA_OVERRIDE_GFX_VERSION=11.0.0` on gfx12xx), sentinel file (`.install-ok`) for partial-install recovery, skips PyTorch download if already installed
 - Training runs in `tmux` session (survives SSH drops), polled every 30s, output tee'd to `train.log`
 - Checkpoint resume: `--resume` flag auto-detected from existing `checkpoint-*` dirs, passed to HF Trainer
 - `flock /tmp/tokenpal-training.lock` prevents concurrent training

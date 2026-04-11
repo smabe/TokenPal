@@ -123,7 +123,7 @@ Your local TokenPal code is packaged into a Python wheel and bundled with an `in
 The install script runs 6 phases:
 1. **WSL relocation** — if on `/mnt/c/`, copies to native Linux filesystem
 2. **Python check** — verifies Python 3.12+
-3. **GPU detection** — CUDA (via `nvidia-smi`), ROCm (via `rocm-smi`), or Intel NPU (error)
+3. **GPU detection** — CUDA (via `nvidia-smi`), ROCm (via `rocm-smi` / `rocminfo` / `/opt/rocm*/bin`), or Intel NPU (error). ROCm version is detected to pick the right PyTorch index (`rocm7.2` for ROCm 7+, `rocm6.2` otherwise). On RDNA 4 (gfx12xx), sets `HSA_OVERRIDE_GFX_VERSION=11.0.0`.
 4. **Venv setup** — creates/reuses `~/tokenpal-training/.venv`
 5. **PyTorch** — installs with the correct CUDA/ROCm index URL (skips if already working)
 6. **TokenPal** — installs the wheel with training dependencies
@@ -206,7 +206,12 @@ nvidia-smi
 - Manual fix: download torch wheel separately and install from file (see WSL setup lessons in project memory)
 
 ### Training fails with transformers/model path errors
-- Pin `transformers==4.56.1` — version 4.57.2 has a bug with local model paths. The install script handles this, but if you're running manually on the remote, check your version.
+- Pin `transformers<4.57.2` — version 4.57.2 has a bug with local model paths (`'dict' object has no attribute 'model_type'`). The training extras in `pyproject.toml` enforce this.
+
+### ROCm: GPU detected but model loading hangs
+- **RDNA 4 (RX 9070 XT, gfx1201) is not yet viable for training on WSL.** ROCm 7.2 detects the GPU via `librocdxg`, but compute kernels hang indefinitely because gfx1201 lacks native kernel support and the `HSA_OVERRIDE_GFX_VERSION=11.0.0` workaround causes ISA mismatch deadlocks. Wait for ROCm 7.3+ or use native Linux.
+- **RDNA 3 (RX 7900 XTX, gfx1100) should work** with the same pipeline — ROCm 6.2 or 7.2 wheels, no GFX override needed.
+- QLoRA/bitsandbytes is skipped on ROCm (falls back to bf16 full-precision LoRA) since bitsandbytes ROCm support is unreliable.
 
 ### "System role not supported" or chat template errors with Gemma-2
 - Gemma-2 models don't support the system role in their chat template. The dataset prep handles this by omitting system messages for Gemma-2.
