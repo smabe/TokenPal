@@ -74,4 +74,4 @@ Take the remote fine-tuning pipeline from "works on the happy path" to "survives
 - This commit — plan closeout with final status
 
 ## Parking lot
-- **(skill-meta, not pipeline-meta)** `/plan` skill should run research agents + a brainstorm pass *after* approval but *before* coding starts. Today it drafts from conversation context only, so recommendations like "start with the stale-state cluster" are based on a quick `wc -l` + one grep instead of an actual read of the 1184-line file. Better home: GitHub issue against the plan skill, or a `plan-skill-v2` plan file — flagging here so it's not lost.
+(empty — the one skill-meta note that surfaced here was migrated to `plans/plan-skill-v2.md` on 2026-04-11 before shipping)
