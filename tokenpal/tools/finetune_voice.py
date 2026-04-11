@@ -190,7 +190,7 @@ def setup_model(
         # VRAM-critical config — if you change ANY of the three knobs below
         # (bf16, eager attention, gradient checkpointing via SFTConfig) you
         # must re-measure VRAM on the 8 GB card. Measured peak: 7.43 GB at
-        # bs=1/seq=512, 1.16 GB headroom. See plans/shipped/remote-pipeline-windows.md
+        # bs=1/seq=512, 1.16 GB headroom on Gemma-2 2B.
         model = AutoModelForCausalLM.from_pretrained(
             config.base_model,
             torch_dtype=torch.bfloat16,

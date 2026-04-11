@@ -378,6 +378,37 @@ exit $exitCode
 """
 
 
+def _ps_quote(s: str) -> str:
+    """Return a PowerShell single-quoted string literal for `s`.
+
+    PowerShell single-quoted strings are literal (no variable expansion),
+    but embedded single quotes must be doubled: `it's` → `'it''s'`.
+    Use for any path or user-provided value embedded in a PowerShell
+    command string, so paths with apostrophes don't break the command.
+    """
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _to_windows_path(rel_path: str) -> str:
+    """Convert a Unix-style path to a Windows cmd.exe / PowerShell path.
+
+    Examples:
+        ~/tokenpal-training → %USERPROFILE%\\tokenpal-training
+        ~ → %USERPROFILE%
+        /c/Users/foo → \\c\\Users\\foo (slashes normalized)
+        C:\\already\\win → C:\\already\\win (unchanged)
+
+    Used at 3 sites where `remote_train.py` builds Windows paths from
+    `remote.remote_dir` (which is Unix-style in the default config).
+    """
+    if rel_path == "~":
+        return "%USERPROFILE%"
+    if rel_path.startswith("~/"):
+        rest = rel_path[2:].replace("/", "\\")
+        return f"%USERPROFILE%\\{rest}"
+    return rel_path.replace("/", "\\")
+
+
 def _build_checkpoint_check_cmd(platform: str, cmd_rdir: str) -> str:
     """Return a shell command that prints the latest checkpoint directory
     name if one exists, or empty output otherwise.
@@ -386,9 +417,10 @@ def _build_checkpoint_check_cmd(platform: str, cmd_rdir: str) -> str:
     Windows: PowerShell `Get-ChildItem ... | Select -Last 1 -Expand Name`
     """
     if platform == "windows":
+        ckpt_dir = _ps_quote(f"{cmd_rdir}\\output\\adapter")
         return (
-            f'powershell -Command "Get-ChildItem '
-            f"'{cmd_rdir}\\output\\adapter' -Directory -ErrorAction SilentlyContinue "
+            f'powershell -Command "Get-ChildItem {ckpt_dir} -Directory '
+            f"-ErrorAction SilentlyContinue "
             f'| Where-Object {{ $_.Name -like \'checkpoint-*\' }} '
             f'| Select-Object -Last 1 -ExpandProperty Name"'
         )
@@ -407,10 +439,10 @@ def _build_merge_cmd(
         return (
             f'powershell -ExecutionPolicy Bypass -Command '
             f'"$env:HF_HUB_OFFLINE = \'1\'; '
-            f"Set-Location '{cmd_rdir}'; "
-            f"& '{venv_py}' -m tokenpal.tools.finetune_voice merge "
+            f"Set-Location {_ps_quote(cmd_rdir)}; "
+            f"& {_ps_quote(venv_py)} -m tokenpal.tools.finetune_voice merge "
             f"--adapter output/adapter --output output/merged "
-            f'--base-model \'{raw_model_dir}\'"'
+            f'--base-model {_ps_quote(raw_model_dir)}"'
         )
     return (
         f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
@@ -432,9 +464,10 @@ def _build_remote_sha256_cmd(platform: str, cmd_rdir: str) -> str:
         # Compute per-file SHA-256 hashes, sort deterministically, then
         # hash the concatenated "HASH  name" lines to match the Linux
         # format produced by `sha256sum file | sort | sha256sum`.
+        merged_dir = _ps_quote(f"{cmd_rdir}\\output\\merged")
         return (
             f'powershell -Command "'
-            f"$files = Get-ChildItem '{cmd_rdir}\\output\\merged' "
+            f"$files = Get-ChildItem {merged_dir} "
             f"-Recurse -Filter '*.safetensors' -ErrorAction SilentlyContinue "
             f'| Sort-Object Name; '
             f'$combined = ($files | ForEach-Object '
@@ -489,10 +522,12 @@ def _build_windows_base_model_check(model_dir: str) -> str:
     # Use single quotes around paths to avoid PowerShell variable expansion
     # in interpolation. The model_dir is already absolute by the time this
     # is called — no %USERPROFILE% resolution needed here.
+    config_path = _ps_quote(f"{model_dir}\\config.json")
+    model_dir_q = _ps_quote(model_dir)
     return (
-        f"if ((Test-Path '{model_dir}\\config.json' -PathType Leaf)"
-        f" -and (Select-String -Pattern '\"model_type\"' -Path '{model_dir}\\config.json' -Quiet)"
-        f" -and (Get-ChildItem '{model_dir}' -Include *.safetensors,*.bin -Recurse"
+        f"if ((Test-Path {config_path} -PathType Leaf)"
+        f" -and (Select-String -Pattern '\"model_type\"' -Path {config_path} -Quiet)"
+        f" -and (Get-ChildItem {model_dir_q} -Include *.safetensors,*.bin -Recurse"
         f" -ErrorAction SilentlyContinue | Where-Object {{ $_.Length -gt 0 }}"
         f" | Select-Object -First 1)) {{ Write-Output 'BASE_MODEL_OK' }}"
     )
@@ -539,7 +574,7 @@ async def _ensure_base_model_windows(
     # The $env expansion happens on the remote PowerShell.
     dl_cmd = (
         f"$env:HF_TOKEN = [System.Environment]::GetEnvironmentVariable('HF_TOKEN', 'User'); "
-        f"& '{venv_py}' -c "
+        f"& {_ps_quote(venv_py)} -c "
         f'"from huggingface_hub import snapshot_download; '
         f"snapshot_download('{base_model}', local_dir='{model_dir}')\""
     )
@@ -1249,24 +1284,23 @@ async def remote_finetune(
     # and %USERPROFILE% expansion instead of ~. Pre-existing Linux/WSL paths
     # stay unchanged on the else branch.
     if platform == "windows":
-        # Expand ~/... to %USERPROFILE%\... for cmd.exe compatibility.
-        if scp_rdir.startswith("~/"):
-            rel = scp_rdir[2:].replace("/", "\\")
-            scp_rdir = f"%USERPROFILE%\\{rel}"
-            cmd_rdir = scp_rdir
-        else:
-            # Already an absolute or Windows-style path — normalize slashes
-            cmd_rdir = scp_rdir.replace("/", "\\")
-            scp_rdir = cmd_rdir
+        cmd_rdir = _to_windows_path(scp_rdir)
+        scp_rdir = cmd_rdir
         model_dir = f"{cmd_rdir}\\model"
         venv_py = f"{cmd_rdir}\\.venv\\Scripts\\python.exe"
 
     # -- Preflight: check disk space --
-    rc, df_out, _ = await _ssh(
-        remote,
-        f"df -BG {cmd_rdir} 2>/dev/null | tail -1 | awk '{{print $4}}'",
-        timeout=10,
-    )
+    if platform == "windows":
+        # PowerShell `Get-PSDrive` on the drive letter containing cmd_rdir.
+        # Output is integer GB free; 0 on parse failure (check silently skipped).
+        disk_cmd = (
+            f'powershell -Command "'
+            f'$d = (Get-Item {_ps_quote(cmd_rdir)}).PSDrive; '
+            f'[int]($d.Free / 1GB)"'
+        )
+    else:
+        disk_cmd = f"df -BG {cmd_rdir} 2>/dev/null | tail -1 | awk '{{print $4}}'"
+    rc, df_out, _ = await _ssh(remote, disk_cmd, timeout=10)
     if rc == 0 and df_out.strip():
         try:
             free_gb = int(df_out.strip().rstrip("G"))
@@ -1319,10 +1353,8 @@ async def remote_finetune(
         # cmd handles %USERPROFILE% expansion; no WSL bridging needed.
         mkdir_cmd = f'if not exist "{scp_rdir}" mkdir "{scp_rdir}"'
     elif remote.use_wsl:
-        rel = remote.remote_dir
-        if rel.startswith("~/"):
-            rel = rel[2:]
-        mkdir_cmd = f"if not exist %USERPROFILE%\\{rel} mkdir %USERPROFILE%\\{rel}"
+        win_path = _to_windows_path(remote.remote_dir)
+        mkdir_cmd = f'if not exist "{win_path}" mkdir "{win_path}"'
     else:
         mkdir_cmd = f"mkdir -p {shlex.quote(scp_rdir)}"
     rc, _, err = await _run_ssh(remote, mkdir_cmd)
@@ -1454,10 +1486,9 @@ async def remote_finetune(
         train_cmd += " --resume"
 
     # Acquire lock to prevent concurrent training (Linux/WSL only — Windows
-    # has no flock equivalent and skipping concurrent-training detection is
-    # a documented non-goal in plans/shipped/remote-pipeline-windows.md.
-    # Worst case on Windows: two concurrent trainings stomp each other, but
-    # that requires deliberate user action.)
+    # has no flock equivalent and concurrent-training detection is
+    # intentionally skipped there. Worst case on Windows: two concurrent
+    # trainings stomp each other, but that requires deliberate user action.)
     if platform != "windows":
         lock_cmd = (
             "flock -n /tmp/tokenpal-training.lock -c "
@@ -1854,10 +1885,8 @@ async def remote_setup(
     # Create remote directory
     scp_rdir = remote.remote_dir
     if remote.use_wsl:
-        rel = scp_rdir
-        if rel.startswith("~/"):
-            rel = rel[2:]
-        mkdir_cmd = f"if not exist %USERPROFILE%\\{rel} mkdir %USERPROFILE%\\{rel}"
+        win_path = _to_windows_path(scp_rdir)
+        mkdir_cmd = f'if not exist "{win_path}" mkdir "{win_path}"'
     else:
         mkdir_cmd = f"mkdir -p {shlex.quote(scp_rdir)}"
     rc, _, err = await _run_ssh(remote, mkdir_cmd)
