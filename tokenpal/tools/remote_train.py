@@ -453,7 +453,9 @@ def _hash_training_sources() -> str:
 def _build_bundle(profile_json_path: Path | None = None) -> Path:
     """Build a training bundle tarball.
 
-    Contains: tokenpal wheel, install.sh, optional profile JSON, source hash.
+    Contains: tokenpal wheel, install.sh, install.ps1, optional profile JSON,
+    source hash. Both install scripts are always bundled so a single bundle
+    works on Linux/WSL (install.sh) or native Windows (install.ps1) remotes.
     Returns the path to the tarball (in a temp directory).
     """
     bundle_dir = Path(tempfile.mkdtemp()) / "tokenpal-training-bundle"
@@ -473,6 +475,11 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     install_sh = bundle_dir / "install.sh"
     install_sh.write_text(_INSTALL_SH)
     install_sh.chmod(0o755)
+
+    # Write install.ps1 (native Windows installer)
+    install_ps1 = bundle_dir / "install.ps1"
+    install_ps1.write_text(_INSTALL_PS1)
+    # No chmod on .ps1 — PowerShell execution policy controls this, not file perms
 
     # Write source hash
     source_hash = _hash_training_sources()
@@ -1042,6 +1049,20 @@ async def remote_finetune(
             "config", "No remote host configured. Set [finetune.remote] host in config.toml",
         )
 
+    # Invalid combo: native Windows path cannot run through WSL bash.
+    # Users migrating from the WSL pipeline must explicitly set use_wsl=false.
+    if remote.platform == "windows" and remote.use_wsl:
+        raise RemoteTrainError(
+            "config",
+            "platform='windows' is incompatible with use_wsl=true — "
+            "native Windows means cmd.exe + PowerShell, not WSL bash.",
+            hint=(
+                "Set use_wsl=false in [finetune.remote]. The existing WSL "
+                "pipeline stays available by leaving platform='auto' or "
+                "'linux' and keeping use_wsl=true."
+            ),
+        )
+
     slug = slugify(profile.character)
     q_slug = shlex.quote(slug)
     scp_rdir = remote.remote_dir  # raw path for SCP (no shell quoting)
@@ -1070,17 +1091,30 @@ async def remote_finetune(
     _progress("GPU verified.")
 
     # -- Resolve remote platform (linux vs windows) --
-    # Explicit config wins; "auto" triggers an SSH probe. Stored as a local
-    # variable for this run — later commits in the windows pipeline plan
-    # will use it to route to native-Windows code paths (install.ps1,
-    # Start-Process training launch, etc). For commit 1 this is
-    # infrastructure only; the Linux path is unchanged.
+    # Explicit config wins; "auto" triggers an SSH probe. Windows routes
+    # through native cmd.exe + PowerShell; linux routes through bash.
     if remote.platform == "auto":
         platform = await _detect_remote_platform(_ssh, remote)
         _progress(f"Detected remote platform: {platform}")
     else:
         platform = remote.platform
         _progress(f"Using configured platform: {platform}")
+
+    # Reassign path shapes for Windows. cmd.exe expects backslash separators
+    # and %USERPROFILE% expansion instead of ~. Pre-existing Linux/WSL paths
+    # stay unchanged on the else branch.
+    if platform == "windows":
+        # Expand ~/... to %USERPROFILE%\... for cmd.exe compatibility.
+        if scp_rdir.startswith("~/"):
+            rel = scp_rdir[2:].replace("/", "\\")
+            scp_rdir = f"%USERPROFILE%\\{rel}"
+            cmd_rdir = scp_rdir
+        else:
+            # Already an absolute or Windows-style path — normalize slashes
+            cmd_rdir = scp_rdir.replace("/", "\\")
+            scp_rdir = cmd_rdir
+        model_dir = f"{cmd_rdir}\\model"
+        venv_py = f"{cmd_rdir}\\.venv\\Scripts\\python.exe"
 
     # -- Preflight: check disk space --
     rc, df_out, _ = await _ssh(
@@ -1135,7 +1169,11 @@ async def remote_finetune(
         await _ssh(remote, f"tmux kill-session -t tokenpal-{slug}", timeout=5)
 
     # -- Create remote working directory --
-    if remote.use_wsl:
+    if platform == "windows":
+        # Native Windows via cmd.exe (OpenSSH's default shell on Windows).
+        # cmd handles %USERPROFILE% expansion; no WSL bridging needed.
+        mkdir_cmd = f'if not exist "{scp_rdir}" mkdir "{scp_rdir}"'
+    elif remote.use_wsl:
         rel = remote.remote_dir
         if rel.startswith("~/"):
             rel = rel[2:]
@@ -1183,7 +1221,15 @@ async def remote_finetune(
             raise RemoteTrainError("push", f"SCP failed: {err[:200]}")
 
         # Extract and install
-        if remote.use_wsl:
+        if platform == "windows":
+            # Windows 10+ ships bsdtar; extract then invoke install.ps1.
+            # PowerShell is spawned from cmd.exe with -ExecutionPolicy Bypass
+            # to sidestep the default Restricted policy without persistent changes.
+            extract_cmd = (
+                f'cd /d "{cmd_rdir}" && tar xzf bundle.tar.gz && '
+                f'powershell -ExecutionPolicy Bypass -File install.ps1'
+            )
+        elif remote.use_wsl:
             # SCP landed on Windows filesystem. install.sh will self-relocate
             # from /mnt/c/... to ~/tokenpal-training/ automatically.
             win_mount = await _resolve_wsl_mount(remote)
@@ -1223,9 +1269,14 @@ async def remote_finetune(
 
     # -- Ensure base model is available on remote --
     _progress("Checking base model on remote...")
-    await _ensure_base_model(
-        remote, config.base_model, model_dir, venv_py, _ssh, _progress,
-    )
+    if platform == "windows":
+        await _ensure_base_model_windows(
+            remote, config.base_model, model_dir, venv_py, _ssh, _progress,
+        )
+    else:
+        await _ensure_base_model(
+            remote, config.base_model, model_dir, venv_py, _ssh, _progress,
+        )
 
     # -- Prepare training data (using installed entry point) --
     _progress(f"Preparing training data ({profile.line_count} lines)...")

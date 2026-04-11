@@ -2,6 +2,7 @@
 
 from __future__ import annotations  # noqa: I001
 
+import subprocess
 import tarfile
 from pathlib import Path
 from unittest.mock import patch
@@ -401,6 +402,135 @@ async def test_ensure_base_model_windows_no_local_fallback():
     err = exc_info.value
     assert err.step == "model_push"
     assert "no local fallback" in err.hint.lower()
+
+
+# ---------------------------------------------------------------------------
+# Windows routing tests (commit 4a of remote-pipeline-windows)
+# ---------------------------------------------------------------------------
+
+
+async def test_remote_finetune_rejects_windows_with_use_wsl():
+    """platform='windows' + use_wsl=true is nonsensical — reject fast."""
+    config = _make_config(platform="windows", use_wsl=True)
+
+    with pytest.raises(RemoteTrainError) as exc_info:
+        await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert err.step == "config"
+    assert "incompatible" in err.detail.lower()
+    assert "use_wsl=false" in err.hint
+
+
+async def test_remote_finetune_windows_reassigns_paths_to_backslash(tmp_path):
+    """On platform=windows, cmd_rdir/model_dir/venv_py get backslash shapes."""
+    config = _make_config(platform="windows", use_wsl=False)
+    config.output_dir = str(tmp_path)
+    progress_msgs: list[str] = []
+
+    # Mock the Windows base model helper to observe what model_dir is passed.
+    captured = {}
+
+    async def capture_ensure(remote, base_model, model_dir, venv_py, _ssh, progress):
+        captured["model_dir"] = model_dir
+        captured["venv_py"] = venv_py
+        # Raise to short-circuit the rest of remote_finetune
+        raise RemoteTrainError("test_stop", "captured")
+
+    ssh = _MockSSH({
+        "uname -s": (0, "Microsoft Windows [Version 10.0.22631.3007]\n", ""),
+        **_preflight_clean(),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+        ".source-hash": (0, _hash_training_sources(), ""),  # skip bundle push
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        patch("tokenpal.tools.remote_train._ensure_base_model_windows", capture_ensure),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+    ):
+        with pytest.raises(RemoteTrainError, match="test_stop"):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # Windows path reshapes: ~/tokenpal-training → %USERPROFILE%\tokenpal-training
+    assert "model_dir" in captured, f"helper not called; progress: {progress_msgs}"
+    assert captured["model_dir"].startswith("%USERPROFILE%\\")
+    assert captured["model_dir"].endswith("\\model")
+    assert "/" not in captured["model_dir"]  # no forward slashes
+    assert captured["venv_py"].endswith("\\.venv\\Scripts\\python.exe")
+    assert "/" not in captured["venv_py"]
+
+
+async def test_remote_finetune_windows_dispatches_to_windows_base_model_helper():
+    """platform=windows routes base model check to _ensure_base_model_windows,
+    NOT the Linux _ensure_base_model (which uses find/grep)."""
+    config = _make_config(platform="windows", use_wsl=False)
+
+    linux_called = False
+    windows_called = False
+
+    async def linux_helper(*args, **kwargs):
+        nonlocal linux_called
+        linux_called = True
+        raise RemoteTrainError("test", "linux helper was called")
+
+    async def windows_helper(*args, **kwargs):
+        nonlocal windows_called
+        windows_called = True
+        raise RemoteTrainError("test_stop", "windows helper was called")
+
+    ssh = _MockSSH({
+        "uname -s": (0, "Microsoft Windows\n", ""),
+        **_preflight_clean(),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+        ".source-hash": (0, _hash_training_sources(), ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        patch("tokenpal.tools.remote_train._ensure_base_model", linux_helper),
+        patch("tokenpal.tools.remote_train._ensure_base_model_windows", windows_helper),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+    ):
+        with pytest.raises(RemoteTrainError):
+            await remote_finetune(_make_profile(), config)
+
+    assert windows_called, "Windows helper should have been invoked"
+    assert not linux_called, "Linux helper must NOT be invoked on Windows"
+
+
+def test_build_bundle_includes_install_ps1(tmp_path):
+    """Bundle contains both install.sh and install.ps1 so one bundle works
+    on either platform without a platform-aware build step."""
+    from tokenpal.tools.remote_train import _build_bundle
+
+    fake_wheel = tmp_path / "tokenpal-0.1.0-py3-none-any.whl"
+    fake_wheel.write_text("fake wheel")
+
+    def mock_build(args, **kwargs):
+        import shutil
+        outdir = args[args.index("--outdir") + 1]
+        shutil.copy2(fake_wheel, outdir)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    with patch("subprocess.run", side_effect=mock_build):
+        tarball = _build_bundle()
+
+    # Extract and verify both scripts are present
+    with tarfile.open(tarball, "r:gz") as tar:
+        names = tar.getnames()
+    assert "install.sh" in names, f"install.sh missing from bundle; got: {names}"
+    assert "install.ps1" in names, f"install.ps1 missing from bundle; got: {names}"
+
+    # Cleanup
+    import shutil
+    shutil.rmtree(tarball.parent, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
