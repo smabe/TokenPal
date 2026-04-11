@@ -16,6 +16,11 @@ from tokenpal.tools.remote_train import (
     RemoteTrainError,
     _INSTALL_PS1,
     _INSTALL_SH,
+    _TRAIN_PS1,
+    _build_checkpoint_check_cmd,
+    _build_cleanup_cmd,
+    _build_merge_cmd,
+    _build_remote_sha256_cmd,
     _build_windows_base_model_check,
     _detect_remote_platform,
     _ensure_base_model,
@@ -506,8 +511,8 @@ async def test_remote_finetune_windows_dispatches_to_windows_base_model_helper()
 
 
 def test_build_bundle_includes_install_ps1(tmp_path):
-    """Bundle contains both install.sh and install.ps1 so one bundle works
-    on either platform without a platform-aware build step."""
+    """Bundle contains install.sh + install.ps1 + run_train.ps1 so one bundle
+    works on either platform without a platform-aware build step."""
     from tokenpal.tools.remote_train import _build_bundle
 
     fake_wheel = tmp_path / "tokenpal-0.1.0-py3-none-any.whl"
@@ -522,15 +527,266 @@ def test_build_bundle_includes_install_ps1(tmp_path):
     with patch("subprocess.run", side_effect=mock_build):
         tarball = _build_bundle()
 
-    # Extract and verify both scripts are present
+    # Extract and verify all 3 scripts are present
     with tarfile.open(tarball, "r:gz") as tar:
         names = tar.getnames()
     assert "install.sh" in names, f"install.sh missing from bundle; got: {names}"
     assert "install.ps1" in names, f"install.ps1 missing from bundle; got: {names}"
+    assert "run_train.ps1" in names, f"run_train.ps1 missing from bundle; got: {names}"
 
     # Cleanup
     import shutil
     shutil.rmtree(tarball.parent, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# _TRAIN_PS1 content tests (commit 4b)
+# ---------------------------------------------------------------------------
+
+
+def test_train_ps1_is_parameterized():
+    """The training script is parameterized via PS params so it can be
+    pre-baked into the bundle and invoked with per-run values."""
+    assert "[Parameter(Mandatory)][string]$VenvPy" in _TRAIN_PS1
+    assert "[Parameter(Mandatory)][string]$ModelDir" in _TRAIN_PS1
+    assert "[Parameter(Mandatory)][string]$CmdRdir" in _TRAIN_PS1
+    assert "[switch]$Resume" in _TRAIN_PS1
+
+
+def test_train_ps1_streams_via_tee_object():
+    """Tee-Object splits the pipe to both stdout (for SSH progress callback)
+    and train.log (for post-mortem)."""
+    assert "Tee-Object -FilePath 'train.log'" in _TRAIN_PS1
+
+
+def test_train_ps1_emits_exit_code_marker():
+    """train.log must end with EXIT_CODE=N for the Python-side check."""
+    assert "EXIT_CODE=$exitCode" in _TRAIN_PS1
+    assert 'Add-Content -Path \'train.log\'' in _TRAIN_PS1
+
+
+def test_train_ps1_sets_hf_hub_offline():
+    """HF_HUB_OFFLINE=1 prevents HuggingFace from trying to re-download
+    the base model at training time."""
+    assert '$env:HF_HUB_OFFLINE = "1"' in _TRAIN_PS1
+
+
+# ---------------------------------------------------------------------------
+# Platform-varying command helpers (commit 4b)
+# ---------------------------------------------------------------------------
+
+
+def test_build_checkpoint_check_cmd_linux():
+    cmd = _build_checkpoint_check_cmd("linux", "/home/user/tokenpal-training")
+    assert "ls -d" in cmd
+    assert "checkpoint-*" in cmd
+    assert "tail -1" in cmd
+
+
+def test_build_checkpoint_check_cmd_windows():
+    cmd = _build_checkpoint_check_cmd("windows", "C:\\users\\foo\\tokenpal")
+    assert "powershell" in cmd
+    assert "Get-ChildItem" in cmd
+    assert "checkpoint-*" in cmd
+    assert "Select-Object -Last 1" in cmd
+    # Must not use POSIX primitives
+    assert "ls -d" not in cmd
+    assert "tail -1" not in cmd
+
+
+def test_build_merge_cmd_linux_uses_bash_env_syntax():
+    cmd = _build_merge_cmd(
+        "linux", "/venv/bin/python", "/home/user", "/home/user/model",
+    )
+    assert "HF_HUB_OFFLINE=1" in cmd
+    assert "finetune_voice merge" in cmd
+    assert "--adapter output/adapter" in cmd
+    assert "--output output/merged" in cmd
+
+
+def test_build_merge_cmd_windows_uses_powershell_env_syntax():
+    cmd = _build_merge_cmd(
+        "windows",
+        "C:\\tokenpal\\.venv\\Scripts\\python.exe",
+        "C:\\tokenpal",
+        "C:\\tokenpal\\model",
+    )
+    assert "powershell" in cmd
+    assert "$env:HF_HUB_OFFLINE" in cmd
+    assert "Set-Location" in cmd
+    assert "finetune_voice merge" in cmd
+    # Bash-style env var syntax must NOT appear
+    assert "HF_HUB_OFFLINE=1 " not in cmd
+
+
+def test_build_remote_sha256_cmd_linux_uses_sha256sum():
+    cmd = _build_remote_sha256_cmd("linux", "/home/user/tokenpal")
+    assert "sha256sum" in cmd
+    assert "*.safetensors" in cmd
+    assert "find" in cmd
+
+
+def test_build_remote_sha256_cmd_windows_uses_get_filehash():
+    cmd = _build_remote_sha256_cmd("windows", "C:\\tokenpal")
+    assert "powershell" in cmd
+    assert "Get-FileHash" in cmd
+    assert "SHA256" in cmd
+    assert "*.safetensors" in cmd
+    assert "sha256sum" not in cmd
+    assert "find " not in cmd
+
+
+def test_build_cleanup_cmd_linux_uses_rm():
+    cmd = _build_cleanup_cmd("linux", "/home/user/tokenpal")
+    assert "rm -rf" in cmd
+    assert "install.sh" in cmd
+    assert "bundle.tar.gz" in cmd
+
+
+def test_build_cleanup_cmd_windows_uses_del_and_rmdir():
+    cmd = _build_cleanup_cmd("windows", "C:\\tokenpal")
+    assert "del /Q" in cmd
+    assert "rmdir /S /Q" in cmd
+    # Must clean up both install scripts AND the new run_train.ps1
+    assert "install.sh" in cmd
+    assert "install.ps1" in cmd
+    assert "run_train.ps1" in cmd
+    assert "bundle.tar.gz" in cmd
+    # POSIX commands must not appear
+    assert "rm -rf" not in cmd
+
+
+# ---------------------------------------------------------------------------
+# Windows training execution path (commit 4b integration)
+# ---------------------------------------------------------------------------
+
+
+async def test_remote_finetune_windows_skips_flock(tmp_path):
+    """platform=windows bypasses the flock acquire check entirely."""
+    config = _make_config(platform="windows", use_wsl=False)
+    config.output_dir = str(tmp_path)
+    progress_msgs: list[str] = []
+
+    captured_calls: list[str] = []
+
+    async def smart_ssh(remote, cmd, progress=None, timeout=3600):
+        captured_calls.append(cmd)
+        if "uname -s" in cmd:
+            return (0, "Microsoft Windows\n", "")
+        if "import torch" in cmd:
+            return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
+        if "nvidia-smi" in cmd:
+            return (0, "GPU OK", "")
+        if "df -BG" in cmd:
+            return (0, "50G", "")
+        if "mkdir" in cmd or "if not exist" in cmd:
+            return (0, "", "")
+        if ".source-hash" in cmd:
+            return (0, _hash_training_sources(), "")
+        if "finetune_voice prep" in cmd:
+            return (0, "", "")
+        if "checkpoint" in cmd:
+            return (1, "", "")
+        # Training call: simulate immediate success with EXIT_CODE=0
+        if "run_train.ps1" in cmd:
+            return (0, "EXIT_CODE=0\n", "")
+        if "train.log" in cmd:
+            return (0, "EXIT_CODE=0", "")
+        if "finetune_voice merge" in cmd:
+            return (0, "merged", "")
+        if "sha256" in cmd or "Get-FileHash" in cmd:
+            return (0, "", "")
+        return (0, "", "")
+
+    async def succeeding_scp(remote, local, remote_path, *, pull=False, recursive=False, timeout=1800):
+        return (0, "")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", smart_ssh),
+        patch("tokenpal.tools.remote_train._run_scp", succeeding_scp),
+        patch("tokenpal.tools.remote_train._ensure_base_model_windows"),
+        # Stop before Ollama registration (we only care about the pre-ollama path)
+        patch(
+            "tokenpal.tools.finetune_voice.register_ollama",
+            return_value=False,
+        ),
+    ):
+        with pytest.raises(RemoteTrainError, match="register"):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # The training-time flock ACQUIRE (distinct from the preflight's own
+    # lock-state probe) must NOT have fired on Windows. The training acquire
+    # uses `-c 'echo locked'`; the preflight probe uses `-c true`.
+    assert not any(
+        "flock -n /tmp/tokenpal-training.lock -c" in c and "'echo locked'" in c
+        for c in captured_calls
+    ), f"Windows path should skip training-time flock; got calls: {captured_calls}"
+    # No tmux session management should have fired
+    assert not any("tmux new-session" in c for c in captured_calls)
+    # tmux has-session is used BY the training poll loop (which we skip on
+    # Windows) — the preflight's own tmux probe IS allowed.
+    assert not any(
+        "tmux has-session -t tokenpal-" in c and "&& echo running" in c
+        for c in captured_calls
+    )
+    # Windows must have invoked run_train.ps1
+    assert any("run_train.ps1" in c for c in captured_calls), (
+        f"Windows path should have invoked run_train.ps1; got: {captured_calls}"
+    )
+    # Progress should acknowledge skipped flock
+    assert any(
+        "concurrent-training detection skipped" in msg.lower()
+        for msg in progress_msgs
+    )
+
+
+async def test_remote_finetune_windows_training_failure_includes_ssh_drop_hint(tmp_path):
+    """If training returns non-zero, the error hint mentions keeping SSH open
+    (Windows has no tmux survival, user-visible constraint)."""
+    config = _make_config(platform="windows", use_wsl=False)
+    config.output_dir = str(tmp_path)
+
+    async def smart_ssh(remote, cmd, progress=None, timeout=3600):
+        if "uname -s" in cmd:
+            return (0, "Microsoft Windows\n", "")
+        if "import torch" in cmd:
+            return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
+        if "nvidia-smi" in cmd:
+            return (0, "GPU OK", "")
+        if "df -BG" in cmd:
+            return (0, "50G", "")
+        if "mkdir" in cmd or "if not exist" in cmd:
+            return (0, "", "")
+        if ".source-hash" in cmd:
+            return (0, _hash_training_sources(), "")
+        if "finetune_voice prep" in cmd:
+            return (0, "", "")
+        if "checkpoint" in cmd:
+            return (1, "", "")
+        if "run_train.ps1" in cmd:
+            return (1, "", "CUDA out of memory")  # training fails
+        return (0, "", "")
+
+    async def succeeding_scp(remote, local, remote_path, *, pull=False, recursive=False, timeout=1800):
+        return (0, "")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", smart_ssh),
+        patch("tokenpal.tools.remote_train._run_scp", succeeding_scp),
+        patch("tokenpal.tools.remote_train._ensure_base_model_windows"),
+    ):
+        with pytest.raises(RemoteTrainError, match="train") as exc_info:
+            await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert err.step == "train"
+    assert err.hint, "Windows training failure should include actionable hint"
+    assert "tmux" in err.hint.lower() or "survive" in err.hint.lower()
+    assert "voice finetune" in err.hint.lower()
 
 
 # ---------------------------------------------------------------------------

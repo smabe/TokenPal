@@ -332,6 +332,147 @@ Write-Host "Install complete."
 """
 
 
+# Native Windows training runner — parameterized at launch time. Lives in
+# the bundle alongside install.ps1 so we don't have to build+push it per run.
+# Invoked by the Windows training launch path as:
+#   powershell -ExecutionPolicy Bypass -File run_train.ps1
+#     -VenvPy "C:\...\python.exe" -ModelDir "C:\...\model"
+#     -CmdRdir "C:\..." [-Resume]
+# Streams training output to both stdout (so the _ssh progress callback
+# picks it up in real-time) AND train.log (for post-mortem inspection).
+# Blocks until training completes — the Windows path has no tmux, so
+# this script runs inside the SSH session and exits with the training
+# exit code.
+_TRAIN_PS1 = r"""#Requires -Version 5.1
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$VenvPy,
+    [Parameter(Mandatory)][string]$ModelDir,
+    [Parameter(Mandatory)][string]$CmdRdir,
+    [switch]$Resume
+)
+
+# Don't abort on Python warnings — we want the exit code to reflect
+# training's own success/failure, not stderr noise.
+$ErrorActionPreference = "Continue"
+$env:HF_HUB_OFFLINE = "1"
+
+Set-Location $CmdRdir
+
+$trainArgs = @(
+    '-m', 'tokenpal.tools.finetune_voice', 'train',
+    '--data', 'data/',
+    '--output', 'output/',
+    '--base-model', $ModelDir
+)
+if ($Resume) { $trainArgs += '--resume' }
+
+# Tee-Object splits the pipe to both the file and stdout. $LASTEXITCODE
+# after a pipeline captures the LAST command's exit (Tee-Object's), so
+# we grab the training process exit via the $? shortcut + manual capture.
+& $VenvPy @trainArgs 2>&1 | Tee-Object -FilePath 'train.log'
+$exitCode = $LASTEXITCODE
+
+Add-Content -Path 'train.log' -Value "EXIT_CODE=$exitCode"
+exit $exitCode
+"""
+
+
+def _build_checkpoint_check_cmd(platform: str, cmd_rdir: str) -> str:
+    """Return a shell command that prints the latest checkpoint directory
+    name if one exists, or empty output otherwise.
+
+    Linux: `ls -d ... | tail -1` (unchanged from original)
+    Windows: PowerShell `Get-ChildItem ... | Select -Last 1 -Expand Name`
+    """
+    if platform == "windows":
+        return (
+            f'powershell -Command "Get-ChildItem '
+            f"'{cmd_rdir}\\output\\adapter' -Directory -ErrorAction SilentlyContinue "
+            f'| Where-Object {{ $_.Name -like \'checkpoint-*\' }} '
+            f'| Select-Object -Last 1 -ExpandProperty Name"'
+        )
+    return f"ls -d {cmd_rdir}/output/adapter/checkpoint-* 2>/dev/null | tail -1"
+
+
+def _build_merge_cmd(
+    platform: str, venv_py: str, cmd_rdir: str, raw_model_dir: str,
+) -> str:
+    """Return the command to run `tokenpal.tools.finetune_voice merge` on
+    the remote. Differs per platform because env var syntax and invocation
+    shell differ: bash uses `HF_HUB_OFFLINE=1 python`, PowerShell uses
+    `$env:HF_HUB_OFFLINE = '1'; & python`.
+    """
+    if platform == "windows":
+        return (
+            f'powershell -ExecutionPolicy Bypass -Command '
+            f'"$env:HF_HUB_OFFLINE = \'1\'; '
+            f"Set-Location '{cmd_rdir}'; "
+            f"& '{venv_py}' -m tokenpal.tools.finetune_voice merge "
+            f"--adapter output/adapter --output output/merged "
+            f'--base-model \'{raw_model_dir}\'"'
+        )
+    return (
+        f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
+        f"tokenpal.tools.finetune_voice merge "
+        f"--adapter output/adapter --output output/merged "
+        f"--base-model {raw_model_dir}"
+    )
+
+
+def _build_remote_sha256_cmd(platform: str, cmd_rdir: str) -> str:
+    """Return a command that emits a single hex digest representing the
+    combined hash of all .safetensors files under the merged output dir.
+    Matches what the local Python sha256 computation expects to compare against.
+
+    Linux: `find ... -exec sha256sum {} + | sort | sha256sum | cut -d' ' -f1`
+    Windows: PowerShell pipeline emitting the same shape via Get-FileHash.
+    """
+    if platform == "windows":
+        # Compute per-file SHA-256 hashes, sort deterministically, then
+        # hash the concatenated "HASH  name" lines to match the Linux
+        # format produced by `sha256sum file | sort | sha256sum`.
+        return (
+            f'powershell -Command "'
+            f"$files = Get-ChildItem '{cmd_rdir}\\output\\merged' "
+            f"-Recurse -Filter '*.safetensors' -ErrorAction SilentlyContinue "
+            f'| Sort-Object Name; '
+            f'$combined = ($files | ForEach-Object '
+            f'{{ $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(); '
+            f'\\"$h  $($_.Name)\\" }}) -join [Environment]::NewLine; '
+            f"$bytes = [Text.Encoding]::UTF8.GetBytes($combined + [Environment]::NewLine); "
+            f'$sha = [Security.Cryptography.SHA256]::Create(); '
+            f'$hash = $sha.ComputeHash($bytes); '
+            f'($hash | ForEach-Object {{ $_.ToString(\\"x2\\") }}) -join \\"\\""'
+        )
+    return (
+        f"find {cmd_rdir}/output/merged -type f -name '*.safetensors' "
+        f"-exec sha256sum {{}} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1"
+    )
+
+
+def _build_cleanup_cmd(platform: str, cmd_rdir: str) -> str:
+    """Return the command to clean up transient files after a successful run.
+    Removes data/, output/, profile JSONs, the wheel, both install scripts,
+    and the bundle tarball. Keeps the base model + venv + source hash.
+    """
+    if platform == "windows":
+        # cmd.exe equivalents. `del /Q` is quiet, `rmdir /S /Q` is recursive.
+        # 2>nul suppresses "file not found" noise.
+        return (
+            f'del /Q "{cmd_rdir}\\*.json" "{cmd_rdir}\\*.whl" '
+            f'"{cmd_rdir}\\install.sh" "{cmd_rdir}\\install.ps1" '
+            f'"{cmd_rdir}\\run_train.ps1" "{cmd_rdir}\\bundle.tar.gz" 2>nul & '
+            f'rmdir /S /Q "{cmd_rdir}\\data" 2>nul & '
+            f'rmdir /S /Q "{cmd_rdir}\\output" 2>nul'
+        )
+    return (
+        f"rm -rf {cmd_rdir}/data {cmd_rdir}/output "
+        f"{cmd_rdir}/*.json {cmd_rdir}/*.whl {cmd_rdir}/install.sh "
+        f"{cmd_rdir}/bundle.tar.gz"
+    )
+
+
 def _build_windows_base_model_check(model_dir: str) -> str:
     """Build a PowerShell command that emits 'BASE_MODEL_OK' iff the model
     directory at `model_dir` has config.json with a model_type field AND at
@@ -480,6 +621,10 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     install_ps1 = bundle_dir / "install.ps1"
     install_ps1.write_text(_INSTALL_PS1)
     # No chmod on .ps1 — PowerShell execution policy controls this, not file perms
+
+    # Write run_train.ps1 (native Windows training runner, parameterized)
+    run_train_ps1 = bundle_dir / "run_train.ps1"
+    run_train_ps1.write_text(_TRAIN_PS1)
 
     # Write source hash
     source_hash = _hash_training_sources()
@@ -1288,7 +1433,7 @@ async def remote_finetune(
     if rc != 0:
         raise RemoteTrainError("prep", f"Dataset prep failed:\n{err[-500:]}")
 
-    # -- LoRA training (in tmux for network resilience) --
+    # -- LoRA training --
     _progress("Starting LoRA training...")
     raw_model_dir = model_dir  # not quoted — may contain $HOME for shell expansion
     tmux_session = f"tokenpal-{slug}"
@@ -1300,102 +1445,147 @@ async def remote_finetune(
     )
 
     # Check for existing checkpoints (resume support)
-    rc, ckpt_out, _ = await _ssh(
-        remote,
-        f"ls -d {cmd_rdir}/output/adapter/checkpoint-* 2>/dev/null | tail -1",
-        timeout=10,
-    )
-    if rc == 0 and ckpt_out.strip():
-        _progress(f"Resuming from checkpoint: {ckpt_out.strip().split('/')[-1]}")
+    ckpt_check_cmd = _build_checkpoint_check_cmd(platform, cmd_rdir)
+    rc, ckpt_out, _ = await _ssh(remote, ckpt_check_cmd, timeout=10)
+    has_checkpoint = rc == 0 and bool(ckpt_out.strip())
+    if has_checkpoint:
+        ckpt_name = ckpt_out.strip().split("/")[-1]
+        _progress(f"Resuming from checkpoint: {ckpt_name}")
         train_cmd += " --resume"
 
-    # Acquire lock to prevent concurrent training
-    lock_cmd = (
-        "flock -n /tmp/tokenpal-training.lock -c "
-        "'echo locked' 2>/dev/null || echo busy"
-    )
-    rc, lock_out, _ = await _ssh(remote, lock_cmd, timeout=10)
-    if "busy" in lock_out:
-        raise RemoteTrainError(
-            "train",
-            "Another training job is already running on this machine. "
-            "Wait for it to finish or kill it manually.",
+    # Acquire lock to prevent concurrent training (Linux/WSL only — Windows
+    # has no flock equivalent and skipping concurrent-training detection is
+    # a documented non-goal in plans/shipped/remote-pipeline-windows.md.
+    # Worst case on Windows: two concurrent trainings stomp each other, but
+    # that requires deliberate user action.)
+    if platform != "windows":
+        lock_cmd = (
+            "flock -n /tmp/tokenpal-training.lock -c "
+            "'echo locked' 2>/dev/null || echo busy"
         )
-
-    # Write training command to a script file to avoid quoting issues
-    # with tmux + flock + $HOME expansion through WSL SSH.
-    # Base64-encode to survive all quoting layers.
-    import base64
-    script_content = (
-        f"#!/bin/bash\nset -eo pipefail\n"
-        f"{train_cmd} 2>&1 | tee {cmd_rdir}/train.log\n"
-        f"echo EXIT_CODE=$? >> {cmd_rdir}/train.log\n"
-    )
-    # Resolve $HOME in the script since it will run in a non-login shell
-    # via flock — replace $HOME with the expanded path
-    rc, home_out, _ = await _ssh(remote, "echo $HOME", timeout=5)
-    if rc == 0 and home_out.strip():
-        script_content = script_content.replace("$HOME", home_out.strip())
-
-    # ROCm/WSL needs these env vars for GPU access and RDNA 4 compat
-    if remote.gpu_backend != "cuda":
-        rc, gfx_out, _ = await _ssh(
-            remote,
-            "HSA_ENABLE_DXG_DETECTION=1 rocminfo 2>/dev/null"
-            " | grep -oP 'gfx\\d+' | grep -v gfx0 | head -1",
-            timeout=15,
-        )
-        gfx_arch = gfx_out.strip() if rc == 0 else ""
-        if gfx_arch:
-            env_lines = "export HSA_ENABLE_DXG_DETECTION=1\n"
-            if gfx_arch.startswith("gfx12"):
-                env_lines += "export HSA_OVERRIDE_GFX_VERSION=11.0.0\n"
-            script_content = script_content.replace(
-                "#!/bin/bash\n", f"#!/bin/bash\n{env_lines}"
+        rc, lock_out, _ = await _ssh(remote, lock_cmd, timeout=10)
+        if "busy" in lock_out:
+            raise RemoteTrainError(
+                "train",
+                "Another training job is already running on this machine. "
+                "Wait for it to finish or kill it manually.",
             )
+    else:
+        _progress("Note: concurrent-training detection skipped (Windows).")
 
-    b64 = base64.b64encode(script_content.encode()).decode()
-    write_cmd = (
-        f"echo {b64} | base64 -d > {cmd_rdir}/run_train.sh && "
-        f"chmod +x {cmd_rdir}/run_train.sh"
-    )
-    await _ssh(remote, write_cmd, timeout=10)
-
-    # Run in tmux so it survives SSH drops
-    tmux_cmd = (
-        f"tmux kill-session -t {tmux_session} 2>/dev/null; "
-        f"tmux new-session -d -s {tmux_session} "
-        f"'flock /tmp/tokenpal-training.lock {cmd_rdir}/run_train.sh'"
-    )
-    rc, _, err = await _ssh(remote, tmux_cmd, timeout=30)
-    if rc != 0:
-        raise RemoteTrainError("train", f"Failed to start training: {err[:200]}")
-
-    # Poll for completion
-    _progress("Training in progress (SSH-safe, survives disconnects)...")
-    while True:
-        await asyncio.sleep(POLL_INTERVAL_SECONDS)
-
-        # Check if tmux session still exists
-        rc, out, _ = await _ssh(
-            remote,
-            f"tmux has-session -t {tmux_session} 2>/dev/null && echo running || echo done",
-            timeout=15,
+    if platform == "windows":
+        # Native Windows: synchronous SSH call into the pre-bundled
+        # run_train.ps1 script. No tmux, no flock, no base64 encoding —
+        # just parameterize the script and let PowerShell run it.
+        #
+        # SSH session MUST stay open for the training duration (~10 min);
+        # SSH-survivable training is a documented non-goal for this MVP.
+        # Progress streams via the _ssh callback in real time (Tee-Object
+        # in the .ps1 pipes to both stdout and train.log).
+        resume_arg = " -Resume" if has_checkpoint else ""
+        windows_train_cmd = (
+            f'powershell -ExecutionPolicy Bypass -File '
+            f'"{cmd_rdir}\\run_train.ps1" '
+            f'-VenvPy "{venv_py}" '
+            f'-ModelDir "{raw_model_dir}" '
+            f'-CmdRdir "{cmd_rdir}"'
+            f'{resume_arg}'
         )
-        if "done" in out:
-            break
-
-        # Stream last line of log for progress
-        rc, log_tail, _ = await _ssh(
-            remote, f"tail -1 {cmd_rdir}/train.log 2>/dev/null", timeout=10,
+        _progress(
+            "Training in progress (~10 min). Keep this SSH session open — "
+            "the Windows path has no tmux to survive disconnects."
         )
-        if rc == 0 and log_tail.strip():
-            _progress(log_tail.strip())
+        rc, _out, err = await _ssh(remote, windows_train_cmd, progress, timeout=3600)
+        if rc != 0:
+            target = _ssh_target(remote)
+            raise RemoteTrainError(
+                "train",
+                f"Training failed (exit {rc}): {err[-500:] if err else ''}",
+                hint=(
+                    f"SSH session dropped? Training on Windows doesn't survive "
+                    f"SSH disconnects (non-goal in the MVP).\n"
+                    f"To retry:\n"
+                    f"  ssh -p {remote.port} {target}  # keep this open\n"
+                    f"  /voice finetune {profile.character}"
+                ),
+            )
+    else:
+        # Linux/WSL path: write a bash script, launch in tmux under flock,
+        # poll for completion. Unchanged from the pre-Windows implementation.
+        import base64
+        script_content = (
+            f"#!/bin/bash\nset -eo pipefail\n"
+            f"{train_cmd} 2>&1 | tee {cmd_rdir}/train.log\n"
+            f"echo EXIT_CODE=$? >> {cmd_rdir}/train.log\n"
+        )
+        # Resolve $HOME in the script since it will run in a non-login shell
+        # via flock — replace $HOME with the expanded path
+        rc, home_out, _ = await _ssh(remote, "echo $HOME", timeout=5)
+        if rc == 0 and home_out.strip():
+            script_content = script_content.replace("$HOME", home_out.strip())
 
-    # Check training result
-    rc, log_end, _ = await _ssh(
-        remote, f"tail -5 {cmd_rdir}/train.log 2>/dev/null", timeout=10,
+        # ROCm/WSL needs these env vars for GPU access and RDNA 4 compat
+        if remote.gpu_backend != "cuda":
+            rc, gfx_out, _ = await _ssh(
+                remote,
+                "HSA_ENABLE_DXG_DETECTION=1 rocminfo 2>/dev/null"
+                " | grep -oP 'gfx\\d+' | grep -v gfx0 | head -1",
+                timeout=15,
+            )
+            gfx_arch = gfx_out.strip() if rc == 0 else ""
+            if gfx_arch:
+                env_lines = "export HSA_ENABLE_DXG_DETECTION=1\n"
+                if gfx_arch.startswith("gfx12"):
+                    env_lines += "export HSA_OVERRIDE_GFX_VERSION=11.0.0\n"
+                script_content = script_content.replace(
+                    "#!/bin/bash\n", f"#!/bin/bash\n{env_lines}"
+                )
+
+        b64 = base64.b64encode(script_content.encode()).decode()
+        write_cmd = (
+            f"echo {b64} | base64 -d > {cmd_rdir}/run_train.sh && "
+            f"chmod +x {cmd_rdir}/run_train.sh"
+        )
+        await _ssh(remote, write_cmd, timeout=10)
+
+        # Run in tmux so it survives SSH drops
+        tmux_cmd = (
+            f"tmux kill-session -t {tmux_session} 2>/dev/null; "
+            f"tmux new-session -d -s {tmux_session} "
+            f"'flock /tmp/tokenpal-training.lock {cmd_rdir}/run_train.sh'"
+        )
+        rc, _, err = await _ssh(remote, tmux_cmd, timeout=30)
+        if rc != 0:
+            raise RemoteTrainError("train", f"Failed to start training: {err[:200]}")
+
+        # Poll for completion
+        _progress("Training in progress (SSH-safe, survives disconnects)...")
+        while True:
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+            # Check if tmux session still exists
+            rc, out, _ = await _ssh(
+                remote,
+                f"tmux has-session -t {tmux_session} 2>/dev/null && echo running || echo done",
+                timeout=15,
+            )
+            if "done" in out:
+                break
+
+            # Stream last line of log for progress
+            rc, log_tail, _ = await _ssh(
+                remote, f"tail -1 {cmd_rdir}/train.log 2>/dev/null", timeout=10,
+            )
+            if rc == 0 and log_tail.strip():
+                _progress(log_tail.strip())
+
+    # Check training result (common to both platforms — read from train.log)
+    tail_cmd = (
+        f'powershell -Command "Get-Content \'{cmd_rdir}\\train.log\' -Tail 5"'
+        if platform == "windows"
+        else f"tail -5 {cmd_rdir}/train.log 2>/dev/null"
     )
+    rc, log_end, _ = await _ssh(remote, tail_cmd, timeout=10)
     log_text = log_end.strip()
     target = _ssh_target(remote)
     debug_hint = (
@@ -1408,9 +1598,7 @@ async def remote_finetune(
     if "EXIT_CODE=0" not in log_text:
         # Check for checkpoints to suggest resume
         rc2, ckpt, _ = await _ssh(
-            remote,
-            f"ls -d {cmd_rdir}/output/adapter/checkpoint-* 2>/dev/null | tail -1",
-            timeout=10,
+            remote, _build_checkpoint_check_cmd(platform, cmd_rdir), timeout=10,
         )
         ckpt_hint = ""
         if rc2 == 0 and ckpt.strip():
@@ -1432,12 +1620,7 @@ async def remote_finetune(
 
     # -- Merge adapter into base model (safetensors) --
     _progress("Merging adapter into base model...")
-    merge_cmd = (
-        f"cd {cmd_rdir} && HF_HUB_OFFLINE=1 {venv_py} -m "
-        f"tokenpal.tools.finetune_voice merge "
-        f"--adapter output/adapter --output output/merged "
-        f"--base-model {raw_model_dir}"
-    )
+    merge_cmd = _build_merge_cmd(platform, venv_py, cmd_rdir, raw_model_dir)
     rc, out, err = await _ssh(remote, merge_cmd, progress, timeout=3600)
     if rc != 0:
         raise RemoteTrainError(
@@ -1448,10 +1631,7 @@ async def remote_finetune(
 
     # Compute remote checksum for integrity verification
     rc, remote_hash_str, _ = await _ssh(
-        remote,
-        f"find {cmd_rdir}/output/merged -type f -name '*.safetensors' "
-        f"-exec sha256sum {{}} + 2>/dev/null | sort | sha256sum | cut -d' ' -f1",
-        timeout=30,
+        remote, _build_remote_sha256_cmd(platform, cmd_rdir), timeout=60,
     )
     remote_model_hash = remote_hash_str.strip() if rc == 0 else ""
 
@@ -1481,8 +1661,8 @@ async def remote_finetune(
     else:
         pull_source = f"{scp_rdir}/output/merged"
 
-    if remote.use_wsl:
-        # Windows SSH has no rsync — use SCP for WSL hosts
+    if remote.use_wsl or platform == "windows":
+        # Windows (native or WSL-via-SSH) has no rsync — use SCP.
         rc, err = await _run_scp(
             remote, str(local_model_dir), pull_source,
             pull=True, recursive=True, timeout=3600,
@@ -1568,14 +1748,10 @@ async def remote_finetune(
 
     # -- Cleanup remote artifacts (keep base model + venv + source hash) --
     _progress("Cleaning up remote files...")
-    await _ssh(
-        remote,
-        f"rm -rf {cmd_rdir}/data {cmd_rdir}/output "
-        f"{cmd_rdir}/*.json {cmd_rdir}/*.whl {cmd_rdir}/install.sh "
-        f"{cmd_rdir}/bundle.tar.gz",
-        timeout=30,
-    )
+    await _ssh(remote, _build_cleanup_cmd(platform, cmd_rdir), timeout=30)
     if remote.use_wsl:
+        # WSL leaves a second copy on the Windows filesystem bridge — clean
+        # that too. Native Windows path doesn't have this second copy.
         await _run_ssh(
             remote,
             f'del /Q "{scp_rdir}\\bundle.tar.gz" '
