@@ -14,6 +14,7 @@ from tokenpal.tools.voice_profile import VoiceProfile
 from tokenpal.tools.remote_train import (
     RemoteTrainError,
     _INSTALL_SH,
+    _ensure_base_model,
     _hash_training_sources,
     _ssh_target,
     _wsl_cmd_dir,
@@ -801,3 +802,199 @@ async def test_merge_failure_includes_debug_hint():
     assert exc_info.value.hint
     assert "ssh" in exc_info.value.hint.lower()
     assert "debug" in exc_info.value.hint.lower()
+
+
+# ---------------------------------------------------------------------------
+# Base model + pull integrity tests (commit 3 of pipeline-hardening)
+# ---------------------------------------------------------------------------
+
+
+async def test_ensure_base_model_valid_skips_download():
+    """Config.json + nonzero weight shard → skip download entirely."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        # The new check command contains "BASE_MODEL_OK" as its echo argument
+        "BASE_MODEL_OK": (0, "BASE_MODEL_OK\n", ""),
+    })
+    progress_msgs: list[str] = []
+
+    result = await _ensure_base_model(
+        remote,
+        base_model="google/gemma-2-2b-it",
+        model_dir="/home/user/tokenpal-training/model",
+        venv_py="/home/user/tokenpal-training/.venv/bin/python",
+        _ssh=ssh,
+        progress=lambda msg: progress_msgs.append(msg),
+    )
+
+    assert result == "/home/user/tokenpal-training/model"
+    # Download MUST NOT have been triggered
+    assert not any("snapshot_download" in call for call in ssh.calls)
+    # Progress should confirm verification, not download
+    assert any("already on remote" in msg.lower() for msg in progress_msgs)
+    assert any("weights verified" in msg.lower() for msg in progress_msgs)
+
+
+async def test_ensure_base_model_config_without_weights_redownloads():
+    """Config.json present but weight shards missing → forces re-download.
+
+    This is the exact failure mode commit 3 targets: a prior HF download that
+    wrote config.json successfully but died before (or mid-) weight shards.
+    Old check grepped for model_type in config.json → passed. New check
+    additionally requires at least one nonzero .safetensors or .bin file,
+    so this state correctly triggers re-download.
+    """
+    remote = _make_remote()
+    # Check command returns empty (BASE_MODEL_OK never echoed — check failed)
+    # Then snapshot_download is attempted and succeeds.
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", "no weights found"),
+        "snapshot_download": (0, "downloaded", ""),
+    })
+    progress_msgs: list[str] = []
+
+    result = await _ensure_base_model(
+        remote,
+        base_model="google/gemma-2-2b-it",
+        model_dir="/home/user/tokenpal-training/model",
+        venv_py="/home/user/tokenpal-training/.venv/bin/python",
+        _ssh=ssh,
+        progress=lambda msg: progress_msgs.append(msg),
+    )
+
+    assert result == "/home/user/tokenpal-training/model"
+    # snapshot_download MUST have been triggered
+    assert any("snapshot_download" in call for call in ssh.calls)
+    # Progress should indicate download, not skip
+    assert any("downloading" in msg.lower() for msg in progress_msgs)
+    assert not any("already on remote" in msg.lower() for msg in progress_msgs)
+
+
+async def test_pull_failure_includes_recovery_hint(tmp_path):
+    """rsync failure during pull → error with rm -rf recovery hint."""
+    config = _make_config()
+    config.output_dir = str(tmp_path)
+
+    async def smart_ssh(remote, cmd, progress=None, timeout=3600):
+        if "import torch" in cmd:
+            return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
+        if "nvidia-smi" in cmd:
+            return (0, "GPU OK", "")
+        if "df -BG" in cmd:
+            return (0, "50G", "")
+        if "mkdir" in cmd:
+            return (0, "", "")
+        if ".source-hash" in cmd:
+            return (0, _hash_training_sources(), "")
+        if "finetune_voice prep" in cmd:
+            return (0, "", "")
+        if "checkpoint-" in cmd and "ls -d" in cmd:
+            return (1, "", "")  # no checkpoint
+        if "flock -n" in cmd and "-c true" not in cmd:
+            return (0, "locked", "")  # lock free (not preflight probe)
+        if "echo $HOME" in cmd:
+            return (0, "/home/user", "")
+        if "rocminfo" in cmd:
+            return (0, "", "")
+        if "base64 -d" in cmd:  # script write
+            return (0, "", "")
+        if "tmux new-session" in cmd:
+            return (0, "", "")
+        if "tmux has-session" in cmd:
+            return (0, "done", "")
+        if "tail" in cmd and "train.log" in cmd:
+            return (0, "training complete\nEXIT_CODE=0", "")
+        if "finetune_voice merge" in cmd:
+            return (0, "merged", "")
+        if "sha256sum" in cmd:
+            return (0, "abc123remotehash" + "0" * 48, "")
+        return (0, "", "")
+
+    # _run_rsync fails → pull error path
+    async def failing_rsync(remote, local, remote_path, pull=False, progress=None, timeout=3600):
+        return (1, "rsync: connection reset by peer")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", smart_ssh),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+        patch("tokenpal.tools.remote_train._run_rsync", failing_rsync),
+        patch("tokenpal.tools.remote_train._ensure_base_model"),
+    ):
+        with pytest.raises(RemoteTrainError, match="pull") as exc_info:
+            await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert err.hint, "pull failure error should include recovery hint"
+    assert "rm -rf" in err.hint
+    assert "voice finetune" in err.hint.lower()
+    assert "mordecai" in err.hint.lower()
+
+
+async def test_pull_checksum_mismatch_raises_hard_error(tmp_path):
+    """sha256 mismatch after successful pull → hard error (was silent warning).
+
+    Pre-commit-3: a corrupted local model got a WARNING log and was then
+    registered with Ollama and used for inference. Post commit 3: the
+    mismatch is a blocking error with a recovery hint.
+    """
+    config = _make_config()
+    config.output_dir = str(tmp_path)
+
+    async def smart_ssh(remote, cmd, progress=None, timeout=3600):
+        if "import torch" in cmd:
+            return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
+        if "nvidia-smi" in cmd:
+            return (0, "GPU OK", "")
+        if "df -BG" in cmd:
+            return (0, "50G", "")
+        if "mkdir" in cmd:
+            return (0, "", "")
+        if ".source-hash" in cmd:
+            return (0, _hash_training_sources(), "")
+        if "finetune_voice prep" in cmd:
+            return (0, "", "")
+        if "checkpoint-" in cmd and "ls -d" in cmd:
+            return (1, "", "")
+        if "flock -n" in cmd and "-c true" not in cmd:
+            return (0, "locked", "")
+        if "echo $HOME" in cmd:
+            return (0, "/home/user", "")
+        if "rocminfo" in cmd:
+            return (0, "", "")
+        if "base64 -d" in cmd:
+            return (0, "", "")
+        if "tmux new-session" in cmd:
+            return (0, "", "")
+        if "tmux has-session" in cmd:
+            return (0, "done", "")
+        if "tail" in cmd and "train.log" in cmd:
+            return (0, "EXIT_CODE=0", "")
+        if "finetune_voice merge" in cmd:
+            return (0, "merged", "")
+        if "sha256sum" in cmd:
+            # Deliberately return a remote hash that won't match the local one
+            return (0, "f" * 64, "")
+        return (0, "", "")
+
+    # Rsync "succeeds" but creates no files — local hash will be the empty digest,
+    # which won't match the remote hash of "f" * 64 → triggers mismatch branch.
+    async def succeeding_rsync_noop(
+        remote, local, remote_path, pull=False, progress=None, timeout=3600,
+    ):
+        return (0, "")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", smart_ssh),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+        patch("tokenpal.tools.remote_train._run_rsync", succeeding_rsync_noop),
+        patch("tokenpal.tools.remote_train._ensure_base_model"),
+    ):
+        with pytest.raises(RemoteTrainError, match="pull") as exc_info:
+            await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert "checksum mismatch" in err.detail.lower()
+    assert "corrupted" in err.detail.lower()
+    assert err.hint, "checksum mismatch error should include recovery hint"
+    assert "rm -rf" in err.hint
+    assert "voice finetune" in err.hint.lower()

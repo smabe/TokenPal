@@ -510,15 +510,22 @@ async def _ensure_base_model(
 
     Returns the remote path to the model directory.
     """
-    # Check if model already exists AND has a valid config.json with model_type
+    # Check if model already exists AND has a valid config.json AND at least
+    # one nonzero weight shard. Previously only checked config.json for
+    # "model_type", which let interrupted HF downloads slip through — HF writes
+    # config.json first, then streams weight shards. If the download died after
+    # config but before weights, the old check passed but training OOM'd trying
+    # to load missing weights. `find -size +0c` rejects empty/truncated shards.
     check_cmd = (
-        f"test -f {model_dir}/config.json && "
-        f"grep -o '\"model_type\"[[:space:]]*:[[:space:]]*\"[^\"]*\"' "
-        f"{model_dir}/config.json 2>/dev/null || echo ''"
+        f"test -f {model_dir}/config.json"
+        f" && grep -q '\"model_type\"' {model_dir}/config.json"
+        rf" && find {model_dir} -maxdepth 1 \( -name '*.safetensors' -o -name '*.bin' \)"
+        f" -size +0c 2>/dev/null | grep -q ."
+        f" && echo BASE_MODEL_OK"
     )
     rc, out, _ = await _ssh(remote, check_cmd, timeout=15)
-    if rc == 0 and "model_type" in out:
-        progress("Base model already on remote.")
+    if rc == 0 and "BASE_MODEL_OK" in out:
+        progress("Base model already on remote (config + weights verified).")
         return model_dir
 
     progress(f"Downloading base model: {base_model}")
@@ -1080,7 +1087,15 @@ async def remote_finetune(
             pull=True, progress=progress, timeout=3600,
         )
     if rc != 0:
-        raise RemoteTrainError("pull", f"Failed to download merged model: {err[:200]}")
+        raise RemoteTrainError(
+            "pull",
+            f"Failed to download merged model: {err[:200]}",
+            hint=(
+                f"rsync/scp transfer failed. To retry from a clean slate:\n"
+                f"  rm -rf {local_model_dir}\n"
+                f"  /voice finetune {profile.character}"
+            ),
+        )
 
     # Report size and verify integrity
     total_size = sum(f.stat().st_size for f in local_model_dir.rglob("*") if f.is_file())
@@ -1094,12 +1109,29 @@ async def remote_finetune(
             h.update(f"{file_hash}  {sf.name}\n".encode())
         local_model_hash = h.hexdigest()
         if local_model_hash != remote_model_hash:
-            log.warning(
-                "Model checksum mismatch — file may be corrupted. "
-                "Remote: %s, Local: %s",
-                remote_model_hash[:12], local_model_hash[:12],
+            # Was a warning that let corrupted local models through to Ollama
+            # registration. Escalated to hard error: a checksum mismatch after
+            # a nominally-successful pull means the transfer left bad bytes on
+            # disk (interrupted rsync that didn't retransmit partial shards,
+            # truncated SCP, disk full on the local side). Registering a
+            # corrupt model would silently serve garbage — fail loud instead.
+            raise RemoteTrainError(
+                "pull",
+                (
+                    f"Model checksum mismatch after download — "
+                    f"local file is corrupted.\n"
+                    f"  Remote: {remote_model_hash[:12]}\n"
+                    f"  Local:  {local_model_hash[:12]}"
+                ),
+                hint=(
+                    f"The transfer completed but the local hash doesn't match "
+                    f"the remote hash — likely an interrupted rsync that didn't "
+                    f"retransmit partial shards.\n"
+                    f"Force a clean retry:\n"
+                    f"  rm -rf {local_model_dir}\n"
+                    f"  /voice finetune {profile.character}"
+                ),
             )
-            _progress("WARNING: Model checksum mismatch — may be corrupted.")
 
     # -- Register with Ollama (FROM safetensors dir) --
     _progress("Registering with Ollama...")
