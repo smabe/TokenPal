@@ -460,8 +460,8 @@ def _cmd_prep(args: argparse.Namespace) -> None:
     train_path, val_path = prepare_dataset(profile_path, output_dir)
 
     # Count lines for reporting
-    train_count = sum(1 for _ in train_path.open())
-    val_count = sum(1 for _ in val_path.open())
+    train_count = sum(1 for _ in train_path.open(encoding="utf-8"))
+    val_count = sum(1 for _ in val_path.open(encoding="utf-8"))
 
     print(f"Train: {train_path} ({train_count} samples)")
     print(f"Val:   {val_path} ({val_count} samples)")
@@ -483,7 +483,7 @@ def _cmd_train(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Count lines to auto-tune config
-    num_lines = sum(1 for _ in train_path.open())
+    num_lines = sum(1 for _ in train_path.open(encoding="utf-8"))
     config = LoRAConfig(base_model=args.base_model)
     config = auto_tune(config, num_lines)
 
@@ -573,8 +573,8 @@ def _cmd_all(args: argparse.Namespace) -> None:
     print(f"[1/4] Preparing training data ({profile.line_count} lines)...")
     data_dir = output_dir / "data"
     train_path, val_path = prepare_dataset(profile, data_dir)
-    num_train = sum(1 for _ in train_path.open())
-    print(f"  Train: {num_train} samples, Val: {sum(1 for _ in val_path.open())} samples")
+    num_train = sum(1 for _ in train_path.open(encoding="utf-8"))
+    print(f"  Train: {num_train} samples, Val: {sum(1 for _ in val_path.open(encoding="utf-8"))} samples")
 
     # Step 2: Train
     config = LoRAConfig(base_model=args.base_model or "google/gemma-2-9b")

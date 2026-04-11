@@ -248,7 +248,21 @@ if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) {
 }
 $gpuName = nvidia-smi --query-gpu=name --format=csv,noheader 2>&1 | Select-Object -First 1
 Write-Host "  GPU: $gpuName"
-$TorchUrl = "https://download.pytorch.org/whl/cu124"
+# Detect CUDA version from nvidia-smi to pick the right PyTorch index.
+# nvidia-smi reports the max CUDA version the driver supports (e.g. 13.2).
+# Map to the closest PyTorch wheel index (cu126, cu128, cu130).
+$cudaVer = nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>&1 | Select-Object -First 1
+$nvOut = nvidia-smi 2>&1 | Out-String
+if ($nvOut -match 'CUDA Version:\s+(\d+)\.(\d+)') {
+    $major = [int]$Matches[1]; $minor = [int]$Matches[2]
+    if ($major -ge 13) { $cuTag = "cu130" }
+    elseif ($major -eq 12 -and $minor -ge 8) { $cuTag = "cu128" }
+    elseif ($major -eq 12 -and $minor -ge 6) { $cuTag = "cu126" }
+    else { $cuTag = "cu126" }  # oldest supported
+} else {
+    $cuTag = "cu126"  # safe fallback
+}
+$TorchUrl = "https://download.pytorch.org/whl/$cuTag"
 Write-Host "  PyTorch index: $TorchUrl"
 
 # --- Phase 3: Venv setup ---
@@ -276,9 +290,27 @@ if ($desiredPy -ne $currentPy) {
 }
 & $VenvPip install --upgrade pip -q
 
-# --- Phase 4: PyTorch (CUDA) ---
-Write-Host "[4/6] Installing PyTorch (CUDA)..."
-# Check if torch is already installed and CUDA is working
+# --- Phase 4: TokenPal wheel + training extras ---
+Write-Host "[4/6] Installing tokenpal training bundle..."
+$wheelPattern = "$InstallDir\tokenpal-*.whl"
+$Wheel = Get-ChildItem $wheelPattern -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+if (-not $Wheel) {
+    Write-Host "ERROR: No tokenpal wheel found in $InstallDir" -ForegroundColor Red
+    Write-Host "  Bundle push must complete before install.ps1 runs." -ForegroundColor Yellow
+    exit 1
+}
+# Force-refresh tokenpal code, then resolve training extras.
+# Training extras are installed BEFORE CUDA torch (Phase 5) because
+# transitive deps (trl, accelerate, etc.) pull in CPU-only torch from
+# PyPI regardless of --extra-index-url. Installing CUDA torch last
+# with --force-reinstall guarantees it wins.
+& $VenvPip install --force-reinstall --no-deps --no-cache-dir $Wheel.FullName -q
+& $VenvPip install "$($Wheel.FullName)[training]" -q
+
+# --- Phase 5: PyTorch (CUDA) ---
+Write-Host "[5/6] Installing PyTorch (CUDA)..."
+# Check if CUDA torch is already working (idempotent reinstall guard).
 $torchOk = $false
 try {
     $check = & $VenvPython -c "import torch; print(1 if torch.cuda.is_available() else 0)" 2>&1
@@ -290,30 +322,23 @@ try {
 }
 
 if ($torchOk) {
-    Write-Host "  PyTorch already installed and CUDA working, skipping."
+    Write-Host "  PyTorch CUDA already working, skipping."
 } else {
-    & $VenvPip install --extra-index-url $TorchUrl torch torchvision -q
+    # On Windows, default `pip install torch` gives CPU-only. Must use
+    # --index-url with the detected CUDA tag. Force-reinstall in case
+    # a CPU-only transitive dep snuck in during Phase 4.
+    & $VenvPip install --force-reinstall --index-url $TorchUrl torch torchvision -q
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "ERROR: PyTorch install failed." -ForegroundColor Red
+        Write-Host "ERROR: PyTorch CUDA install failed." -ForegroundColor Red
         Write-Host "  Common cause: Defender blocking DLLs." -ForegroundColor Yellow
         Write-Host "  Add exclusion for $VenvDir and retry." -ForegroundColor Yellow
         exit 1
     }
+    # Torch may pull in triton, which ships broken Windows binaries
+    # (AttrsDescriptor import error). Training uses eager attention and
+    # never calls torch.compile, so triton is dead weight. Remove it.
+    try { & $VenvPip uninstall triton -y -q 2>&1 | Out-Null } catch {}
 }
-
-# --- Phase 5: TokenPal wheel + training extras ---
-Write-Host "[5/6] Installing tokenpal training bundle..."
-$wheelPattern = "$InstallDir\tokenpal-*.whl"
-$Wheel = Get-ChildItem $wheelPattern -ErrorAction SilentlyContinue |
-    Select-Object -First 1
-if (-not $Wheel) {
-    Write-Host "ERROR: No tokenpal wheel found in $InstallDir" -ForegroundColor Red
-    Write-Host "  Bundle push must complete before install.ps1 runs." -ForegroundColor Yellow
-    exit 1
-}
-# Force-refresh tokenpal code, then resolve training extras without re-downloading torch
-& $VenvPip install --force-reinstall --no-deps --no-cache-dir $Wheel.FullName -q
-& $VenvPip install "$($Wheel.FullName)[training]" -q
 
 # --- Phase 6: Verification ---
 Write-Host "[6/6] Verifying..."
@@ -354,6 +379,10 @@ param(
 # training's own success/failure, not stderr noise.
 $ErrorActionPreference = "Continue"
 $env:HF_HUB_OFFLINE = "1"
+# Disable torch.compile/inductor — triton doesn't ship usable Windows
+# binaries and the import alone crashes with AttrsDescriptor errors.
+# Training uses eager attention anyway, so inductor is never needed.
+$env:TORCHDYNAMO_DISABLE = "1"
 
 Set-Location $CmdRdir
 
@@ -475,8 +504,8 @@ def _build_remote_sha256_cmd(platform: str, cmd_rdir: str) -> str:
             f'| Sort-Object Name; '
             f'$combined = ($files | ForEach-Object '
             f"{{ $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(); "
-            f"($h + '  ' + $_.Name) }}) -join [Environment]::NewLine; "
-            f"$bytes = [Text.Encoding]::UTF8.GetBytes($combined + [Environment]::NewLine); "
+            f"($h + '  ' + $_.Name) }}) -join [string][char]10; "
+            f"$bytes = [Text.Encoding]::UTF8.GetBytes($combined + [string][char]10); "
             f'$sha = [Security.Cryptography.SHA256]::Create(); '
             f'$hash = $sha.ComputeHash($bytes); '
             f"($hash | ForEach-Object {{ $_.ToString('x2') }}) -join ''\""
@@ -657,19 +686,25 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     install_sh.write_text(_INSTALL_SH)
     install_sh.chmod(0o755)
 
-    # Write install.ps1 (native Windows installer). PowerShell here-strings
-    # (`@"..."@`) require CRLF line endings on Windows — with LF-only, the
-    # closing `"@` delimiter isn't recognized as being at the start of a
-    # line and PowerShell parses everything literally as code, hitting the
-    # first Python-syntax line in the verification script and exploding.
+    # Write install.ps1 (native Windows installer). Two encoding details:
+    #   1. CRLF line endings — PowerShell expects them on Windows.
+    #   2. UTF-8 BOM prefix — without the BOM, PowerShell 5.1 reads the file
+    #      as Windows-1252. UTF-8 byte \x94 (part of the em dash U+2014)
+    #      maps to a right double quote in 1252, prematurely closing any
+    #      double-quoted string and cascading parser errors.
+    _UTF8_BOM = b"\xef\xbb\xbf"
     install_ps1 = bundle_dir / "install.ps1"
-    install_ps1.write_bytes(_INSTALL_PS1.replace("\n", "\r\n").encode("utf-8"))
+    install_ps1.write_bytes(
+        _UTF8_BOM + _INSTALL_PS1.replace("\n", "\r\n").encode("utf-8")
+    )
     # No chmod on .ps1 — PowerShell execution policy controls this, not file perms
 
     # Write run_train.ps1 (native Windows training runner, parameterized).
-    # Same CRLF requirement as install.ps1.
+    # Same CRLF + BOM requirements as install.ps1.
     run_train_ps1 = bundle_dir / "run_train.ps1"
-    run_train_ps1.write_bytes(_TRAIN_PS1.replace("\n", "\r\n").encode("utf-8"))
+    run_train_ps1.write_bytes(
+        _UTF8_BOM + _TRAIN_PS1.replace("\n", "\r\n").encode("utf-8")
+    )
 
     # Write source hash
     source_hash = _hash_training_sources()
@@ -1433,7 +1468,9 @@ async def remote_finetune(
     profile_data = asdict(profile)
     profile_data["line_count"] = profile.line_count
     profile_json = Path(tempfile.mkdtemp()) / f"{slug}.json"
-    profile_json.write_text(json.dumps(profile_data, ensure_ascii=False, indent=2))
+    profile_json.write_text(
+        json.dumps(profile_data, ensure_ascii=False, indent=2), encoding="utf-8",
+    )
 
     if local_hash != remote_hash:
         _progress("Building training bundle...")
@@ -1762,10 +1799,28 @@ async def remote_finetune(
 
     if remote.use_wsl or platform == "windows":
         # Windows (native or WSL-via-SSH) has no rsync — use SCP.
+        # Forward-slash the remote path: backslash `C:\Users\...` makes
+        # SCP interpret the `:` after the drive letter as a second host
+        # delimiter. Windows OpenSSH accepts forward slashes.
+        #
+        # SCP -r copies the remote dir AS a subdirectory of the local
+        # target (scp -r host:merged/ parent/ → parent/merged/). So we
+        # pull into the parent dir and then rename the created "merged"
+        # directory to the desired local_model_dir name. Remove any
+        # stale local_model_dir first to avoid nesting.
+        import shutil
+        if local_model_dir.exists():
+            shutil.rmtree(local_model_dir)
+        scp_pull = pull_source.replace("\\", "/")
         rc, err = await _run_scp(
-            remote, str(local_model_dir), pull_source,
+            remote, str(local_model_dir.parent), scp_pull,
             pull=True, recursive=True, timeout=3600,
         )
+        # Rename: parent/merged → parent/tokenpal-<slug>
+        if rc == 0:
+            scp_landed = local_model_dir.parent / Path(pull_source).name
+            if scp_landed.exists() and scp_landed != local_model_dir:
+                scp_landed.rename(local_model_dir)
     else:
         rc, err = await _run_rsync(
             remote, str(local_model_dir), pull_source,

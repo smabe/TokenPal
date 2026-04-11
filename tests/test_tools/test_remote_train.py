@@ -229,19 +229,20 @@ def test_install_ps1_has_expected_phases():
     assert "[1/6] Checking Python" in _INSTALL_PS1
     assert "[2/6] Detecting GPU" in _INSTALL_PS1
     assert "[3/6] Setting up venv" in _INSTALL_PS1
-    assert "[4/6] Installing PyTorch" in _INSTALL_PS1
-    assert "[5/6] Installing tokenpal" in _INSTALL_PS1
+    # Phase 4/5 swapped: training extras first, CUDA torch last (so
+    # transitive CPU-only torch deps are overwritten by CUDA version).
+    assert "[4/6] Installing tokenpal" in _INSTALL_PS1
+    assert "[5/6] Installing PyTorch" in _INSTALL_PS1
     assert "[6/6] Verifying" in _INSTALL_PS1
 
 
 def test_install_ps1_targets_cuda_only():
     """Windows path is CUDA-only per plan non-goals. No ROCm install logic."""
-    assert "cu124" in _INSTALL_PS1
-    assert "download.pytorch.org/whl/cu124" in _INSTALL_PS1
+    # CUDA index URL is now auto-detected from nvidia-smi at runtime
+    # (cu126, cu128, cu130), not hardcoded to cu124.
+    assert "download.pytorch.org/whl/$cuTag" in _INSTALL_PS1
+    assert "CUDA Version" in _INSTALL_PS1  # nvidia-smi parsing for auto-detection
     # Must NOT contain a ROCm install URL or ROCm detection command.
-    # (The script does mention "ROCm/HIP out of scope" as a user-facing
-    # error when nvidia-smi is missing — that's a documentation string,
-    # not install logic.)
     assert "download.pytorch.org/whl/rocm" not in _INSTALL_PS1
     assert "rocm-smi" not in _INSTALL_PS1
     assert "rocminfo" not in _INSTALL_PS1

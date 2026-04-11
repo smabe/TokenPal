@@ -316,7 +316,7 @@ def prepare_dataset(
     val_path = output_dir / "val.jsonl"
 
     for path, data in [(train_path, train_data), (val_path, val_data)]:
-        with path.open("w") as f:
+        with path.open("w", encoding="utf-8") as f:
             for item in data:
                 f.write(json.dumps(item, ensure_ascii=False) + "\n")
 

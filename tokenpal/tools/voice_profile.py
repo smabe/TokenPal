@@ -42,14 +42,14 @@ def save_profile(profile: VoiceProfile, voices_dir: Path) -> Path:
     path = voices_dir / f"{slug}.json"
     data = asdict(profile)
     data["line_count"] = profile.line_count
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
 
 
 def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
     """Load a voice profile by slug name. Raises FileNotFoundError if missing."""
     path = voices_dir / f"{name}.json"
-    data = json.loads(path.read_text())
+    data = json.loads(path.read_text(encoding="utf-8"))
     return VoiceProfile(
         character=data["character"],
         source=data["source"],
@@ -74,7 +74,7 @@ def list_profiles(voices_dir: Path) -> list[tuple[str, str, int]]:
     results = []
     for path in sorted(voices_dir.glob("*.json")):
         try:
-            data = json.loads(path.read_text())
+            data = json.loads(path.read_text(encoding="utf-8"))
             results.append((path.stem, data["character"], len(data["lines"])))
         except (json.JSONDecodeError, KeyError):
             continue
