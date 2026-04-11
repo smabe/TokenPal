@@ -317,12 +317,10 @@ if (-not $Wheel) {
 
 # --- Phase 6: Verification ---
 Write-Host "[6/6] Verifying..."
-$verifyScript = @"
-import torch
-assert torch.cuda.is_available(), 'GPU not available to PyTorch'
-print(f'  GPU OK: {torch.cuda.get_device_name(0)}')
-"@
-& $VenvPython -c $verifyScript
+# Inline -c instead of a here-string — here-strings break when Python
+# f-string braces ({torch.cuda...}) look like PS script blocks. Single
+# line with semicolons is bulletproof across PS versions and encodings.
+& $VenvPython -c "import torch; assert torch.cuda.is_available(), 'GPU not available to PyTorch'; print('  GPU OK: ' + torch.cuda.get_device_name(0))"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: PyTorch CUDA verification failed." -ForegroundColor Red
     exit 1
@@ -464,6 +462,11 @@ def _build_remote_sha256_cmd(platform: str, cmd_rdir: str) -> str:
         # Compute per-file SHA-256 hashes, sort deterministically, then
         # hash the concatenated "HASH  name" lines to match the Linux
         # format produced by `sha256sum file | sort | sha256sum`.
+        #
+        # Avoids \" escaping inside powershell -Command "..." — cmd.exe
+        # (the SSH default shell on Windows) misparses \" as a string
+        # terminator instead of passing it through. Uses single-quoted
+        # strings and string concatenation instead.
         merged_dir = _ps_quote(f"{cmd_rdir}\\output\\merged")
         return (
             f'powershell -Command "'
@@ -471,12 +474,12 @@ def _build_remote_sha256_cmd(platform: str, cmd_rdir: str) -> str:
             f"-Recurse -Filter '*.safetensors' -ErrorAction SilentlyContinue "
             f'| Sort-Object Name; '
             f'$combined = ($files | ForEach-Object '
-            f'{{ $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(); '
-            f'\\"$h  $($_.Name)\\" }}) -join [Environment]::NewLine; '
+            f"{{ $h = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(); "
+            f"($h + '  ' + $_.Name) }}) -join [Environment]::NewLine; "
             f"$bytes = [Text.Encoding]::UTF8.GetBytes($combined + [Environment]::NewLine); "
             f'$sha = [Security.Cryptography.SHA256]::Create(); '
             f'$hash = $sha.ComputeHash($bytes); '
-            f'($hash | ForEach-Object {{ $_.ToString(\\"x2\\") }}) -join \\"\\""'
+            f"($hash | ForEach-Object {{ $_.ToString('x2') }}) -join ''\""
         )
     return (
         f"find {cmd_rdir}/output/merged -type f -name '*.safetensors' "
@@ -519,17 +522,19 @@ def _build_windows_base_model_check(model_dir: str) -> str:
     Returned string is a single semicolon-separated PowerShell one-liner so it
     survives SSH command transport without heredoc quoting.
     """
-    # Use single quotes around paths to avoid PowerShell variable expansion
-    # in interpolation. The model_dir is already absolute by the time this
-    # is called — no %USERPROFILE% resolution needed here.
+    # Wrapped in `powershell -Command "..."` because SSH on Windows sends
+    # commands to cmd.exe, which can't parse raw PowerShell syntax.
+    # Uses single-quoted strings for paths and patterns to avoid \" escaping
+    # issues when cmd.exe passes the command to PowerShell.
     config_path = _ps_quote(f"{model_dir}\\config.json")
     model_dir_q = _ps_quote(model_dir)
     return (
+        f'powershell -Command "'
         f"if ((Test-Path {config_path} -PathType Leaf)"
-        f" -and (Select-String -Pattern '\"model_type\"' -Path {config_path} -Quiet)"
+        f" -and (Select-String -Pattern 'model_type' -Path {config_path} -Quiet)"
         f" -and (Get-ChildItem {model_dir_q} -Include *.safetensors,*.bin -Recurse"
         f" -ErrorAction SilentlyContinue | Where-Object {{ $_.Length -gt 0 }}"
-        f" | Select-Object -First 1)) {{ Write-Output 'BASE_MODEL_OK' }}"
+        f" | Select-Object -First 1)) {{ Write-Output 'BASE_MODEL_OK' }}\""
     )
 
 
@@ -1167,6 +1172,7 @@ async def _preflight_remote_state(
     remote: RemoteTrainConfig,
     slug: str,
     cmd_rdir: str,
+    platform: str = "linux",
 ) -> RemoteState:
     """Check remote side for stale state that would break a fresh training run.
 
@@ -1178,24 +1184,37 @@ async def _preflight_remote_state(
     Output parsed from key=value lines. Unknown keys default to safe values
     (lock_held=False, tmux_alive=False, venv_functional=False) — a mocked or
     empty response in tests falls through to "fresh install needed."
+
+    On Windows: no flock or tmux (non-goals), only the venv check matters.
+    Lock/tmux fields are always False on Windows.
     """
-    probe = (
-        "if [ -f /tmp/tokenpal-training.lock ]; then "
-        "  echo lock_file=1; "
-        "  if flock -n /tmp/tokenpal-training.lock -c true 2>/dev/null; then "
-        "    echo lock=free; "
-        "  else "
-        "    echo lock=held; "
-        "  fi; "
-        "else "
-        "  echo lock_file=0; "
-        "  echo lock=free; "
-        "fi; "
-        f"tmux has-session -t tokenpal-{slug} 2>/dev/null"
-        " && echo tmux=alive || echo tmux=dead; "
-        f"{cmd_rdir}/.venv/bin/python -c 'import torch' 2>/dev/null"
-        " && echo venv=ok || echo venv=broken"
-    )
+    if platform == "windows":
+        # Windows has no flock or tmux. Only check venv integrity.
+        # The venv python is at .venv\Scripts\python.exe on Windows.
+        venv_py = f"{cmd_rdir}\\.venv\\Scripts\\python.exe"
+        probe = (
+            f'echo lock_file=0 & echo lock=free & echo tmux=dead & '
+            f'"{venv_py}" -c "import torch" >nul 2>&1 '
+            f'&& echo venv=ok || echo venv=broken'
+        )
+    else:
+        probe = (
+            "if [ -f /tmp/tokenpal-training.lock ]; then "
+            "  echo lock_file=1; "
+            "  if flock -n /tmp/tokenpal-training.lock -c true 2>/dev/null; then "
+            "    echo lock=free; "
+            "  else "
+            "    echo lock=held; "
+            "  fi; "
+            "else "
+            "  echo lock_file=0; "
+            "  echo lock=free; "
+            "fi; "
+            f"tmux has-session -t tokenpal-{slug} 2>/dev/null"
+            " && echo tmux=alive || echo tmux=dead; "
+            f"{cmd_rdir}/.venv/bin/python -c 'import torch' 2>/dev/null"
+            " && echo venv=ok || echo venv=broken"
+        )
     _rc, out, _err = await _ssh(remote, probe, timeout=15)
 
     fields: dict[str, str] = {}
@@ -1341,7 +1360,7 @@ async def remote_finetune(
             pass  # Can't parse, skip check
 
     # -- Preflight: check remote state for stale locks, running training, broken venv --
-    state = await _preflight_remote_state(_ssh, remote, slug, cmd_rdir)
+    state = await _preflight_remote_state(_ssh, remote, slug, cmd_rdir, platform)
 
     if state.lock_held and state.tmux_session_alive:
         # Live training already running for this slug. Attach-and-stream is
@@ -1394,9 +1413,11 @@ async def remote_finetune(
 
     # -- Build + push bundle if source code changed or install incomplete --
     local_hash = _hash_training_sources()
-    rc, remote_hash_out, _ = await _ssh(
-        remote, f"cat {cmd_rdir}/.source-hash 2>/dev/null || echo none", timeout=10,
-    )
+    if platform == "windows":
+        hash_cmd = f'type "{cmd_rdir}\\.source-hash" 2>nul || echo none'
+    else:
+        hash_cmd = f"cat {cmd_rdir}/.source-hash 2>/dev/null || echo none"
+    rc, remote_hash_out, _ = await _ssh(remote, hash_cmd, timeout=10)
     remote_hash = remote_hash_out.strip()
 
     # Venv integrity check from preflight — stricter than the old `test -f .install-ok`
@@ -1488,10 +1509,16 @@ async def remote_finetune(
 
     # -- Prepare training data (using installed entry point) --
     _progress(f"Preparing training data ({profile.line_count} lines)...")
-    prep_cmd = (
-        f"cd {cmd_rdir} && {venv_py} -m tokenpal.tools.finetune_voice prep "
-        f"{q_slug}.json -o data"
-    )
+    if platform == "windows":
+        prep_cmd = (
+            f'cd /d "{cmd_rdir}" && "{venv_py}" -m tokenpal.tools.finetune_voice prep '
+            f"{q_slug}.json -o data"
+        )
+    else:
+        prep_cmd = (
+            f"cd {cmd_rdir} && {venv_py} -m tokenpal.tools.finetune_voice prep "
+            f"{q_slug}.json -o data"
+        )
     rc, out, err = await _ssh(remote, prep_cmd, progress)
     if rc != 0:
         raise RemoteTrainError("prep", f"Dataset prep failed:\n{err[-500:]}")
@@ -1650,13 +1677,23 @@ async def remote_finetune(
     rc, log_end, _ = await _ssh(remote, tail_cmd, timeout=10)
     log_text = log_end.strip()
     target = _ssh_target(remote)
-    debug_hint = (
-        f"To debug:\n"
-        f"  ssh {target}\n"
-        f"  cd {cmd_rdir} && source .venv/bin/activate\n"
-        f"  cat train.log\n"
-        f"\nTo retry:  /voice finetune {profile.character}"
-    )
+    if platform == "windows":
+        debug_hint = (
+            f"To debug:\n"
+            f"  ssh -p {remote.port} {target}\n"
+            f"  cd /d \"{cmd_rdir}\"\n"
+            f"  .venv\\Scripts\\activate\n"
+            f"  type train.log\n"
+            f"\nTo retry:  /voice finetune {profile.character}"
+        )
+    else:
+        debug_hint = (
+            f"To debug:\n"
+            f"  ssh {target}\n"
+            f"  cd {cmd_rdir} && source .venv/bin/activate\n"
+            f"  cat train.log\n"
+            f"\nTo retry:  /voice finetune {profile.character}"
+        )
     if "EXIT_CODE=0" not in log_text:
         # Check for checkpoints to suggest resume
         rc2, ckpt, _ = await _ssh(
