@@ -106,9 +106,12 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `flock /tmp/tokenpal-training.lock` prevents concurrent training
 - Merge: `merge_adapter()` loads base + LoRA adapter via PEFT, saves merged safetensors. Ollama registers via `FROM ./merged` Modelfile
 - Model pull: rsync with `--info=progress2` + `--partial` for Linux hosts (progress + resume), SCP `-r` for WSL hosts (no rsync on Windows)
-- Model integrity: sha256 of safetensors verified after pull
+- Model integrity: sha256 of safetensors verified after pull. **Mismatch is a hard error** (not warning) — corrupted local files are rejected before Ollama registration. Error includes `rm -rf LOCAL_DIR` recovery hint.
+- Base model integrity: `_ensure_base_model` check requires `config.json` with `model_type` AND at least one nonzero `.safetensors`/`.bin` shard. Catches interrupted HF downloads where config landed but weights didn't
 - Disk space preflight: warns if < 25GB free on remote
-- Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions
+- Preflight remote state: `_preflight_remote_state` gathers `{lock_file, lock_held, tmux_session_alive, venv_functional}` in one SSH round-trip before any training run. Auto-removes stale flock files (kernel lock released after SIGKILL, file lingers), kills orphan tmux sessions, forces reinstall on broken venv, raises `RemoteTrainError("preflight")` with `tmux attach` hint on detected live training
+- HF auth errors detected via `_looks_like_hf_auth_error` heuristic (401/403/gated/etc) on both remote and local download paths → `RemoteTrainError("auth")` with HF_TOKEN / license-acceptance fix instructions
+- Actionable errors: `RemoteTrainError` includes `hint` with SSH debug commands, checkpoint location, retry instructions. Ollama register failure → hint with local safetensors path + manual `ollama create` command so training isn't lost
 - Shared helpers: `_drain_stream()` (async stream reading), `_resolve_wsl_mount()` (WSL path resolution)
 - SSH/SCP/rsync: `RemoteTrainConfig` has `port: int = 22` field; `_run_ssh` uses `-p`, `_run_scp` uses `-P`, `_run_rsync` passes `-p` in ssh command
 - Direct WSL SSH (recommended): run `openssh-server` inside WSL on port 2222, set `use_wsl = false` + `port = 2222` — treats WSL as native Linux, eliminates Windows path resolution, PowerShell quoting, and `/mnt/c/` copies. Needs Windows firewall rule for port 2222 and `/usr/lib/wsl/lib` in PATH (via `/etc/environment`)

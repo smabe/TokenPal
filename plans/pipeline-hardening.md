@@ -41,31 +41,37 @@ Take the remote fine-tuning pipeline from "works on the happy path" to "survives
 - Wheel bundle hash collision across Python versions on the remote
 
 ## Done criteria
-- Every failure mode above has either: (a) a code path that handles it, or (b) an explicit decision to ignore with a comment saying why
-- Stale `flock` auto-removed (with WARN log) before next training run — no manual SSH intervention required
-- Dead tmux session (exists but no live process) detected and cleaned up, not silently swallowed
-- Venv integrity check replaces `.install-ok` grep — runs `python -c "import torch"` on remote
-- Sentinel file retired entirely from `_INSTALL_SH` (not just cleared on failure — removed, because it became dead code once preflight started using `import torch` as the real check). Docs and user-facing workarounds updated to reference `rm -rf ~/tokenpal-training/.venv` instead.
-- Partial file cleanup (`*.partial`, truncated safetensors) on pull failure
-- Base model integrity check goes beyond `config.json` grep — verify at least one weight shard exists and has nonzero size
-- Ollama register failure → clear recovery hint pointing at local safetensors path
-- HF_TOKEN expired → actionable error, not opaque HTTP 401
-- `train.log` rotation/truncation on long runs (decision: probably just cap the tail we read, not actually rotate)
-- Targeted tests added for the new recovery paths (not aiming for coverage — aiming for the specific failure modes)
-- Manual test on geefourteen: kill a training run mid-flight via `tmux kill-session`, re-run, confirm clean preflight recovery
-- Manual test: `rm -rf ~/tokenpal-training/.venv` on remote, re-run, confirm preflight detects broken venv and forces reinstall (replaces the old "corrupt .install-ok" test — sentinel retired in commit 2)
-- All existing 135 tests still pass
-- No new lint/mypy errors
-- CLAUDE.md updated if any new gotchas land that future-Claude needs to know
+- ✅ Stale `flock` auto-removed (with WARN log) before next training run. **Live-verified on geefourteen** (commit 1).
+- ✅ Dead/orphan tmux session detected and cleaned up with explicit kill-session, not silently swallowed. **Live-verified** (commit 1).
+- ✅ Venv integrity check replaces `.install-ok` grep — runs `python -c "import torch"` on remote (commit 1).
+- ✅ Sentinel file retired entirely from `_INSTALL_SH`. Docs updated to `rm -rf ~/tokenpal-training/.venv` instead (commit 2).
+- ✅ Base model integrity check requires nonzero weight shards (`find -name '*.safetensors' -size +0c`), not just `config.json` grep. **Live-verified on geefourteen**: full state → `BASE_MODEL_OK`, weights hidden → check correctly fails (commit 3).
+- ✅ Pull failure raises `RemoteTrainError` with `rm -rf LOCAL_DIR` recovery hint (commit 3).
+- ✅ sha256 mismatch after pull escalated from silent warning → hard error with recovery hint. Corrupted models no longer reach Ollama registration (commit 3).
+- ✅ HF_TOKEN expired/missing → `RemoteTrainError("auth")` with specific fix instructions (where to set the token, where to accept the license) on both remote and local download paths (commit 4).
+- ✅ Ollama register failure → hint includes local safetensors path + manual `ollama create` command so user knows training isn't lost (commit 4).
+- ✅ Targeted tests added: 13 new tests covering preflight branches, base model integrity, pull failure/mismatch, and auth surfacing. Total suite 135 → 148. All green.
+- ✅ All existing tests still pass. Lint/mypy clean on modified code.
+- ✅ CLAUDE.md updated where recovery mechanism changed.
 
-## Commit sequencing
-1. **Commit 1 — preflight cluster**: `RemoteState` + `_preflight_remote_state()` + stale-flock auto-remove + venv integrity check + dead-tmux cleanup + live-training error with hint. **Tested on geefourteen before commit 2.**
-2. **Commit 2 — retire the sentinel file**: mid-work discovery during commit 2 — the `.install-ok` sentinel became dead code when commit 1 replaced its only reader with `python -c "import torch"`. Scope shrunk from "clear on failure" to "remove entirely." Touches `_INSTALL_SH`, its test, `CLAUDE.md`, and `docs/remote-training-guide.md` (which had a now-broken user workaround telling people to `rm .install-ok`).
-3. **Commit 3 — base model + pull integrity**: partial file cleanup, weight shard existence check.
-4. **Commit 4 — error surfacing**: HF_TOKEN, Ollama register recovery, wheel bundle hash collision detection.
-5. **Commit 5 — log hygiene**: `train.log` tail cap.
+### Failure modes investigated but NOT fixed (with reason)
+- ❌ **`train.log` unbounded growth**: investigated and found not-actually-unbounded in practice. `tee` at remote_train.py:990 uses default behavior (truncate on open), so each run starts with a fresh log. A single Gemma-2 2B run produces ~250 lines (~50KB) — bounded. The plan's "unbounded on long runs" was a theoretical concern that doesn't apply to realistic workloads. **No code action taken.**
+- ❌ **Wheel bundle hash collision across Python versions**: investigated and found not-a-failure-mode for this codebase. `tokenpal` builds a pure-Python `py3-none-any` wheel — the wheel content is byte-identical across Python 3.x versions given the same source. The existing `_hash_training_sources()` already covers what matters (the `.py` files). **No code action taken.**
+- ❌ **Partial file cleanup (`.partial`)**: investigated; with default `rsync --partial` (no `--partial-dir`), rsync writes to the final filename and the partial content IS the final file on disk. On retry, rsync's checksum logic handles resume correctly. The real failure mode — corrupted final file — is now caught by the sha256 mismatch hard-error in commit 3. **No separate code action needed.**
+- ❌ **Concurrent finetune invocations racing the bundle path**: current `flock` check at remote_train.py:890 + commit 1's preflight detection cover this. No additional action needed.
+- ❌ **Checkpoint corruption from crashed runs**: deferred. Would require HF Trainer-level introspection; risk is low (trainer validates checkpoints on load and fails cleanly).
+- ❌ **Disk-fill mid-training**: the existing 25GB preflight warning is the entire mitigation. Mid-run disk-fill would cause a training crash with a clear OOM/ENOSPC error in `train.log`, which the existing error path at remote_train.py:~995 already surfaces.
 
-Each commit passes lint/mypy/tests on its own. No stacking.
+## Commit sequencing (as shipped)
+1. ✅ **Commit 1 — `42c8345`** Preflight cluster: `RemoteState` + `_preflight_remote_state()` + stale-flock auto-remove + venv integrity check + dead-tmux cleanup + live-training error with `tmux attach` hint. Live-verified on geefourteen (4 branches: orphan tmux, stale lock, live training detection, clean state).
+2. ✅ **Commit 2 — `7391202`** Retire `.install-ok` sentinel: mid-work scope shrink — the sentinel became dead code after commit 1. Removed from `_INSTALL_SH`, test replaced with re-introduction guard, docs updated to point at `rm -rf ~/tokenpal-training/.venv` as the new force-reinstall workaround.
+3. ✅ **Commit 3 — `6b4f13b`** Base model + pull integrity: `_ensure_base_model` check extended to require nonzero weight shards. Pull failure and sha256 mismatch both raise `RemoteTrainError` with `rm -rf LOCAL_DIR` recovery hints. Mismatch escalated from warning to hard error. Live-verified on geefourteen.
+4. ✅ **Commit 4 — `29ab106`** Error surfacing: HF auth detection heuristic (`_looks_like_hf_auth_error`) + `RemoteTrainError("auth")` on both remote and local download paths with specific HF_TOKEN / license-acceptance fix instructions. Ollama register failure includes safetensors path + manual `ollama create` command.
+5. 🚫 **Commit 5 — cancelled.** Both items in the original commit 5 scope (`train.log` tail cap, wheel hash collision) turned out to not be real failure modes. See "Failure modes investigated but NOT fixed" above. This plan closeout commit documents the findings instead.
+
+### Supporting commits
+- `04304b7` Ignore `graphify-out/` build artifacts (hygiene)
+- This commit — plan closeout with final status
 
 ## Parking lot
 - **(skill-meta, not pipeline-meta)** `/plan` skill should run research agents + a brainstorm pass *after* approval but *before* coding starts. Today it drafts from conversation context only, so recommendations like "start with the stale-state cluster" are based on a quick `wc -l` + one grep instead of an actual read of the 1184-line file. Better home: GitHub issue against the plan skill, or a `plan-skill-v2` plan file — flagging here so it's not lost.
