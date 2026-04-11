@@ -78,4 +78,4 @@ Add native Windows training to the remote fine-tuning pipeline so the RTX 4070 h
 - Plan shipped to `plans/shipped/remote-pipeline-windows.md`
 
 ## Parking lot
-(empty at start — append "ooh shiny" thoughts that surface mid-work for later)
+- **(scope creep, defer)** Add a Phase 0 to `_INSTALL_PS1` that auto-installs Python 3.12 via `winget install --id Python.Python.3.12 --silent --accept-source-agreements --accept-package-agreements` if the `py` launcher isn't present. Verified 2026-04-11 on geefourteen: winget works non-interactively over SSH, no admin required, no reboot, ~60 seconds. Would reduce the user's manual prereq list from "{SSH, auth, CUDA driver, Python 3.12}" to "{SSH, auth, CUDA driver}". Not doing it now because commit 3 already shipped install.ps1 and re-opening it is scope creep; add in a follow-up plan if we decide the UX improvement is worth it.

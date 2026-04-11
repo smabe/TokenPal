@@ -444,6 +444,7 @@ async def test_remote_finetune_windows_reassigns_paths_to_backslash(tmp_path):
 
     ssh = _MockSSH({
         "uname -s": (0, "Microsoft Windows [Version 10.0.22631.3007]\n", ""),
+        "echo %USERPROFILE%": (0, "C:\\Users\\smabe\n", ""),
         **_preflight_clean(),
         "nvidia-smi": (0, "GPU OK", ""),
         "df -BG": (0, "50G", ""),
@@ -462,9 +463,12 @@ async def test_remote_finetune_windows_reassigns_paths_to_backslash(tmp_path):
                 lambda msg: progress_msgs.append(msg),
             )
 
-    # Windows path reshapes: ~/tokenpal-training → %USERPROFILE%\tokenpal-training
+    # Windows path reshape: ~/tokenpal-training is resolved against the
+    # remote's actual %USERPROFILE% (via an SSH call, mocked here to
+    # return C:\Users\smabe). SCP and SSH both need a literal absolute
+    # path — %USERPROFILE% only expands in a shell, not in SCP.
     assert "model_dir" in captured, f"helper not called; progress: {progress_msgs}"
-    assert captured["model_dir"].startswith("%USERPROFILE%\\")
+    assert captured["model_dir"].startswith("C:\\Users\\smabe\\")
     assert captured["model_dir"].endswith("\\model")
     assert "/" not in captured["model_dir"]  # no forward slashes
     assert captured["venv_py"].endswith("\\.venv\\Scripts\\python.exe")
@@ -491,6 +495,7 @@ async def test_remote_finetune_windows_dispatches_to_windows_base_model_helper()
 
     ssh = _MockSSH({
         "uname -s": (0, "Microsoft Windows\n", ""),
+        "echo %USERPROFILE%": (0, "C:\\Users\\smabe\n", ""),
         **_preflight_clean(),
         "nvidia-smi": (0, "GPU OK", ""),
         "df -BG": (0, "50G", ""),
@@ -673,6 +678,8 @@ async def test_remote_finetune_windows_skips_flock(tmp_path):
         captured_calls.append(cmd)
         if "uname -s" in cmd:
             return (0, "Microsoft Windows\n", "")
+        if "echo %USERPROFILE%" in cmd:
+            return (0, "C:\\Users\\smabe\n", "")
         if "import torch" in cmd:
             return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
         if "nvidia-smi" in cmd:
@@ -753,6 +760,8 @@ async def test_remote_finetune_windows_training_failure_includes_ssh_drop_hint(t
     async def smart_ssh(remote, cmd, progress=None, timeout=3600):
         if "uname -s" in cmd:
             return (0, "Microsoft Windows\n", "")
+        if "echo %USERPROFILE%" in cmd:
+            return (0, "C:\\Users\\smabe\n", "")
         if "import torch" in cmd:
             return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
         if "nvidia-smi" in cmd:

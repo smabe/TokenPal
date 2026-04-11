@@ -652,14 +652,19 @@ def _build_bundle(profile_json_path: Path | None = None) -> Path:
     install_sh.write_text(_INSTALL_SH)
     install_sh.chmod(0o755)
 
-    # Write install.ps1 (native Windows installer)
+    # Write install.ps1 (native Windows installer). PowerShell here-strings
+    # (`@"..."@`) require CRLF line endings on Windows — with LF-only, the
+    # closing `"@` delimiter isn't recognized as being at the start of a
+    # line and PowerShell parses everything literally as code, hitting the
+    # first Python-syntax line in the verification script and exploding.
     install_ps1 = bundle_dir / "install.ps1"
-    install_ps1.write_text(_INSTALL_PS1)
+    install_ps1.write_bytes(_INSTALL_PS1.replace("\n", "\r\n").encode("utf-8"))
     # No chmod on .ps1 — PowerShell execution policy controls this, not file perms
 
-    # Write run_train.ps1 (native Windows training runner, parameterized)
+    # Write run_train.ps1 (native Windows training runner, parameterized).
+    # Same CRLF requirement as install.ps1.
     run_train_ps1 = bundle_dir / "run_train.ps1"
-    run_train_ps1.write_text(_TRAIN_PS1)
+    run_train_ps1.write_bytes(_TRAIN_PS1.replace("\n", "\r\n").encode("utf-8"))
 
     # Write source hash
     source_hash = _hash_training_sources()
@@ -1256,23 +1261,10 @@ async def remote_finetune(
         if progress:
             progress(msg)
 
-    # -- Preflight: verify GPU access --
-    _progress("Connecting to remote GPU...")
-    rc, _out, err = await _ssh(
-        remote,
-        "nvidia-smi 2>/dev/null || HSA_ENABLE_DXG_DETECTION=1 rocminfo 2>/dev/null | grep -q 'Device Type:.*GPU'",
-        timeout=30,
-    )
-    if rc != 0:
-        raise RemoteTrainError(
-            "preflight",
-            f"Can't reach {remote.host} or no GPU. {err[:200]}",
-        )
-    _progress("GPU verified.")
-
-    # -- Resolve remote platform (linux vs windows) --
-    # Explicit config wins; "auto" triggers an SSH probe. Windows routes
-    # through native cmd.exe + PowerShell; linux routes through bash.
+    # -- Resolve remote platform FIRST (before any platform-specific SSH) --
+    # Explicit config wins; "auto" triggers an SSH probe that works on both
+    # cmd.exe and bash (`uname -s 2>/dev/null || ver`). Must happen before
+    # the GPU check since the GPU probe is platform-specific.
     if remote.platform == "auto":
         platform = await _detect_remote_platform(_ssh, remote)
         _progress(f"Detected remote platform: {platform}")
@@ -1281,13 +1273,52 @@ async def remote_finetune(
         _progress(f"Using configured platform: {platform}")
 
     # Reassign path shapes for Windows. cmd.exe expects backslash separators
-    # and %USERPROFILE% expansion instead of ~. Pre-existing Linux/WSL paths
-    # stay unchanged on the else branch.
+    # and resolved absolute paths — %USERPROFILE% only expands in a shell,
+    # and SCP doesn't go through a shell. So we resolve %USERPROFILE% once
+    # via an SSH call, then use the absolute path everywhere (SSH + SCP).
     if platform == "windows":
-        cmd_rdir = _to_windows_path(scp_rdir)
-        scp_rdir = cmd_rdir
+        _rc, win_home_out, _err = await _ssh(
+            remote, "echo %USERPROFILE%", timeout=10,
+        )
+        win_home = win_home_out.strip()
+        if not win_home or win_home == "%USERPROFILE%":
+            raise RemoteTrainError(
+                "config",
+                "Could not resolve %USERPROFILE% on Windows remote. "
+                "Is the SSH shell cmd.exe?",
+            )
+        # Rewrite remote_dir using the absolute home path (SCP-compatible).
+        if scp_rdir.startswith("~/"):
+            rel = scp_rdir[2:].replace("/", "\\")
+            scp_rdir = f"{win_home}\\{rel}"
+        elif scp_rdir == "~":
+            scp_rdir = win_home
+        else:
+            scp_rdir = scp_rdir.replace("/", "\\")
+        cmd_rdir = scp_rdir  # same path for both SSH and SCP on Windows
         model_dir = f"{cmd_rdir}\\model"
         venv_py = f"{cmd_rdir}\\.venv\\Scripts\\python.exe"
+
+    # -- Preflight: verify GPU access --
+    _progress("Connecting to remote GPU...")
+    if platform == "windows":
+        # cmd.exe doesn't grok bash redirects / grep / HSA env vars. Windows
+        # is CUDA-only per the plan non-goals — just invoke nvidia-smi and
+        # check the exit code.
+        gpu_probe = "nvidia-smi"
+    else:
+        # Bash probe: nvidia-smi first, fall through to rocminfo for AMD.
+        gpu_probe = (
+            "nvidia-smi 2>/dev/null || HSA_ENABLE_DXG_DETECTION=1 "
+            "rocminfo 2>/dev/null | grep -q 'Device Type:.*GPU'"
+        )
+    rc, _out, err = await _ssh(remote, gpu_probe, timeout=30)
+    if rc != 0:
+        raise RemoteTrainError(
+            "preflight",
+            f"Can't reach {remote.host} or no GPU. {err[:200]}",
+        )
+    _progress("GPU verified.")
 
     # -- Preflight: check disk space --
     if platform == "windows":
