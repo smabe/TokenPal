@@ -14,6 +14,7 @@ from tokenpal.tools.voice_profile import VoiceProfile
 from tokenpal.tools.remote_train import (
     RemoteTrainError,
     _INSTALL_SH,
+    _detect_remote_platform,
     _ensure_base_model,
     _hash_training_sources,
     _ssh_target,
@@ -1156,3 +1157,122 @@ async def test_ollama_register_failure_includes_recovery_hint(tmp_path):
     # Should tell the user where their model is so they don't think it's lost
     assert str(tmp_path) in err.hint or "models/tokenpal-mordecai" in err.hint
     assert "ollama" in err.hint.lower()
+
+
+# ---------------------------------------------------------------------------
+# Platform detection tests (commit 1 of remote-pipeline-windows)
+# ---------------------------------------------------------------------------
+
+
+async def test_detect_remote_platform_linux():
+    """`uname -s` returns 'Linux' → detection resolves to 'linux'."""
+    remote = _make_remote()
+    ssh = _MockSSH({"uname -s": (0, "Linux\n", "")})
+
+    platform = await _detect_remote_platform(ssh, remote)
+
+    assert platform == "linux"
+
+
+async def test_detect_remote_platform_windows():
+    """`uname -s` fails → `ver` returns Windows banner → resolves to 'windows'."""
+    remote = _make_remote()
+    # When uname -s fails on Windows, `ver` runs via the `||` fallback.
+    # The SSH mock returns the combined stdout — we return the ver output.
+    ssh = _MockSSH({"uname -s": (0, "Microsoft Windows [Version 10.0.22631.3007]\n", "")})
+
+    platform = await _detect_remote_platform(ssh, remote)
+
+    assert platform == "windows"
+
+
+async def test_detect_remote_platform_wsl_bash_returns_linux():
+    """When use_wsl=true wraps the command in WSL bash, uname -s inside WSL
+    returns 'Linux' — detection correctly resolves to 'linux' even though
+    the underlying host is Windows. Protects against accidentally routing
+    WSL-via-Windows-SSH setups to the native Windows path."""
+    remote = _make_remote(use_wsl=True)
+    ssh = _MockSSH({"uname -s": (0, "Linux\n", "")})
+
+    platform = await _detect_remote_platform(ssh, remote)
+
+    assert platform == "linux"
+
+
+async def test_detect_remote_platform_unknown_falls_back_to_linux():
+    """Unrecognized probe output falls back to 'linux' — safest default
+    because all pre-commit-1 code assumes Linux commands."""
+    remote = _make_remote()
+    ssh = _MockSSH({"uname -s": (0, "Plan9\n", "")})
+
+    platform = await _detect_remote_platform(ssh, remote)
+
+    assert platform == "linux"
+
+
+async def test_remote_finetune_resolves_platform_auto_at_runtime():
+    """Integration: `platform='auto'` in config triggers detection during
+    remote_finetune() and the result is surfaced via a progress callback."""
+    config = _make_config()
+    # platform defaults to "auto" — verify by not setting it explicitly
+    assert config.remote.platform == "auto"
+    progress_msgs: list[str] = []
+
+    ssh = _MockSSH({
+        "uname -s": (0, "Linux\n", ""),
+        **_preflight_clean(),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        # Stop early — we only care that detection fired and reported progress
+        patch(
+            "tokenpal.tools.remote_train._run_scp",
+            _MockSCP(rc=1, err="stop here"),
+        ),
+    ):
+        with pytest.raises(RemoteTrainError):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    assert any("detected remote platform: linux" in msg.lower() for msg in progress_msgs), (
+        f"expected platform detection progress message, got: {progress_msgs}"
+    )
+
+
+async def test_remote_finetune_respects_explicit_platform_config():
+    """If platform is explicitly set (not 'auto'), skip detection and use it."""
+    config = _make_config(platform="linux")
+    progress_msgs: list[str] = []
+
+    ssh = _MockSSH({
+        **_preflight_clean(),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        patch(
+            "tokenpal.tools.remote_train._run_scp",
+            _MockSCP(rc=1, err="stop here"),
+        ),
+    ):
+        with pytest.raises(RemoteTrainError):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # No uname probe should have fired (detection was skipped)
+    assert not any("uname" in call for call in ssh.calls), (
+        f"expected no uname probe, got calls: {ssh.calls}"
+    )
+    # Progress should confirm the explicit platform
+    assert any("using configured platform: linux" in msg.lower() for msg in progress_msgs)

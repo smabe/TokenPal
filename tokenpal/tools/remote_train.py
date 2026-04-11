@@ -698,6 +698,37 @@ class RemoteState:
     venv_functional: bool       # .venv/bin/python -c "import torch" succeeds?
 
 
+async def _detect_remote_platform(
+    _ssh: Any,
+    remote: RemoteTrainConfig,
+) -> str:
+    """Probe the remote to determine whether it's Linux or native Windows.
+
+    Used when RemoteTrainConfig.platform == "auto" — runs a single SSH
+    command that works on both platforms:
+        uname -s 2>/dev/null || ver
+
+    `uname -s` exists on Linux/WSL/macOS and returns "Linux" / "Darwin".
+    On Windows cmd/PowerShell it fails, and `ver` takes over, returning
+    "Microsoft Windows [Version X.Y.Z]".
+
+    Returns "linux" or "windows". Falls back to "linux" on unrecognized
+    output — safer default because all pre-commit-1 code assumed Linux.
+
+    Note: when use_wsl=true, the command is wrapped in a WSL bash call
+    and `uname -s` returns "Linux" from inside WSL, so this correctly
+    returns "linux" even on a Windows host with use_wsl=true.
+    """
+    _rc, out, _err = await _ssh(
+        remote, "uname -s 2>/dev/null || ver", timeout=10,
+    )
+    lower = out.lower()
+    if "microsoft windows" in lower or lower.strip().startswith("windows"):
+        return "windows"
+    # Everything else (Linux, Darwin, unknown) routes to the Linux path
+    return "linux"
+
+
 async def _preflight_remote_state(
     _ssh: Any,
     remote: RemoteTrainConfig,
@@ -796,6 +827,19 @@ async def remote_finetune(
             f"Can't reach {remote.host} or no GPU. {err[:200]}",
         )
     _progress("GPU verified.")
+
+    # -- Resolve remote platform (linux vs windows) --
+    # Explicit config wins; "auto" triggers an SSH probe. Stored as a local
+    # variable for this run — later commits in the windows pipeline plan
+    # will use it to route to native-Windows code paths (install.ps1,
+    # Start-Process training launch, etc). For commit 1 this is
+    # infrastructure only; the Linux path is unchanged.
+    if remote.platform == "auto":
+        platform = await _detect_remote_platform(_ssh, remote)
+        _progress(f"Detected remote platform: {platform}")
+    else:
+        platform = remote.platform
+        _progress(f"Using configured platform: {platform}")
 
     # -- Preflight: check disk space --
     rc, df_out, _ = await _ssh(

@@ -93,6 +93,11 @@ class RemoteTrainConfig:
     python: str = ""  # auto-detected from venv after install.sh runs
     use_wsl: bool = False
     gpu_backend: str = "auto"  # auto, cuda, or rocm
+    platform: str = "auto"  # auto, linux, or windows — used by remote_train.py
+                            # to route to the Linux/bash or native Windows path.
+                            # "auto" triggers runtime detection via SSH probe.
+                            # Note: use_wsl=true implies platform="linux"
+                            # regardless, because we're executing in WSL bash.
 
 
 @dataclass
