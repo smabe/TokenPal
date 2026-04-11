@@ -128,7 +128,7 @@ The install script runs 6 phases:
 5. **PyTorch** — installs with the correct CUDA/ROCm index URL (skips if already working)
 6. **TokenPal** — installs the wheel with training dependencies
 
-A sentinel file (`.install-ok`) tracks completion. If install was interrupted, the next run retries automatically.
+Completion is verified on the next run by `_preflight_remote_state` running `python -c "import torch"` on the remote. If install was interrupted or the venv is broken (partial pip install, SSL flake), the next run detects it and forces a fresh bundle push + reinstall automatically.
 
 ### 3. Base Model
 
@@ -196,10 +196,11 @@ nvidia-smi
 - For WSL hosts, ensure the Windows SSH server is running (Settings → Optional Features → OpenSSH Server)
 
 ### "PyTorch already installed and CUDA working, skipping" but training fails
-- The installed tokenpal wheel may be stale. Delete the sentinel to force reinstall:
+- The installed tokenpal wheel may be stale. Force a fresh reinstall by nuking the venv — preflight will detect it missing and rebuild on the next run:
   ```bash
-  ssh you@gpu-box "wsl -e bash -lc 'rm ~/tokenpal-training/.venv/.install-ok'"
+  ssh -p 2222 you@gpu-box "rm -rf ~/tokenpal-training/.venv"
   ```
+  (Legacy Windows-SSH hosts: wrap in `wsl -e bash -lc '...'`.)
 
 ### SSL errors during PyTorch download (WSL)
 - Known WSL2 networking issue with large downloads. install.sh retries 3 times and skips if torch is already installed.

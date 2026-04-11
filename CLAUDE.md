@@ -100,7 +100,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Base models tested: TinyLlama 1.1B (works, garbled output). Recommended: Gemma-2 2B IT (gated but strong, fits 8GB VRAM). Gemma-2 9B for best quality (needs HF token + more VRAM)
 - Pipeline: build wheel → push bundle → install.sh → push base model → prep data → train (tmux) → merge adapter → pull safetensors → register Ollama
 - Wheel bundle: auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes. `--force-reinstall --no-cache-dir` ensures fresh code lands even without version bump
-- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection (ROCm version aware: 7.2 vs 6.2), HSA env var exports (`HSA_ENABLE_DXG_DETECTION`, `HSA_OVERRIDE_GFX_VERSION=11.0.0` on gfx12xx), sentinel file (`.install-ok`) for partial-install recovery, skips PyTorch download if already installed
+- `install.sh` (embedded as `_INSTALL_SH`): WSL `/mnt/c/` self-relocation, Python 3.12+ check, CUDA/ROCm/Intel NPU detection, PyTorch index URL selection (ROCm version aware: 7.2 vs 6.2), HSA env var exports (`HSA_ENABLE_DXG_DETECTION`, `HSA_OVERRIDE_GFX_VERSION=11.0.0` on gfx12xx), skips PyTorch download if already installed. Partial-install recovery is handled on the Python side by `_preflight_remote_state` running `python -c "import torch"` — no sentinel file
 - Training runs in `tmux` session (survives SSH drops), polled every 30s, output tee'd to `train.log`
 - Checkpoint resume: `--resume` flag auto-detected from existing `checkpoint-*` dirs, passed to HF Trainer
 - `flock /tmp/tokenpal-training.lock` prevents concurrent training

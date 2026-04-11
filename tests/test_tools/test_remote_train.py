@@ -195,13 +195,17 @@ def test_install_sh_installs_pytorch_first():
     assert torch_idx < wheel_idx
 
 
-def test_install_sh_uses_sentinel_file():
-    assert ".install-ok" in _INSTALL_SH
-    assert "touch" in _INSTALL_SH and "SENTINEL" in _INSTALL_SH
-
-
 def test_install_sh_verifies_cuda():
     assert "torch.cuda.is_available()" in _INSTALL_SH
+
+
+def test_install_sh_no_sentinel_file():
+    """The .install-ok sentinel was retired when preflight adopted a real
+    venv integrity check (import torch). Guard against accidental
+    re-introduction — any new 'partial install recovery' mechanism should
+    go through `_preflight_remote_state` instead."""
+    assert ".install-ok" not in _INSTALL_SH
+    assert "SENTINEL" not in _INSTALL_SH
 
 
 # ---------------------------------------------------------------------------

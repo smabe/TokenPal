@@ -22,6 +22,7 @@ Take the remote fine-tuning pipeline from "works on the happy path" to "survives
 - `tokenpal/tools/remote_train.py` — new `RemoteState` dataclass + `_preflight_remote_state()` helper, stale-flock auto-remove, venv integrity check, dead-tmux cleanup, sentinel validation replacement, base model integrity, Ollama register recovery. `_INSTALL_SH` is inlined at lines 36–190 (no separate file to touch).
 - `tokenpal/tools/finetune_voice.py` — HF_TOKEN error surfacing
 - `tests/test_tools/test_remote_train.py` — new tests covering each preflight state branch, extends existing `_MockSSH` routing
+- `CLAUDE.md` + `docs/remote-training-guide.md` — docs updates when recovery mechanism changes (commit 2 retired the sentinel file)
 
 ## Failure modes to anticipate
 - SSH drops mid-training but tmux session survives — detect and surface with actionable hint (`ssh host 'tmux attach -t tokenpal-<slug>'`). True resume-and-stream is out of scope here.
@@ -44,7 +45,7 @@ Take the remote fine-tuning pipeline from "works on the happy path" to "survives
 - Stale `flock` auto-removed (with WARN log) before next training run — no manual SSH intervention required
 - Dead tmux session (exists but no live process) detected and cleaned up, not silently swallowed
 - Venv integrity check replaces `.install-ok` grep — runs `python -c "import torch"` on remote
-- `_INSTALL_SH` clears `.install-ok` on any failure path before exit (defense in depth for the above)
+- Sentinel file retired entirely from `_INSTALL_SH` (not just cleared on failure — removed, because it became dead code once preflight started using `import torch` as the real check). Docs and user-facing workarounds updated to reference `rm -rf ~/tokenpal-training/.venv` instead.
 - Partial file cleanup (`*.partial`, truncated safetensors) on pull failure
 - Base model integrity check goes beyond `config.json` grep — verify at least one weight shard exists and has nonzero size
 - Ollama register failure → clear recovery hint pointing at local safetensors path
@@ -52,14 +53,14 @@ Take the remote fine-tuning pipeline from "works on the happy path" to "survives
 - `train.log` rotation/truncation on long runs (decision: probably just cap the tail we read, not actually rotate)
 - Targeted tests added for the new recovery paths (not aiming for coverage — aiming for the specific failure modes)
 - Manual test on geefourteen: kill a training run mid-flight via `tmux kill-session`, re-run, confirm clean preflight recovery
-- Manual test: corrupt `.venv/.install-ok` while `.venv` is empty, re-run, confirm sentinel check forces reinstall
+- Manual test: `rm -rf ~/tokenpal-training/.venv` on remote, re-run, confirm preflight detects broken venv and forces reinstall (replaces the old "corrupt .install-ok" test — sentinel retired in commit 2)
 - All existing 135 tests still pass
 - No new lint/mypy errors
 - CLAUDE.md updated if any new gotchas land that future-Claude needs to know
 
 ## Commit sequencing
 1. **Commit 1 — preflight cluster**: `RemoteState` + `_preflight_remote_state()` + stale-flock auto-remove + venv integrity check + dead-tmux cleanup + live-training error with hint. **Tested on geefourteen before commit 2.**
-2. **Commit 2 — install.sh sentinel discipline**: clear `.install-ok` on any install failure path.
+2. **Commit 2 — retire the sentinel file**: mid-work discovery during commit 2 — the `.install-ok` sentinel became dead code when commit 1 replaced its only reader with `python -c "import torch"`. Scope shrunk from "clear on failure" to "remove entirely." Touches `_INSTALL_SH`, its test, `CLAUDE.md`, and `docs/remote-training-guide.md` (which had a now-broken user workaround telling people to `rm .install-ok`).
 3. **Commit 3 — base model + pull integrity**: partial file cleanup, weight shard existence check.
 4. **Commit 4 — error surfacing**: HF_TOKEN, Ollama register recovery, wheel bundle hash collision detection.
 5. **Commit 5 — log hygiene**: `train.log` tail cap.

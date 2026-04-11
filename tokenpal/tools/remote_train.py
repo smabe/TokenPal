@@ -40,7 +40,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="${TOKENPAL_TRAINING_DIR:-$HOME/tokenpal-training}"
 PYTHON="${PYTHON:-python3}"
-SENTINEL="$INSTALL_DIR/.venv/.install-ok"
 
 # --- Phase 0: WSL mount relocation ---
 # pip/venv on DrvFS (/mnt/c/) is 5-10x slower and breaks symlinks.
@@ -186,7 +185,6 @@ assert torch.cuda.is_available(), 'GPU not available to PyTorch'
 print(f'  GPU OK: {torch.cuda.get_device_name(0)}')
 "
 echo "  Python: $VENV/bin/python"
-touch "$SENTINEL"
 echo "Install complete."
 """
 
