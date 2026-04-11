@@ -29,6 +29,11 @@ log = logging.getLogger(__name__)
 
 ProgressCallback = Callable[[str], None]
 
+# How often the training-completion poll loop wakes up to check tmux state.
+# Module-level constant so tests can monkeypatch it to 0 for fast runs —
+# a conftest fixture in tests/test_tools/ patches it automatically.
+POLL_INTERVAL_SECONDS = 30
+
 
 # ---------------------------------------------------------------------------
 # Bundle building — auto-build wheel + install.sh into a tarball
@@ -1032,9 +1037,8 @@ async def remote_finetune(
 
     # Poll for completion
     _progress("Training in progress (SSH-safe, survives disconnects)...")
-    poll_interval = 30
     while True:
-        await asyncio.sleep(poll_interval)
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
         # Check if tmux session still exists
         rc, out, _ = await _ssh(
