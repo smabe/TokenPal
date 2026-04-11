@@ -18,6 +18,7 @@ import sys
 import tarfile
 import tempfile
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -607,6 +608,71 @@ class RemoteTrainError(Exception):
         super().__init__("\n".join(parts))
 
 
+@dataclass
+class RemoteState:
+    """Snapshot of remote-side state before a training run begins.
+
+    Gathered in a single SSH round-trip by `_preflight_remote_state`.
+    `remote_finetune` uses this to decide: proceed, raise, or auto-recover.
+    """
+
+    lock_file_exists: bool      # /tmp/tokenpal-training.lock exists on disk?
+    lock_held: bool             # something is actively holding the flock?
+    tmux_session_alive: bool    # tokenpal-<slug> tmux session exists?
+    venv_functional: bool       # .venv/bin/python -c "import torch" succeeds?
+
+
+async def _preflight_remote_state(
+    _ssh: Any,
+    remote: RemoteTrainConfig,
+    slug: str,
+    cmd_rdir: str,
+) -> RemoteState:
+    """Check remote side for stale state that would break a fresh training run.
+
+    One SSH round-trip gathers:
+      - lock file presence and held-status (flock advisory lock probe)
+      - tmux session liveness for tokenpal-<slug>
+      - venv integrity (can we `import torch`?)
+
+    Output parsed from key=value lines. Unknown keys default to safe values
+    (lock_held=False, tmux_alive=False, venv_functional=False) — a mocked or
+    empty response in tests falls through to "fresh install needed."
+    """
+    probe = (
+        "if [ -f /tmp/tokenpal-training.lock ]; then "
+        "  echo lock_file=1; "
+        "  if flock -n /tmp/tokenpal-training.lock -c true 2>/dev/null; then "
+        "    echo lock=free; "
+        "  else "
+        "    echo lock=held; "
+        "  fi; "
+        "else "
+        "  echo lock_file=0; "
+        "  echo lock=free; "
+        "fi; "
+        f"tmux has-session -t tokenpal-{slug} 2>/dev/null"
+        " && echo tmux=alive || echo tmux=dead; "
+        f"{cmd_rdir}/.venv/bin/python -c 'import torch' 2>/dev/null"
+        " && echo venv=ok || echo venv=broken"
+    )
+    _rc, out, _err = await _ssh(remote, probe, timeout=15)
+
+    fields: dict[str, str] = {}
+    for line in out.splitlines():
+        line = line.strip()
+        if "=" in line:
+            key, _, value = line.partition("=")
+            fields[key] = value
+
+    return RemoteState(
+        lock_file_exists=fields.get("lock_file") == "1",
+        lock_held=fields.get("lock") == "held",
+        tmux_session_alive=fields.get("tmux") == "alive",
+        venv_functional=fields.get("venv") == "ok",
+    )
+
+
 async def remote_finetune(
     profile: VoiceProfile,
     config: FinetuneConfig,
@@ -669,6 +735,44 @@ async def remote_finetune(
         except ValueError:
             pass  # Can't parse, skip check
 
+    # -- Preflight: check remote state for stale locks, running training, broken venv --
+    state = await _preflight_remote_state(_ssh, remote, slug, cmd_rdir)
+
+    if state.lock_held and state.tmux_session_alive:
+        # Live training already running for this slug. Attach-and-stream is
+        # deferred to remote-train-phase-extraction.md — for now, surface a
+        # clear error with a tmux attach hint so the user can watch it manually.
+        target = _ssh_target(remote)
+        raise RemoteTrainError(
+            "preflight",
+            f"Training is already running for {profile.character} on {remote.host}.",
+            hint=(
+                f"A tmux session 'tokenpal-{slug}' is active and holding the training lock.\n"
+                f"To watch its progress:\n"
+                f"  ssh {target} 'tmux attach -t tokenpal-{slug}'\n"
+                f"Detach with Ctrl-b d. Wait for it to finish before re-running finetune."
+            ),
+        )
+
+    if state.lock_held and not state.tmux_session_alive:
+        # Lock is held but no training session exists — the previous holder is
+        # a zombie/hang/external process. Removing the file gives the next flock
+        # call a fresh inode; the kernel lock on the old inode is orphaned.
+        _progress("WARNING: stale training lock detected (no active tmux session). Auto-removing.")
+        log.warning(
+            "Removing stale flock file /tmp/tokenpal-training.lock (no matching tmux session)"
+        )
+        await _ssh(remote, "rm -f /tmp/tokenpal-training.lock", timeout=5)
+
+    if state.tmux_session_alive and not state.lock_held:
+        # Orphan tmux session without training lock — probably a stale session
+        # from a crashed previous run (shouldn't happen with tokenpal's own code,
+        # but defensive cleanup avoids the 'tmux kill-session 2>/dev/null' silent-swallow
+        # later when new-session runs).
+        _progress(f"Cleaning up orphan tmux session tokenpal-{slug} from previous run.")
+        log.info("Killing orphan tmux session tokenpal-%s (no lock held)", slug)
+        await _ssh(remote, f"tmux kill-session -t tokenpal-{slug}", timeout=5)
+
     # -- Create remote working directory --
     if remote.use_wsl:
         rel = remote.remote_dir
@@ -688,14 +792,11 @@ async def remote_finetune(
     )
     remote_hash = remote_hash_out.strip()
 
-    # Also check if install completed (sentinel file exists)
-    rc, sentinel_out, _ = await _ssh(
-        remote,
-        f"test -f {cmd_rdir}/.venv/.install-ok && echo ok || echo missing",
-        timeout=10,
-    )
-    if "missing" in sentinel_out:
-        remote_hash = "incomplete"  # force re-push
+    # Venv integrity check from preflight — stricter than the old `test -f .install-ok`
+    # because it actually verifies torch is importable. Catches partial pip installs
+    # where the sentinel was touched but the venv is broken (WSL SSL flake, pip bomb).
+    if not state.venv_functional:
+        remote_hash = "incomplete"  # force re-push + reinstall
 
     import json
     from dataclasses import asdict

@@ -86,6 +86,31 @@ class _MockSCP:
         return (self.rc, self.err)
 
 
+# Preflight probe mock output helpers. The probe is routed by the unique
+# substring "import torch" (appears only in `_preflight_remote_state`).
+# Tests that should pass through preflight cleanly spread `**_preflight_clean()`.
+def _preflight_clean() -> dict[str, tuple[int, str, str]]:
+    """All-clean preflight: no lock, no tmux session, venv functional."""
+    return {"import torch": (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")}
+
+
+def _preflight_state(
+    *,
+    lock_file: bool = False,
+    lock_held: bool = False,
+    tmux_alive: bool = False,
+    venv_ok: bool = True,
+) -> dict[str, tuple[int, str, str]]:
+    """Build a preflight probe response with specific state fields."""
+    lines = [
+        f"lock_file={'1' if lock_file else '0'}",
+        f"lock={'held' if lock_held else 'free'}",
+        f"tmux={'alive' if tmux_alive else 'dead'}",
+        f"venv={'ok' if venv_ok else 'broken'}",
+    ]
+    return {"import torch": (0, "\n".join(lines) + "\n", "")}
+
+
 # ---------------------------------------------------------------------------
 # Helper tests
 # ---------------------------------------------------------------------------
@@ -331,6 +356,7 @@ async def test_source_hash_match_skips_bundle_push():
     progress_msgs: list[str] = []
 
     ssh = _MockSSH({
+        **_preflight_clean(),
         "nvidia-smi": (0, "GPU OK", ""),
         "mkdir": (0, "", ""),
         "df -BG": (0, "50G", ""),
@@ -386,6 +412,7 @@ async def test_concurrent_training_blocked():
     config = _make_config()
 
     ssh = _MockSSH({
+        **_preflight_clean(),
         "nvidia-smi": (0, "GPU OK", ""),
         "mkdir": (0, "", ""),
         "df -BG": (0, "50G", ""),
@@ -404,6 +431,202 @@ async def test_concurrent_training_blocked():
     ):
         with pytest.raises(RemoteTrainError, match="Another training job"):
             await remote_finetune(_make_profile(), config)
+
+
+# ---------------------------------------------------------------------------
+# Preflight remote-state tests (commit 1 of pipeline-hardening)
+# ---------------------------------------------------------------------------
+
+
+async def test_preflight_live_training_raises():
+    """Live training detected (lock held + tmux alive) → error with attach hint."""
+    config = _make_config()
+
+    ssh = _MockSSH({
+        **_preflight_state(lock_file=True, lock_held=True, tmux_alive=True, venv_ok=True),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+    })
+
+    with patch("tokenpal.tools.remote_train._run_ssh", ssh):
+        with pytest.raises(RemoteTrainError) as exc_info:
+            await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert err.step == "preflight"
+    assert "already running" in err.detail.lower()
+    assert "tmux attach" in err.hint
+    assert "tokenpal-mordecai" in err.hint
+
+
+async def test_preflight_stale_flock_auto_removed(caplog):
+    """Lock held but no tmux session → stale → rm -f issued, WARN logged."""
+    import logging
+    caplog.set_level(logging.WARNING, logger="tokenpal.tools.remote_train")
+    config = _make_config()
+    progress_msgs: list[str] = []
+
+    ssh = _MockSSH({
+        **_preflight_state(lock_file=True, lock_held=True, tmux_alive=False, venv_ok=True),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+        ".source-hash": (0, _hash_training_sources(), ""),
+        "test -d": (0, "exists", ""),
+        "finetune_voice prep": (0, "", ""),
+        "checkpoint": (1, "", ""),
+        # flock re-check later returns "locked" (free) — stale was cleaned up
+        "flock -n /tmp/tokenpal-training.lock -c": (0, "locked", ""),
+        # tmux new-session succeeds, has-session returns "done" immediately
+        "tmux new-session": (0, "", ""),
+        "tmux has-session": (0, "done", ""),
+        "EXIT_CODE=0": (0, "EXIT_CODE=0", ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        patch("tokenpal.tools.remote_train._ensure_base_model"),
+    ):
+        # Raise to stop before we go deeper — we only care about preflight behavior
+        with patch(
+            "tokenpal.tools.remote_train._run_scp",
+            _MockSCP(rc=1, err="stop here"),
+        ):
+            with pytest.raises(RemoteTrainError):
+                await remote_finetune(
+                    _make_profile(),
+                    config,
+                    lambda msg: progress_msgs.append(msg),
+                )
+
+    # Preflight should have issued the rm, emitted progress + warning log
+    assert any("rm -f /tmp/tokenpal-training.lock" in call for call in ssh.calls), (
+        f"expected rm -f call, got: {ssh.calls}"
+    )
+    assert any("stale training lock" in msg.lower() for msg in progress_msgs)
+    assert any("stale flock" in rec.message.lower() for rec in caplog.records)
+
+
+async def test_preflight_orphan_tmux_session_killed():
+    """Tmux alive but no lock → orphan from crashed run → kill-session issued."""
+    config = _make_config()
+    progress_msgs: list[str] = []
+
+    ssh = _MockSSH({
+        **_preflight_state(lock_file=False, lock_held=False, tmux_alive=True, venv_ok=True),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        # Stop early — we only care that the kill-session was issued
+        patch(
+            "tokenpal.tools.remote_train._run_scp",
+            _MockSCP(rc=1, err="stop here"),
+        ),
+        patch(
+            "tokenpal.tools.remote_train._build_bundle",
+            return_value=Path("/tmp/fake.tar.gz"),
+        ),
+    ):
+        with pytest.raises(RemoteTrainError):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # Expect a tmux kill-session targeting tokenpal-mordecai (not the default
+    # silent `2>/dev/null` inline kill that happens later at new-session time)
+    preflight_kill = [
+        c for c in ssh.calls
+        if "tmux kill-session -t tokenpal-mordecai" in c and "2>/dev/null" not in c
+    ]
+    assert preflight_kill, f"expected explicit preflight kill-session, got: {ssh.calls}"
+    assert any("orphan tmux session" in msg.lower() for msg in progress_msgs)
+
+
+async def test_preflight_broken_venv_forces_reinstall():
+    """Sentinel present but torch import fails → force bundle push + reinstall.
+
+    This replaces the old `test -f .install-ok` grep. Catches partial pip installs
+    where the sentinel was touched but the venv is broken (e.g. WSL SSL flake).
+    """
+    config = _make_config()
+    progress_msgs: list[str] = []
+    local_hash = _hash_training_sources()
+
+    # venv_ok=False simulates a torch import failure on a venv that looks installed
+    ssh = _MockSSH({
+        **_preflight_state(venv_ok=False),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "mkdir": (0, "", ""),
+        "df -BG": (0, "50G", ""),
+        ".source-hash": (0, local_hash, ""),  # hash matches — WOULD skip push...
+    })
+    # ...but broken venv forces incomplete → push + install. Make install fail
+    # to stop the test before we get deeper into the pipeline.
+    ssh.routes["install.sh"] = (1, "", "reinstall triggered")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+        patch(
+            "tokenpal.tools.remote_train._build_bundle",
+            return_value=Path("/tmp/fake.tar.gz"),
+        ),
+    ):
+        with pytest.raises(RemoteTrainError, match="install"):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # Bundle push must have happened — install.sh was called even though hash matched
+    assert any("install.sh" in call for call in ssh.calls)
+    # The skip-bundle-push path must NOT have been taken
+    assert not any("skipping bundle push" in msg.lower() for msg in progress_msgs)
+
+
+async def test_preflight_all_clean_proceeds():
+    """All-clean state → no cleanup, proceeds straight to normal flow."""
+    config = _make_config()
+    progress_msgs: list[str] = []
+
+    ssh = _MockSSH({
+        **_preflight_clean(),
+        "nvidia-smi": (0, "GPU OK", ""),
+        "df -BG": (0, "50G", ""),
+        "mkdir": (0, "", ""),
+    })
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", ssh),
+        # Stop early — we only care that preflight didn't issue any cleanup commands
+        patch(
+            "tokenpal.tools.remote_train._run_scp",
+            _MockSCP(rc=1, err="stop here"),
+        ),
+        patch(
+            "tokenpal.tools.remote_train._build_bundle",
+            return_value=Path("/tmp/fake.tar.gz"),
+        ),
+    ):
+        with pytest.raises(RemoteTrainError):
+            await remote_finetune(
+                _make_profile(),
+                config,
+                lambda msg: progress_msgs.append(msg),
+            )
+
+    # No stale-lock cleanup commands should have fired
+    assert not any("rm -f /tmp/tokenpal-training.lock" in c for c in ssh.calls)
+    assert not any(
+        "tmux kill-session" in c and "2>/dev/null" not in c for c in ssh.calls
+    )
+    assert not any("stale training lock" in msg.lower() for msg in progress_msgs)
+    assert not any("orphan tmux session" in msg.lower() for msg in progress_msgs)
 
 
 async def test_training_oom_includes_hint():
