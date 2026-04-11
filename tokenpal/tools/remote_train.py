@@ -495,6 +495,30 @@ async def _run_rsync(
     )
 
 
+def _looks_like_hf_auth_error(text: str) -> bool:
+    """Heuristic: does this error text look like an HF auth/gate failure?
+
+    HuggingFace returns 401/403 HTTP errors with varying prose depending on
+    the specific failure (missing token, expired token, ungated model not
+    yet accepted). This catches the common cases without coupling to a
+    specific HF exception class (which may not be importable from here).
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    markers = (
+        "401", "403",
+        "unauthorized", "forbidden",
+        "gated", "gatedrepoerror",
+        "invalid credentials",
+        "token is not valid", "invalid token",
+        "repository not found",  # private repo without token
+        "access to model",  # "access to model X is restricted"
+        "must be authenticated",
+    )
+    return any(m in lower for m in markers)
+
+
 async def _ensure_base_model(
     remote: RemoteTrainConfig,
     base_model: str,
@@ -543,6 +567,26 @@ async def _ensure_base_model(
         progress("Base model downloaded on remote.")
         return model_dir
 
+    # Detect auth failures before falling back — a gated/401/403 model will
+    # fail the same way locally, so falling through just wastes time and
+    # produces a confusing cascade of opaque HTTP errors at the caller.
+    if _looks_like_hf_auth_error(err):
+        target = _ssh_target(remote)
+        raise RemoteTrainError(
+            "auth",
+            f"HuggingFace auth failed for {base_model}.",
+            hint=(
+                f"The remote couldn't access {base_model} — likely an expired "
+                f"or missing HF_TOKEN, or you haven't accepted the model's "
+                f"license on huggingface.co.\n"
+                f"Fix on the remote:\n"
+                f"  ssh {target}\n"
+                f"  # Set or update the token in ~/.bashrc:\n"
+                f"  echo 'export HF_TOKEN=hf_your_token_here' >> ~/.bashrc\n"
+                f"  # Also accept the license at: https://huggingface.co/{base_model}"
+            ),
+        )
+
     # Fall back to local download + SCP push
     progress("Remote download failed, downloading locally...")
     try:
@@ -554,7 +598,29 @@ async def _ensure_base_model(
         ) from exc
 
     local_model_dir = Path(tempfile.mkdtemp()) / "model"
-    snapshot_download(base_model, local_dir=str(local_model_dir))
+    try:
+        snapshot_download(base_model, local_dir=str(local_model_dir))
+    except Exception as exc:
+        # Catch HF-specific auth errors (GatedRepoError, HTTP 401/403) and
+        # surface them with an actionable hint. Other snapshot_download
+        # failures (network, disk full) propagate as-is.
+        if _looks_like_hf_auth_error(str(exc)) or type(exc).__name__ in (
+            "GatedRepoError", "RepositoryNotFoundError", "HfHubHTTPError",
+        ):
+            raise RemoteTrainError(
+                "auth",
+                f"HuggingFace auth failed for {base_model} (local fallback).",
+                hint=(
+                    f"Neither the remote nor your local machine could access "
+                    f"{base_model}.\n"
+                    f"Most likely: expired/missing HF_TOKEN, or you need to "
+                    f"accept the model license at "
+                    f"https://huggingface.co/{base_model}\n"
+                    f"Local fix:\n"
+                    f"  export HF_TOKEN=hf_your_token_here"
+                ),
+            ) from exc
+        raise
 
     progress("Pushing base model to remote (this may take a while)...")
     scp_rdir = remote.remote_dir
@@ -1141,8 +1207,23 @@ async def remote_finetune(
     model_name = f"tokenpal-{slug}"
     system_prompt = build_system_prompt(profile)
     if not register_ollama(local_model_dir, model_name, system_prompt):
+        # The safetensors are sitting safely at local_model_dir — don't let
+        # the user think their training effort was lost. Give them the path
+        # and the manual re-register command so they can recover without
+        # rerunning the full pipeline.
         raise RemoteTrainError(
-            "register", "Ollama registration failed. Is ollama running?",
+            "register",
+            "Ollama registration failed. Is ollama running?",
+            hint=(
+                f"Your merged model is saved at:\n"
+                f"  {local_model_dir}\n"
+                f"Training did NOT need to be redone. Once ollama is running, "
+                f"you can register it manually without re-running finetune:\n"
+                f"  ollama create {model_name} -f <(echo 'FROM {local_model_dir}')\n"
+                f"Or retry just the registration step:\n"
+                f"  ollama serve  # in another terminal\n"
+                f"  /voice finetune {profile.character}  # will skip to register"
+            ),
         )
 
     # -- Cleanup remote artifacts (keep base model + venv + source hash) --

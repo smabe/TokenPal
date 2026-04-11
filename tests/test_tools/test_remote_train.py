@@ -998,3 +998,161 @@ async def test_pull_checksum_mismatch_raises_hard_error(tmp_path):
     assert err.hint, "checksum mismatch error should include recovery hint"
     assert "rm -rf" in err.hint
     assert "voice finetune" in err.hint.lower()
+
+
+# ---------------------------------------------------------------------------
+# Error surfacing tests (commit 4 of pipeline-hardening)
+# ---------------------------------------------------------------------------
+
+
+def test_looks_like_hf_auth_error_detects_common_patterns():
+    """The heuristic catches the common HF auth failure shapes."""
+    from tokenpal.tools.remote_train import _looks_like_hf_auth_error
+
+    # Positive cases: common HF auth error messages
+    assert _looks_like_hf_auth_error("HTTPError: 401 Client Error")
+    assert _looks_like_hf_auth_error("403 Forbidden")
+    assert _looks_like_hf_auth_error("GatedRepoError: Cannot access gated repo")
+    assert _looks_like_hf_auth_error("Access to model google/gemma-2-2b-it is restricted")
+    assert _looks_like_hf_auth_error("Invalid credentials in Authorization header")
+    assert _looks_like_hf_auth_error("Token is not valid")
+    assert _looks_like_hf_auth_error("Repository Not Found for url")
+    assert _looks_like_hf_auth_error("You must be authenticated to access this resource")
+
+    # Negative cases: other errors should not trip the heuristic
+    assert not _looks_like_hf_auth_error("Connection timed out")
+    assert not _looks_like_hf_auth_error("Disk full")
+    assert not _looks_like_hf_auth_error("SSL: CERTIFICATE_VERIFY_FAILED")
+    assert not _looks_like_hf_auth_error("")
+    assert not _looks_like_hf_auth_error("Download succeeded")
+
+
+async def test_ensure_base_model_surfaces_hf_auth_error():
+    """Remote HF download fails with 401/403 → RemoteTrainError('auth') with hint."""
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", ""),  # model not present
+        "snapshot_download": (1, "", "HTTPError: 401 Client Error: Unauthorized"),
+    })
+
+    with pytest.raises(RemoteTrainError) as exc_info:
+        await _ensure_base_model(
+            remote,
+            base_model="google/gemma-2-2b-it",
+            model_dir="/home/user/tokenpal-training/model",
+            venv_py="/home/user/tokenpal-training/.venv/bin/python",
+            _ssh=ssh,
+            progress=lambda _: None,
+        )
+
+    err = exc_info.value
+    assert err.step == "auth"
+    assert "HuggingFace auth failed" in err.detail
+    assert "gemma-2-2b-it" in err.detail
+    assert err.hint
+    assert "HF_TOKEN" in err.hint
+    assert "huggingface.co/google/gemma-2-2b-it" in err.hint
+    # Should NOT have attempted local download — auth will fail there too
+    # (we can't assert that from this test directly since we don't mock
+    # huggingface_hub.snapshot_download, but the raise short-circuits it)
+
+
+async def test_ensure_base_model_nonauth_error_falls_through_to_local():
+    """Non-auth remote failure (e.g. network) falls through to local download path.
+
+    Guard against the new auth check accidentally swallowing transient failures
+    that WOULD succeed on the local fallback.
+    """
+    remote = _make_remote()
+    ssh = _MockSSH({
+        "BASE_MODEL_OK": (1, "", ""),
+        "snapshot_download": (1, "", "Connection reset by peer"),
+    })
+
+    # Patch local snapshot_download + the push transport (rsync for non-WSL).
+    async def succeeding_rsync(
+        remote, local, remote_path, pull=False, progress=None, timeout=3600,
+    ):
+        return (0, "")
+
+    with (
+        patch("huggingface_hub.snapshot_download") as mock_local_dl,
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+        patch("tokenpal.tools.remote_train._run_rsync", succeeding_rsync),
+    ):
+        mock_local_dl.return_value = None
+        result = await _ensure_base_model(
+            remote,
+            base_model="google/gemma-2-2b-it",
+            model_dir="/home/user/tokenpal-training/model",
+            venv_py="/home/user/tokenpal-training/.venv/bin/python",
+            _ssh=ssh,
+            progress=lambda _: None,
+        )
+
+    # Should have reached and called local snapshot_download
+    assert mock_local_dl.called
+    assert result == "/home/user/tokenpal-training/model"
+
+
+async def test_ollama_register_failure_includes_recovery_hint(tmp_path):
+    """Register returns False → error with safetensors path + manual recovery."""
+    config = _make_config()
+    config.output_dir = str(tmp_path)
+
+    async def smart_ssh(remote, cmd, progress=None, timeout=3600):
+        if "import torch" in cmd:
+            return (0, "lock_file=0\nlock=free\ntmux=dead\nvenv=ok\n", "")
+        if "nvidia-smi" in cmd:
+            return (0, "GPU OK", "")
+        if "df -BG" in cmd:
+            return (0, "50G", "")
+        if "mkdir" in cmd:
+            return (0, "", "")
+        if ".source-hash" in cmd:
+            return (0, _hash_training_sources(), "")
+        if "finetune_voice prep" in cmd:
+            return (0, "", "")
+        if "checkpoint-" in cmd and "ls -d" in cmd:
+            return (1, "", "")
+        if "flock -n" in cmd and "-c true" not in cmd:
+            return (0, "locked", "")
+        if "echo $HOME" in cmd:
+            return (0, "/home/user", "")
+        if "rocminfo" in cmd:
+            return (0, "", "")
+        if "base64 -d" in cmd:
+            return (0, "", "")
+        if "tmux new-session" in cmd:
+            return (0, "", "")
+        if "tmux has-session" in cmd:
+            return (0, "done", "")
+        if "tail" in cmd and "train.log" in cmd:
+            return (0, "EXIT_CODE=0", "")
+        if "finetune_voice merge" in cmd:
+            return (0, "merged", "")
+        if "sha256sum" in cmd:
+            return (0, "", "")  # empty hash → skip verification
+        return (0, "", "")
+
+    async def succeeding_rsync(remote, local, remote_path, pull=False, progress=None, timeout=3600):
+        return (0, "")
+
+    with (
+        patch("tokenpal.tools.remote_train._run_ssh", smart_ssh),
+        patch("tokenpal.tools.remote_train._run_scp", _MockSCP(rc=0)),
+        patch("tokenpal.tools.remote_train._run_rsync", succeeding_rsync),
+        patch("tokenpal.tools.remote_train._ensure_base_model"),
+        # register_ollama returns False → triggers the error branch
+        patch("tokenpal.tools.finetune_voice.register_ollama", return_value=False),
+    ):
+        with pytest.raises(RemoteTrainError, match="register") as exc_info:
+            await remote_finetune(_make_profile(), config)
+
+    err = exc_info.value
+    assert err.step == "register"
+    assert err.hint, "register failure should include recovery hint"
+    assert "tokenpal-mordecai" in err.hint
+    # Should tell the user where their model is so they don't think it's lost
+    assert str(tmp_path) in err.hint or "models/tokenpal-mordecai" in err.hint
+    assert "ollama" in err.hint.lower()
