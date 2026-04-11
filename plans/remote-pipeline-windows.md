@@ -1,5 +1,31 @@
 # Remote Pipeline — Native Windows Support
 
+> ## 📍 Handoff state (2026-04-11) — PICK UP HERE
+>
+> **Status**: code paths complete (commits 1–4b shipped + simplify + dogfood-iteration fixes), but the dogfood failed inside `install.ps1` with a PowerShell parser error. Handing off to a Claude instance running ON the Windows machine because PowerShell here-string debugging from a Mac is the wrong machine for the job.
+>
+> **What's blocking**: `install.ps1` Phase 6 verification uses a PowerShell here-string `@"...import torch; assert torch.cuda.is_available()..."@` that PowerShell parses as code instead of a string literal. CRLF line endings are confirmed in place (121/121 bytes), the closing `"@` is at column 0, the file looks correct in `Get-Content` output — but the parser still chokes with `MissingEndCurlyBrace` at the assert line.
+>
+> **Suggested first move**: kill the here-string entirely. Replace Phase 6 with one inline `& $VenvPython -c "import torch; assert torch.cuda.is_available(); print('GPU OK: ' + torch.cuda.get_device_name(0))"` — single line, semicolons not f-strings. Here-strings are fragile across encodings + PS versions; inline is bulletproof.
+>
+> **Where the script lives**: `tokenpal/tools/remote_train.py` — search for `_INSTALL_PS1 = r"""..."""`. Same file holds `_TRAIN_PS1 = r"""..."""` (parameterized training runner) which probably has the same here-string-shape issues and also needs validation.
+>
+> **Authoring workflow**:
+> 1. SSH into geefourteen on port 22 (Windows side) — same key as port 2222 (WSL side)
+> 2. Pull `C:\Users\Smabe\tokenpal-training\install.ps1` into PowerShell ISE or VS Code
+> 3. Edit + run iteratively (`powershell -ExecutionPolicy Bypass -File install.ps1`) until exit code 0
+> 4. Paste the working content back into `_INSTALL_PS1` in `remote_train.py`
+> 5. Same drill for `run_train.ps1` and `_TRAIN_PS1`
+> 6. Resume the dogfood: there's a script harness pattern in the conversation history (loads BMO profile, overrides remote to platform=windows port=22, calls `remote_finetune`)
+>
+> **What's working end-to-end on Windows already**: GPU probe, platform detection, mkdir, disk check, preflight remote state, source-hash check, bundle build, SCP push to remote. Failure first appears in install.ps1.
+>
+> **What's untested on Windows but expected to need similar fixes**: `_build_windows_base_model_check`, `_build_merge_cmd`, `_build_remote_sha256_cmd`, `_build_cleanup_cmd` (all build PowerShell command strings from Python f-strings), and `run_train.ps1` parameterized training runner.
+>
+> **Lesson absorbed (and saved as feedback memory)**: when authoring a foreign language (PowerShell from Mac, Bash from Windows, etc.), iterate on the actual target machine. The Mac→Windows feedback loop is too slow and PowerShell errors don't translate to byte-level inspection.
+>
+> **Test invariant**: 83 tests in `tests/test_tools/test_remote_train.py` must stay green throughout. If you change the SSH probe shape or the PS command builders, the existing mocks (look for `_MockSSH`, `smart_ssh`, `_preflight_clean`, `_preflight_state`) need updating. Run `pytest tests/test_tools/test_remote_train.py -q` after each change.
+
 ## Goal
 Add native Windows training to the remote fine-tuning pipeline so the RTX 4070 host no longer needs WSL. Uses bf16 LoRA with gradient checkpointing + eager attention (VRAM-verified: 7.43 GB peak on 8.59 GB card). One-time PowerShell setup script replaces `install.sh` on Windows hosts. Eliminates the filesystem doubling tax, the DrvFS SSL flakes, and the WSL install complexity in one move.
 
