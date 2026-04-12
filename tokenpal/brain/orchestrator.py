@@ -193,6 +193,9 @@ class Brain:
             self._sense_last_polled[s.sense_name] = now
             if isinstance(r, SenseReading):
                 readings.append(r)
+            elif r is None:
+                # Sense returned nothing — clear stale reading
+                self._context.clear_reading(s.sense_name)
             elif isinstance(r, Exception):
                 log.debug("Sense poll error: %s", r)
         return readings

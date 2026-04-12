@@ -50,6 +50,10 @@ class ContextWindowBuilder:
             self._readings[r.sense_name] = r
             self._history.append(r)
 
+    def clear_reading(self, sense_name: str) -> None:
+        """Remove a sense's reading (e.g. when it returns None)."""
+        self._readings.pop(sense_name, None)
+
     def snapshot(self) -> str:
         """Build a natural-language context string for the LLM prompt."""
         now = time.monotonic()
