@@ -304,3 +304,52 @@ tokenpal-finetune export --adapter out/adapter --output model.gguf  # legacy GGU
 tokenpal-finetune register --gguf model.gguf --name tokenpal-bmo
 tokenpal-finetune all profile.json                  # full local pipeline
 ```
+
+## Developer Gotchas
+
+Implementation notes for working on `remote_train.py` and `finetune_voice.py`:
+
+### Pinned Dependencies
+- `transformers==4.56.1` — 4.57.2 has a bug with local model paths
+- `remove_columns=["conversations"]` when mapping dataset to prevent TRL from re-applying chat template
+- Gemma-2 does not support system role in chat template
+
+### Windows PowerShell via SSH
+- All PowerShell command builders avoid `\"` inside `powershell -Command "..."` — cmd.exe misparses `\"` as string terminators. Use single-quoted strings, concatenation, `[char]10` for newlines
+- `install.ps1` requires UTF-8 BOM — without it, PS 5.1 reads as Windows-1252, em dashes become garbled
+- `$LASTEXITCODE` is reliable through `Tee-Object` pipelines (tested)
+- `run_train.ps1` sets `TORCHDYNAMO_DISABLE=1` (triton import crashes on Windows) and `HF_HUB_OFFLINE=1`
+- Training extras installed before CUDA torch — transitive deps pull CPU torch from PyPI otherwise
+- Triton uninstalled after torch install (broken Windows binaries)
+
+### SSH/SCP Plumbing
+- `RemoteTrainConfig.port` field: `_run_ssh` uses `-p`, `_run_scp` uses `-P`, `_run_rsync` passes `-p` in ssh command
+- SCP remote paths must use forward slashes — backslash `C:\` breaks the `host:path` delimiter
+- SCP `-r` creates a nested subdir — code renames atomically on success
+- Local `scp.exe` must be in PATH on the controller machine
+
+### Model Integrity
+- sha256 of safetensors verified after pull — mismatch is a hard error
+- Hash computation uses `\n` line separators (not `[Environment]::NewLine` which is `\r\n` on Windows)
+- Base model integrity: config.json with `model_type` + nonzero weight shards. Windows variant wrapped in `powershell -Command "..."` (SSH default shell is cmd.exe)
+
+### Ollama Integration
+- `ollama create` panics on Gemma-2's `additional_special_tokens` (string format, expects dict). Workaround: convert to GGUF via `convert_hf_to_gguf.py` (b4921 tag matches gguf 0.18.0)
+- Fine-tuned 2B models can't handle tool calling — use gemma4 + voice profiles for daily use
+- Ollama on Windows: not in PATH from cmd.exe SSH — use full path `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`
+
+### Wheel Bundle
+- Auto-built in `remote_finetune()`, hash-compared (`_hash_training_sources()`), only re-pushed when training code changes
+- Bundle includes both install.sh and install.ps1 so it works on any platform
+- All file I/O uses `encoding="utf-8"` explicitly — Windows defaults to cp1252
+
+### Error Handling
+- `RemoteTrainError` includes `hint` with platform-appropriate debug commands
+- HF auth errors detected via `_looks_like_hf_auth_error` heuristic on both remote and local paths
+- Disk space preflight warns if < 25GB free (Windows: `Get-PSDrive`, Linux: `df -BG`)
+- Preflight `_preflight_remote_state` takes `platform` param (no default). Linux: flock/tmux/venv probe. Windows: venv-only
+
+### Legacy WSL Path
+- Base64-encoded training scripts (survive SSH→PowerShell→WSL quoting)
+- `_resolve_wsl_mount()` for SCP↔WSL bridge
+- Direct WSL SSH (port 2222) is now recommended over this path
