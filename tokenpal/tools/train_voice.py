@@ -83,10 +83,15 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
         return None
 
 
+def _sample_block(lines: list[str], n: int = 10) -> str:
+    """Pick up to *n* random lines and format as a bulleted block."""
+    samples = random.sample(lines, min(n, len(lines)))
+    return "\n".join(f"- {line}" for line in samples)
+
+
 def _generate_persona(character: str, lines: list[str]) -> str | None:
     """Ask Ollama to describe the character's voice from sample lines."""
-    samples = random.sample(lines, min(15, len(lines)))
-    samples_block = "\n".join(f"- {line}" for line in samples)
+    samples_block = _sample_block(lines, 15)
 
     return _ollama_generate(f"""Here are sample dialogue lines from the character "{character}":
 
@@ -99,8 +104,7 @@ Write ONLY the persona description, nothing else. No quotes. One sentence.""")
 
 def _generate_lines_from_prompt(character: str, lines: list[str], task_prompt: str) -> list[str]:
     """Generate numbered one-liners via Ollama from a character's voice samples."""
-    samples = random.sample(lines, min(10, len(lines)))
-    samples_block = "\n".join(f"- {line}" for line in samples)
+    samples_block = _sample_block(lines)
 
     text = _ollama_generate(
         f"""Here are sample dialogue lines from "{character}":
@@ -148,10 +152,11 @@ def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
 
 def _generate_voice_assets(
     character: str, lines: list[str],
-) -> tuple[str, list[str], list[str], dict[str, str], list[str]]:
+) -> tuple[str, list[str], list[str], dict[str, str], dict[str, str], str, list[str]]:
     """Run all voice generation tasks in parallel.
 
-    Returns (persona, greetings, offline_quips, mood_prompts, structure_hints).
+    Returns (persona, greetings, offline_quips, mood_prompts, mood_roles,
+             default_mood, structure_hints).
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -162,39 +167,84 @@ def _generate_voice_assets(
         f_m = pool.submit(_generate_mood_prompts, character, lines)
         f_s = pool.submit(_generate_structure_hints, character, lines)
 
+    mood_prompts, mood_roles, default_mood = f_m.result()
+
     return (
         f_p.result() or "",
         f_g.result(),
         f_q.result(),
-        f_m.result(),
+        mood_prompts,
+        mood_roles,
+        default_mood,
         f_s.result(),
     )
 
 
-def _generate_mood_prompts(character: str, lines: list[str]) -> dict[str, str]:
-    """Generate character-specific mood descriptions for all 6 moods."""
-    samples = random.sample(lines, min(10, len(lines)))
-    samples_block = "\n".join(f"- {line}" for line in samples)
+_MOOD_ROLES = ("DEFAULT", "SLEEPY", "BORED", "HYPER", "IMPRESSED", "CONCERNED")
+_RE_MOOD_LINE = re.compile(
+    r"^(" + "|".join(_MOOD_ROLES) + r")"
+    r"\s*\|\s*"
+    r"([A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*)"
+    r"\s*\|\s*"
+    r"(.+)$",
+)
+
+
+def _parse_custom_moods(
+    text: str,
+) -> tuple[dict[str, str], dict[str, str], str] | None:
+    """Parse pipe-delimited mood output.
+
+    Returns (mood_prompts, mood_roles, default_mood) or None on failure.
+    mood_prompts: role-keyed prompt strings.
+    mood_roles: role -> custom display name.
+    """
+    prompts: dict[str, str] = {}
+    roles: dict[str, str] = {}
+    for line in text.strip().splitlines():
+        m = _RE_MOOD_LINE.match(line.strip())
+        if not m:
+            continue
+        role = m.group(1).lower()
+        name = m.group(2).upper()
+        desc = m.group(3).strip()
+        if desc[-1] not in ".!?":
+            desc += "."
+        prompts[role] = f"Your current mood: {name}. {desc}"
+        roles[role] = name
+
+    expected = {r.lower() for r in _MOOD_ROLES}
+    if set(prompts.keys()) != expected:
+        return None
+    if len(set(roles.values())) != len(_MOOD_ROLES):
+        return None  # duplicate names
+
+    default_mood = roles.get("default", "")
+    return prompts, roles, default_mood
+
+
+def _generate_mood_prompts_legacy(
+    character: str, lines: list[str],
+) -> dict[str, str]:
+    """Legacy fallback: hardcoded mood names with character descriptions."""
+    samples_block = _sample_block(lines)
 
     text = _ollama_generate(
-        f"""Here are sample dialogue lines from "{character}":
-
-{samples_block}
-
-Write 6 mood descriptions for this character. Each should be ONE sentence describing how this character acts in that mood, using their slang and personality. Format as "MOOD: description".
-
-SNARKY: (their default dry/sharp attitude)
-IMPRESSED: (grudging respect, backhanded compliments)
-BORED: (nothing interesting happening)
-CONCERNED: (worried about the user)
-HYPER: (excited, energetic)
-SLEEPY: (tired, half-awake)
-
-Write ONLY the 6 lines, nothing else.""",
+        f'Here are sample dialogue lines from "{character}":\n\n'
+        f"{samples_block}\n\n"
+        "Write 6 mood descriptions for this character. Each should be ONE "
+        "sentence describing how this character acts in that mood, using their "
+        'slang and personality. Format as "MOOD: description".\n\n'
+        "SNARKY: (their default dry/sharp attitude)\n"
+        "IMPRESSED: (grudging respect, backhanded compliments)\n"
+        "BORED: (nothing interesting happening)\n"
+        "CONCERNED: (worried about the user)\n"
+        "HYPER: (excited, energetic)\n"
+        "SLEEPY: (tired, half-awake)\n\n"
+        "Write ONLY the 6 lines, nothing else.",
         max_tokens=300,
         temperature=0.8,
     )
-
     if not text:
         return {}
 
@@ -208,6 +258,52 @@ Write ONLY the 6 lines, nothing else.""",
                     moods[mood.lower()] = f"Your current mood: {mood}. {desc}"
                 break
     return moods
+
+
+def _generate_mood_prompts(
+    character: str, lines: list[str],
+) -> tuple[dict[str, str], dict[str, str], str]:
+    """Generate character-specific mood names and descriptions.
+
+    Returns (mood_prompts, mood_roles, default_mood).
+    """
+    samples_block = _sample_block(lines)
+
+    prompt = (
+        f'Here are sample dialogue lines from "{character}":\n\n'
+        f"{samples_block}\n\n"
+        "This character needs 6 moods for an AI buddy app. Each mood has a "
+        "ROLE (how the app triggers it) and a NAME (what the character would "
+        "call that feeling).\n\n"
+        "Pick a mood name that fits this character's personality for each role, "
+        "then write a one-sentence mood description in their voice.\n\n"
+        "Format each mood as exactly:\n"
+        "ROLE | NAME | description\n\n"
+        "The 6 roles (one line each, in this order):\n"
+        "DEFAULT | <their neutral/signature attitude> | <description>\n"
+        "SLEEPY | <their version of tired/drowsy> | <description>\n"
+        "BORED | <their version of bored/restless> | <description>\n"
+        "HYPER | <their version of excited/energetic> | <description>\n"
+        "IMPRESSED | <their version of grudging respect> | <description>\n"
+        "CONCERNED | <their version of worried/caring> | <description>\n\n"
+        "Rules:\n"
+        "- Mood names must be ONE WORD, all caps, no punctuation\n"
+        "- Each description must be ONE sentence using the character's slang "
+        "and speech patterns\n"
+        "- Write ONLY the 6 lines, nothing else"
+    )
+
+    for _attempt in range(2):
+        text = _ollama_generate(prompt, max_tokens=400, temperature=0.8)
+        if not text:
+            continue
+        parsed = _parse_custom_moods(text)
+        if parsed:
+            return parsed
+
+    # Fallback to legacy (hardcoded mood names, character descriptions)
+    legacy = _generate_mood_prompts_legacy(character, lines)
+    return legacy, {}, ""
 
 
 def train_from_wiki(
@@ -239,7 +335,7 @@ def train_from_wiki(
         return None
 
     _progress(f"Found {len(lines)} lines. Generating voice...")
-    persona, greetings, offline_quips, mood_prompts, structure_hints = (
+    persona, greetings, offline_quips, mood_prompts, mood_roles, default_mood, structure_hints = (
         _generate_voice_assets(character, lines)
     )
 
@@ -252,6 +348,8 @@ def train_from_wiki(
         greetings=greetings,
         offline_quips=offline_quips,
         mood_prompts=mood_prompts,
+        mood_roles=mood_roles,
+        default_mood=default_mood,
         structure_hints=structure_hints,
     )
 
@@ -425,10 +523,12 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     greetings: list[str] = []
     offline_quips: list[str] = []
     mood_prompts: dict[str, str] = {}
+    mood_roles: dict[str, str] = {}
+    default_mood: str = ""
     structure_hints: list[str] = []
     if not args.no_persona:
         print("Generating voice assets via Ollama...", flush=True)
-        persona, greetings, offline_quips, mood_prompts, structure_hints = (
+        persona, greetings, offline_quips, mood_prompts, mood_roles, default_mood, structure_hints = (
             _generate_voice_assets(name, lines)
         )
 
@@ -444,8 +544,9 @@ def _cmd_extract(args: argparse.Namespace) -> None:
                 print(f'  "{q}"')
         if mood_prompts:
             print(f"\nMood prompts ({len(mood_prompts)}):")
-            for mood, prompt in mood_prompts.items():
-                print(f"  {mood}: {prompt}")
+            for role, prompt in mood_prompts.items():
+                display = mood_roles.get(role, role.upper())
+                print(f"  {display} ({role}): {prompt}")
         if structure_hints:
             print(f"\nStyle hints ({len(structure_hints)}):")
             for h in structure_hints[:5]:
@@ -460,6 +561,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         greetings=greetings,
         offline_quips=offline_quips,
         mood_prompts=mood_prompts,
+        mood_roles=mood_roles,
+        default_mood=default_mood,
         structure_hints=structure_hints,
     )
     out_path = save_profile(profile, _get_voices_dir())

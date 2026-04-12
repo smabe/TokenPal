@@ -19,6 +19,8 @@ class VoiceProfile:
     greetings: list[str] = field(default_factory=list)
     offline_quips: list[str] = field(default_factory=list)
     mood_prompts: dict[str, str] = field(default_factory=dict)
+    mood_roles: dict[str, str] = field(default_factory=dict)
+    default_mood: str = ""
     structure_hints: list[str] = field(default_factory=list)
     finetuned_model: str = ""
     finetuned_base: str = ""
@@ -59,6 +61,8 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         greetings=data.get("greetings", []),
         offline_quips=data.get("offline_quips", []),
         mood_prompts=data.get("mood_prompts", {}),
+        mood_roles=data.get("mood_roles", {}),
+        default_mood=data.get("default_mood", ""),
         structure_hints=data.get("structure_hints", []),
         finetuned_model=data.get("finetuned_model", ""),
         finetuned_base=data.get("finetuned_base", ""),
@@ -89,6 +93,8 @@ def make_profile(
     greetings: list[str] | None = None,
     offline_quips: list[str] | None = None,
     mood_prompts: dict[str, str] | None = None,
+    mood_roles: dict[str, str] | None = None,
+    default_mood: str = "",
     structure_hints: list[str] | None = None,
 ) -> VoiceProfile:
     """Create a new VoiceProfile with the current timestamp."""
@@ -101,5 +107,7 @@ def make_profile(
         greetings=greetings or [],
         offline_quips=offline_quips or [],
         mood_prompts=mood_prompts or {},
+        mood_roles=mood_roles or {},
+        default_mood=default_mood,
         structure_hints=structure_hints or [],
     )

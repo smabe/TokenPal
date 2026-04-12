@@ -181,6 +181,16 @@ class Mood(enum.Enum):
     SLEEPY = "sleepy"
 
 
+# Map Mood enum values to heuristic role names for custom mood lookup
+_ENUM_TO_ROLE: dict[Mood, str] = {
+    Mood.SNARKY: "default",
+    Mood.IMPRESSED: "impressed",
+    Mood.BORED: "bored",
+    Mood.CONCERNED: "concerned",
+    Mood.HYPER: "hyper",
+    Mood.SLEEPY: "sleepy",
+}
+
 _MOOD_PROMPTS: dict[Mood, str] = {
     Mood.SNARKY: "Your current mood: SNARKY. Classic you — dry, witty, amused.",
     Mood.IMPRESSED: "Your current mood: IMPRESSED. Grudging respect only. Backhanded compliments.",
@@ -382,6 +392,7 @@ class PersonalityEngine:
         self._voice_greetings = (voice.greetings or []) if voice else []
         self._voice_offline_quips = (voice.offline_quips or []) if voice else []
         self._voice_mood_prompts = (voice.mood_prompts or {}) if voice else {}
+        self._mood_roles = (voice.mood_roles or {}) if voice else {}
         self._voice_structure_hints = (voice.structure_hints or []) if voice else []
         self._finetuned_model = voice.finetuned_model if voice else ""
         self._example_pool = self._build_example_pool(voice.lines if voice else None)
@@ -562,7 +573,11 @@ class PersonalityEngine:
 
     @property
     def mood(self) -> str:
-        """Current mood as a string."""
+        """Current mood as a display string (custom name when voice active)."""
+        role = _ENUM_TO_ROLE.get(self._mood, "default")
+        custom = self._mood_roles.get(role)
+        if custom:
+            return custom.lower()
         return self._mood.value
 
     @staticmethod
@@ -579,10 +594,17 @@ class PersonalityEngine:
         return list(_EXAMPLE_POOL)
 
     def _mood_line(self) -> str:
-        """Get the mood prompt, preferring voice-specific if available."""
-        voice_line = self._voice_mood_prompts.get(self._mood.value)
+        """Get the mood prompt — 3-tier fallback: role-keyed → legacy key → hardcoded."""
+        role = _ENUM_TO_ROLE.get(self._mood, "default")
+        # Tier 1: role-keyed voice prompt (new-style profiles)
+        voice_line = self._voice_mood_prompts.get(role)
         if voice_line:
             return voice_line
+        # Tier 2: legacy voice prompt (old-style profiles keyed by mood name)
+        legacy_line = self._voice_mood_prompts.get(self._mood.value)
+        if legacy_line:
+            return legacy_line
+        # Tier 3: hardcoded default
         return _MOOD_PROMPTS[self._mood]
 
     def filter_response(self, text: str) -> str | None:
