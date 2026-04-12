@@ -2,33 +2,56 @@
 set -euo pipefail
 
 # TokenPal Server Installer — Linux / macOS
-# Sets up: Ollama, model, Python venv, tokenpal[server], firewall, systemd
+# Sets up: Python, Ollama, model, venv, tokenpal[server], firewall, systemd
+# Run from inside the cloned TokenPal repo.
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="${TOKENPAL_SERVER_DIR:-$HOME/.tokenpal}"
-VENV_DIR="$INSTALL_DIR/server-venv"
 PORT="${TOKENPAL_PORT:-8585}"
 MODEL="${TOKENPAL_MODEL:-gemma4}"
-PYTHON="${PYTHON:-python3}"
 
 echo "=== TokenPal Server Setup ==="
-echo "Install dir: $INSTALL_DIR"
+echo "Repo: $REPO_DIR"
 echo ""
 
-# --- Phase 1: Python check ---
+# --- Phase 1: Python ---
 echo "[1/7] Checking Python..."
-if ! command -v "$PYTHON" &>/dev/null; then
-    echo "ERROR: $PYTHON not found. Install Python 3.12+."
-    exit 1
+PYTHON=""
+for candidate in python3.12 python3.13 python3.14 python3; do
+    if command -v "$candidate" &>/dev/null; then
+        minor=$("$candidate" -c "import sys; print(sys.version_info.minor)" 2>/dev/null || echo 0)
+        if (( minor >= 12 )); then
+            PYTHON="$candidate"
+            break
+        fi
+    fi
+done
+if [[ -z "$PYTHON" ]]; then
+    echo "  Python 3.12+ not found. Installing..."
+    if [[ "$(uname)" == "Darwin" ]]; then
+        if command -v brew &>/dev/null; then
+            brew install python@3.12
+            PYTHON="python3.12"
+        else
+            echo "ERROR: Install Homebrew first (https://brew.sh) or Python 3.12+ from python.org"
+            exit 1
+        fi
+    elif command -v apt-get &>/dev/null; then
+        sudo apt-get update && sudo apt-get install -y python3.12 python3.12-venv
+        PYTHON="python3.12"
+    elif command -v dnf &>/dev/null; then
+        sudo dnf install -y python3.12
+        PYTHON="python3.12"
+    else
+        echo "ERROR: Could not install Python automatically. Install Python 3.12+ and re-run."
+        exit 1
+    fi
 fi
 PY_VER=$("$PYTHON" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-PY_MINOR=$("$PYTHON" -c "import sys; print(sys.version_info.minor)")
-if (( PY_MINOR < 12 )); then
-    echo "ERROR: Python 3.12+ required, found $PY_VER"
-    exit 1
-fi
 echo "  Python $PY_VER OK"
 
-# --- Phase 2: Ollama install ---
+# --- Phase 2: Ollama ---
 echo "[2/7] Checking Ollama..."
 if ! command -v ollama &>/dev/null; then
     echo "  Ollama not found. Installing..."
@@ -37,7 +60,6 @@ if ! command -v ollama &>/dev/null; then
             brew install ollama
         else
             echo "  Install Ollama from https://ollama.com/download"
-            echo "  Or: brew install ollama"
             exit 1
         fi
     else
@@ -63,10 +85,13 @@ fi
 # --- Phase 4: Venv + tokenpal[server] ---
 echo "[4/7] Setting up Python environment..."
 mkdir -p "$INSTALL_DIR"
-"$PYTHON" -m venv "$VENV_DIR"
+VENV_DIR="$REPO_DIR/.venv"
+if [[ ! -d "$VENV_DIR" ]]; then
+    "$PYTHON" -m venv "$VENV_DIR"
+fi
 source "$VENV_DIR/bin/activate"
 pip install --upgrade pip -q
-pip install 'tokenpal[server]' -q
+pip install -e "$REPO_DIR[server]" -q
 echo "  tokenpal-server installed"
 
 # --- Phase 5: Firewall ---
@@ -85,7 +110,7 @@ else
 fi
 
 # --- Phase 6: HF Token ---
-echo "[6/7] HuggingFace token (for gated models like Gemma)..."
+echo "[6/7] HuggingFace token (for fine-tuning gated models like Gemma)..."
 if [[ -z "${HF_TOKEN:-}" ]]; then
     echo -n "  Paste your HF token (or press Enter to skip): "
     read -r hf_token
@@ -94,7 +119,7 @@ if [[ -z "${HF_TOKEN:-}" ]]; then
         chmod 600 "$INSTALL_DIR/server.env"
         echo "  Saved to $INSTALL_DIR/server.env"
     else
-        echo "  Skipped. Set HF_TOKEN later for gated models."
+        echo "  Skipped. Only needed for fine-tuning gated models."
     fi
 else
     echo "  HF_TOKEN already set in environment."
@@ -115,7 +140,7 @@ After=network-online.target
 [Service]
 Type=exec
 ExecStart=$VENV_DIR/bin/tokenpal-server --host 0.0.0.0
-WorkingDirectory=$INSTALL_DIR
+WorkingDirectory=$REPO_DIR
 EnvironmentFile=$INSTALL_DIR/server.env
 Restart=on-failure
 RestartSec=5
@@ -131,8 +156,8 @@ UNIT
     echo "  Start with: systemctl --user start tokenpal-server"
     echo "  Logs:       journalctl --user -u tokenpal-server -f"
 else
-    echo "  No systemd. Start manually with:"
-    echo "    source $VENV_DIR/bin/activate"
+    echo "  Start manually with:"
+    echo "    cd $REPO_DIR && source .venv/bin/activate"
     echo "    tokenpal-server --host 0.0.0.0"
 fi
 
