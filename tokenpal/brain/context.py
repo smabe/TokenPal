@@ -21,6 +21,7 @@ _SENSE_WEIGHTS: dict[str, float] = {
     "time_awareness": 0.15,
     "productivity": 0.1,
     "music": 0.2,
+    "weather": 0.0,  # never triggers alone, enriches context only
 }
 _DEFAULT_WEIGHT = 0.5
 

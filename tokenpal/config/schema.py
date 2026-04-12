@@ -20,6 +20,15 @@ class SensesConfig:
     voice: bool = False
     web_search: bool = False
     productivity: bool = False
+    weather: bool = False
+
+
+@dataclass
+class WeatherConfig:
+    latitude: float = 0.0
+    longitude: float = 0.0
+    temperature_unit: str = "fahrenheit"
+    location_label: str = ""
 
 
 @dataclass
@@ -138,3 +147,4 @@ class TokenPalConfig:
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    weather: WeatherConfig = field(default_factory=WeatherConfig)

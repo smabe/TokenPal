@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import json
 import logging
+import re
 import signal
 import sys
 import threading
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +74,7 @@ def main() -> None:
     sense_configs: dict[str, dict[str, Any]] = {}
     if memory:
         sense_configs["productivity"] = {"memory_store": memory}
+    sense_configs["weather"] = dataclasses.asdict(config.weather)
     senses = resolve_senses(
         sense_flags=sense_flags,
         sense_overrides=config.plugins.sense_overrides,
@@ -197,6 +201,9 @@ def main() -> None:
 
         return CommandResult("Usage: /server [status|switch <host|local|remote>]")
 
+    def _cmd_zip(args: str) -> CommandResult:
+        return _handle_zip_command(args)
+
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("mood", _cmd_mood)
@@ -204,6 +211,7 @@ def main() -> None:
     dispatcher.register("model", _cmd_model)
     dispatcher.register("voice", _cmd_voice)
     dispatcher.register("server", _cmd_server)
+    dispatcher.register("zip", _cmd_zip)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:
@@ -290,6 +298,80 @@ _RECOMMENDED_MODELS: list[tuple[str, str]] = [
     ("phi4-mini", "Microsoft, 3.8B — compact, capable"),
     ("qwen3:8b", "Alibaba, 8B — multilingual"),
 ]
+
+
+def _handle_zip_command(args: str) -> CommandResult:
+    """Handle /zip — geocode a zip code and write weather location to config."""
+    zipcode = args.strip()
+    if not zipcode:
+        return CommandResult("Usage: /zip 90210")
+    if not re.match(r"^\d{5}$", zipcode):
+        return CommandResult("Enter a 5-digit US zip code, e.g. /zip 90210")
+
+    # Geocode via Open-Meteo (same provider as weather — no new privacy surface)
+    try:
+        url = f"https://geocoding-api.open-meteo.com/v1/search?name={zipcode}&count=1"
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            data = json.loads(resp.read())
+    except Exception as e:
+        return CommandResult(f"Geocoding failed: {e}")
+
+    results = data.get("results")
+    if not results:
+        return CommandResult(f"No location found for zip code {zipcode}")
+
+    loc = results[0]
+    lat = round(loc.get("latitude", 0), 1)
+    lon = round(loc.get("longitude", 0), 1)
+    city = loc.get("name", "")
+    admin = loc.get("admin1", "")
+    label = f"{city}, {admin}" if admin else city
+
+    # Write to config.toml
+    _write_weather_config(lat, lon, label)
+    return CommandResult(f"Weather set to {label} ({zipcode}). Restart TokenPal to activate.")
+
+
+def _write_weather_config(lat: float, lon: float, label: str) -> None:
+    """Write weather location to config.toml, enabling the sense."""
+    from tokenpal.tools.train_voice import _find_config_toml
+
+    config_path = _find_config_toml()
+    weather_block = (
+        f"[weather]\n"
+        f"latitude = {lat}\n"
+        f"longitude = {lon}\n"
+        f'location_label = "{label}"\n'
+    )
+
+    if config_path.exists():
+        content = config_path.read_text(encoding="utf-8")
+
+        # Enable weather sense flag under [senses]
+        if re.search(r"^weather\s*=\s*false", content, re.MULTILINE):
+            content = re.sub(
+                r"^weather\s*=\s*false",
+                "weather = true",
+                content,
+                flags=re.MULTILINE,
+            )
+        elif "[senses]" in content and "weather" not in content:
+            content = content.replace("[senses]", "[senses]\nweather = true", 1)
+
+        # Replace or add [weather] section
+        if re.search(r"^\[weather\]\s*$", content, re.MULTILINE):
+            content = re.sub(
+                r"^\[weather\].*?(?=\n\[|\Z)",
+                weather_block.rstrip(),
+                content,
+                flags=re.DOTALL | re.MULTILINE,
+            )
+        else:
+            content = content.rstrip() + "\n\n" + weather_block
+    else:
+        content = f"[senses]\nweather = true\n\n{weather_block}"
+
+    config_path.write_text(content, encoding="utf-8")
 
 
 def _handle_model_command(

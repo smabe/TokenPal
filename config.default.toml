@@ -11,6 +11,7 @@ vision = false
 voice = false
 web_search = false
 productivity = false
+weather = false
 
 [llm]
 backend = "http"

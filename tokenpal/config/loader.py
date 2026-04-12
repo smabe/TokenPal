@@ -21,6 +21,7 @@ from tokenpal.config.schema import (
     ServerConfig,
     TokenPalConfig,
     UIConfig,
+    WeatherConfig,
 )
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _SECTION_MAP: dict[str, type] = {
     "plugins": PluginsConfig,
     "finetune": FinetuneConfig,
     "server": ServerConfig,
+    "weather": WeatherConfig,
 }
 
 
