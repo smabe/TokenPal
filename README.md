@@ -1,6 +1,6 @@
 # TokenPal
 
-A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — no cloud, no data leaves your machine.
+A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — run locally or on a remote GPU server over your LAN.
 
 ## Quick Start
 
@@ -60,6 +60,7 @@ TokenPal observes your desktop through modular **senses** and generates short, w
 - `/help` — list commands
 - `/model [name|list|pull|browse]` — show, swap, download, or browse models
 - `/voice list|switch|off|info|train|finetune` — manage voice profiles live
+- `/server status|switch` — manage remote server connection
 - `/mood` — show current mood
 - `/status` — show model, senses, actions
 - `/clear` — clear the speech bubble
@@ -72,10 +73,41 @@ TokenPal observes your desktop through modular **senses** and generates short, w
 - Freeform thoughts — trained voices occasionally say things unprompted, in character
 - Goes silent around sensitive apps (banking, passwords, health)
 
-**Status Bar** — shows current model, voice, mood, and activity:
+**Status Bar** — shows current server, model, voice, mood, and activity:
 ```
-gemma4 | Jake | snarky | spoke 12s ago
+geefourteen | gemma4 | Jake | snarky | spoke 12s ago
 ```
+
+## Remote Server
+
+Run inference on a GPU box and have any machine on your LAN use it — no local Ollama or model downloads needed.
+
+**On the GPU box:**
+```bash
+git clone https://github.com/smabe/TokenPal.git tokenpal-server
+cd tokenpal-server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e '.[server]'
+tokenpal-server --host 0.0.0.0
+```
+
+**On your client:**
+```toml
+# config.toml
+[llm]
+api_url = "http://gpu-box:8585/v1"
+```
+
+That's it. TokenPal proxies all inference through the server. If the server goes down, it auto-falls back to local Ollama.
+
+Switch between servers on the fly:
+```
+/server status              # show current connection
+/server switch local        # use local Ollama
+/server switch gpu-box      # switch to remote server
+```
+
+See [docs/server-setup.md](docs/server-setup.md) for full setup guide (Windows, Linux, macOS), firewall config, auto-start, and troubleshooting.
 
 ## Configuration
 
@@ -116,6 +148,10 @@ open_app = true
 
 [paths]
 data_dir = "~/.tokenpal"    # logs, memory, voices all live here
+
+[server]
+# host = "0.0.0.0"          # bind for LAN access (server-side only)
+# port = 8585
 ```
 
 ## Personas & Voices
@@ -213,11 +249,20 @@ Senses ──────────▶  │         │
                     └────┬────┘
                          │
                     LLM Backend ◀──▶ Actions
+                         │
+              ┌──────────┴──────────┐
+              │                     │
+         Local Ollama        TokenPal Server
+         (localhost)         (remote GPU box)
+                                    │
+                               Ollama proxy
+                             + Training API
 ```
 
 - **Senses** poll for context on per-sense intervals
 - **Brain** scores interestingness, gates commentary, manages cooldowns and moods
-- **LLM Backend** generates quips via Ollama's OpenAI-compatible API (`reasoning_effort: none` for fast responses)
+- **LLM Backend** generates quips via Ollama's OpenAI-compatible API (`reasoning_effort: none` for fast responses). Auto-fallback between remote server and local Ollama.
+- **Server** (optional) — FastAPI app that proxies inference to Ollama and orchestrates voice training on the GPU box
 - **Actions** let the LLM call tools (multi-turn execution loop, max 3 rounds, parallel via asyncio.gather)
 - **Overlay** renders the ASCII buddy with typing animation, input line, and status bar
 - **User Input** captured in cbreak mode, routed to brain via asyncio.Queue
@@ -231,13 +276,17 @@ tokenpal/
 ├── actions/         # LLM-callable tools (timer, system_info, open_app)
 ├── brain/           # Orchestrator, context builder, personality engine, memory
 ├── config/          # TOML schema and loader
-├── llm/             # LLM backends (HTTP/Ollama with tool-calling support)
+├── llm/             # LLM backends (HTTP/Ollama with auto-fallback)
 ├── senses/          # Pluggable sensors (app, hardware, idle, time)
+├── server/          # FastAPI server (inference proxy + training API)
 ├── tools/           # Voice training, LoRA fine-tuning, remote GPU orchestrator
 ├── ui/              # Console overlay with ASCII art, input, and speech bubbles
-├── commands.py      # Slash command dispatcher
+├── commands.py      # Slash command dispatcher (/server, /model, /voice, etc.)
 ├── cli.py           # Argument parsing and --check command
 └── app.py           # Bootstrap and main loop
+scripts/
+├── install-server.sh    # Linux/macOS server installer
+└── install-server.ps1   # Windows server installer
 ```
 
 ## Privacy
@@ -247,15 +296,16 @@ tokenpal/
 - Sensitive app detection — goes silent around banking, passwords, health apps
 - Session memory stores only app names and timestamps, never content
 - SQLite db at `~/.tokenpal/memory.db` with restricted permissions
-- Everything runs locally — no network calls except to your local Ollama
+- Everything runs locally — no cloud services. Optional LAN server for remote GPU inference
 
 ## Development
 
 ```bash
 pip install -e ".[macos,dev]"   # macOS
 pip install -e ".[windows,dev]" # Windows
+pip install -e ".[server,dev]"  # server (adds FastAPI + uvicorn)
 
-# Run tests (135 tests)
+# Run tests (237 tests)
 pytest
 
 # Lint
@@ -271,3 +321,4 @@ Platform-specific setup guides:
 - [Windows + AMD + NVIDIA](docs/dev-setup-windows-amd.md)
 - [Windows + AMD desktop](docs/dev-setup-windows-amd-desktop.md)
 - [Remote GPU training](docs/remote-training-guide.md)
+- [Server setup](docs/server-setup.md)

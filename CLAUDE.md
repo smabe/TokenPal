@@ -137,6 +137,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Input validation: wiki `^[a-zA-Z0-9-]+$`, character `^[a-zA-Z0-9 _.'-]+$`, model `^[a-zA-Z0-9_.-]+(:[a-zA-Z0-9_.-]+)?$`
 - Config: `ServerConfig` in schema.py with `Literal` types for `mode` and `auth_backend`
 - Installers: `scripts/install-server.sh` (Linux/macOS, systemd user unit) + `scripts/install-server.ps1` (Windows, startup shortcut)
+- Training worker unloads Ollama models (`keep_alive: 0` via `/api/ps` + `/api/generate`) before training to free VRAM
+- Voice training (`train_voice.py`): `_get_model()` reads from config (not hardcoded), `reasoning_effort: "none"` required for gemma4 (burns tokens on thinking otherwise, returns empty content), 120s timeout for parallel voice asset generation
+- Ollama on Windows: not in PATH from cmd.exe SSH — use full path `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`. CLI from SSH may try to start a new instance; use PowerShell wrapper or ensure Ollama is already running
+- Ollama safetensors crash: `ollama create` panics on Gemma-2's `additional_special_tokens` (string format, expects dict). Workaround: convert to GGUF via `convert_hf_to_gguf.py` (b4921 tag matches gguf 0.18.0)
+- Fine-tuned 2B models can't handle tool calling — use gemma4 + voice profiles for daily use, fine-tuned models for experiments
 - See `docs/server-setup.md` for user-facing setup guide
 
 ## Platform Notes

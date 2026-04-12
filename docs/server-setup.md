@@ -5,43 +5,66 @@ Run LLM inference and voice training on a GPU box. Clients on other machines poi
 ## Prerequisites
 
 - Python 3.12+
-- Ollama installed and running
-- NVIDIA GPU with CUDA drivers (for training)
+- NVIDIA GPU with CUDA drivers
 - Network access between client and server machines
 
+Ollama will be installed during setup if not already present.
+
 ## Quick Setup
+
+### Windows (tested on RTX 4070)
+
+```cmd
+git clone https://github.com/smabe/TokenPal.git tokenpal-server
+cd tokenpal-server
+py -3 -m venv .venv
+.venv\Scripts\pip.exe install -e ".[server]"
+```
+
+Install Ollama if not already installed:
+```cmd
+winget install Ollama.Ollama
+```
+
+Start Ollama (find it in Start Menu, or run directly):
+```cmd
+"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" serve
+```
+
+Pull a model:
+```cmd
+"%LOCALAPPDATA%\Programs\Ollama\ollama.exe" pull gemma4
+```
+
+Add the firewall rule:
+```cmd
+netsh advfirewall firewall add rule name="TokenPal Server" dir=in action=allow protocol=TCP localport=8585 profile=private
+```
+
+Start the server:
+```cmd
+.venv\Scripts\tokenpal-server.exe --host 0.0.0.0
+```
 
 ### Linux / macOS
 
 ```bash
-curl -O https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/install-server.sh
-bash install-server.sh
-```
+git clone https://github.com/smabe/TokenPal.git tokenpal-server
+cd tokenpal-server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[server]'
 
-Or manually:
+# Install Ollama if needed
+curl -fsSL https://ollama.com/install.sh | sh
+ollama pull gemma4
 
-```bash
-python3 -m venv ~/.tokenpal/server-venv
-source ~/.tokenpal/server-venv/bin/activate
-pip install 'tokenpal[server]'
 tokenpal-server --host 0.0.0.0
 ```
 
-### Windows
+### Using the installer scripts
 
-```powershell
-# Download and run the installer
-powershell -ExecutionPolicy Bypass -File install-server.ps1
-```
-
-Or manually:
-
-```powershell
-py -3 -m venv $env:USERPROFILE\.tokenpal\server-venv
-& $env:USERPROFILE\.tokenpal\server-venv\Scripts\activate.ps1
-pip install "tokenpal[server]"
-tokenpal-server --host 0.0.0.0
-```
+Alternatively, `scripts/install-server.sh` (Linux/macOS) and `scripts/install-server.ps1` (Windows) automate the full setup including venv, firewall, HF token, and auto-start configuration.
 
 ## Verify
 
@@ -52,25 +75,65 @@ curl http://localhost:8585/api/v1/server/info
 
 From a client machine:
 ```bash
-curl http://YOUR-SERVER-HOSTNAME:8585/api/v1/server/info
+curl http://YOUR-SERVER:8585/api/v1/server/info
 ```
 
-You should see JSON with `server_version`, `ollama_healthy`, etc.
+Expected response:
+```json
+{"server_version":"0.1.0","api_version":1,"ollama_healthy":true,"ollama_url":"http://localhost:11434","active_training_job":null,"hf_token_set":false}
+```
 
 ## Client Configuration
 
-On your client machine, edit `~/.tokenpal/config.toml`:
+On your client machine, edit `config.toml` (project root or `~/.tokenpal/config.toml`):
 
 ```toml
 [llm]
-api_url = "http://YOUR-SERVER-HOSTNAME:8585/v1"
+api_url = "http://YOUR-SERVER:8585/v1"
 ```
 
 That's it. TokenPal will use the remote server for inference. If the server is unreachable, it falls back to local Ollama automatically (when `mode = "auto"`).
 
+The status bar shows which server is active: `geefourteen | gemma4 | finn | happy`.
+
+## Voice Training
+
+Voice training runs on the client and uses the server's Ollama for both inference and voice asset generation (persona, greetings, mood prompts).
+
+```
+/voice train adventuretime bmo
+/voice switch bmo
+```
+
+The voice profile is saved locally at `~/.tokenpal/voices/bmo.json`. It contains the persona, example lines, greetings, and mood prompts that shape the prompt sent to the server. The model weights stay on the server — only the prompt engineering happens client-side.
+
+### Fine-tuning (LoRA)
+
+Fine-tuned models are registered directly on the server's Ollama. The fine-tuning pipeline currently runs via SSH (`/voice finetune`). Server-side training via the HTTP API is a future enhancement.
+
+**Important:** Fine-tuned Gemma-2 2B models (`tokenpal-*`) don't support tool calling. Either disable actions (`[actions] enabled = false`) when using a fine-tuned model, or use `gemma4` with voice profiles for the best experience.
+
+### Ollama safetensors registration workaround
+
+Ollama's safetensors converter crashes on Gemma-2 tokenizer format. If `ollama create` fails with a tokenizer panic, convert to GGUF first:
+
+```cmd
+pip install gguf
+curl -sL -o convert_hf_to_gguf.py https://raw.githubusercontent.com/ggml-org/llama.cpp/b4921/convert_hf_to_gguf.py
+python convert_hf_to_gguf.py path\to\merged --outfile tokenpal-model.gguf --outtype f16
+```
+
+Then register the GGUF:
+```cmd
+echo FROM path\to\tokenpal-model.gguf > Modelfile
+ollama create tokenpal-model -f Modelfile
+```
+
+Note: the `convert_hf_to_gguf.py` script version must match the installed `gguf` pip package version. Tag `b4921` works with `gguf==0.18.0`.
+
 ## Server Configuration
 
-The server reads `~/.tokenpal/config.toml` on the server machine. Key settings:
+The server reads `config.toml` on the server machine. Key settings:
 
 ```toml
 [server]
@@ -83,41 +146,57 @@ ollama_url = "http://localhost:11434"  # local Ollama instance
 
 Default bind is `127.0.0.1` (localhost only). Set `host = "0.0.0.0"` to expose on the LAN.
 
-## Training a Voice
-
-From the client:
-```
-/voice train adventuretime bmo
-```
-
-This sends a request to the server, which handles wiki fetching, dataset prep, training, merging, and Ollama registration. The model stays on the server.
-
-Check training progress:
-```bash
-curl http://YOUR-SERVER:8585/api/v1/train/JOB_ID
-```
-
 ## Slash Commands
 
 | Command | Description |
 |---------|-------------|
-| `/server status` | Show connection state |
-| `/server switch local` | Use local Ollama |
+| `/server status` | Show connection state and current server |
+| `/server switch local` | Use local Ollama (localhost:11434) |
 | `/server switch remote` | Use the configured server |
 | `/server switch HOSTNAME` | Switch to a specific server |
+| `/model MODEL` | Switch to a different model on the server |
+| `/model list` | Show models available on the server |
+| `/voice list` | Show locally available voice profiles |
+| `/voice train WIKI CHARACTER` | Train a new voice from a Fandom wiki |
+| `/voice switch NAME` | Switch to a voice profile |
+
+## Auto-start
+
+### Windows
+
+The installer creates `start-server.bat`. To auto-start on login, copy it to the Startup folder:
+```cmd
+copy start-server.bat "%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\TokenPal-Server.bat"
+```
+
+Or create the batch file manually:
+```cmd
+@echo off
+cd /d C:\Users\YourName\tokenpal-server
+call .venv\Scripts\activate.bat
+tokenpal-server --host 0.0.0.0
+pause
+```
+
+### Linux
+
+The installer creates a systemd user unit:
+```bash
+systemctl --user start tokenpal-server
+systemctl --user enable tokenpal-server
+loginctl enable-linger $USER  # survives logoff
+```
 
 ## Firewall
 
-The installer handles firewall rules automatically. If you need to add manually:
+**Windows:**
+```cmd
+netsh advfirewall firewall add rule name="TokenPal Server" dir=in action=allow protocol=TCP localport=8585 profile=private
+```
 
 **Linux (ufw):**
 ```bash
 sudo ufw allow 8585/tcp
-```
-
-**Windows:**
-```powershell
-New-NetFirewallRule -DisplayName "TokenPal Server" -Direction Inbound -Protocol TCP -LocalPort 8585 -Action Allow -Profile Private
 ```
 
 **macOS:** Firewall prompts automatically on first connection.
@@ -126,27 +205,23 @@ New-NetFirewallRule -DisplayName "TokenPal Server" -Direction Inbound -Protocol 
 
 For gated models (e.g., Gemma), set HF_TOKEN on the server:
 
-**Linux:** Add to `~/.tokenpal/server.env`
-**Windows:** `setx HF_TOKEN "hf_your_token_here"`
-
-## Auto-start
-
-**Linux:** The installer creates a systemd user unit:
-```bash
-systemctl --user start tokenpal-server
-systemctl --user status tokenpal-server
-```
-
-**Windows:** The installer creates `run-server.bat` and optionally adds a startup shortcut.
+**Linux:** Add `HF_TOKEN=hf_...` to `~/.tokenpal/server.env`
+**Windows:** `setx HF_TOKEN "hf_your_token_here"` (persistent across sessions)
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | "Connection refused" from client | Server not running | Start `tokenpal-server` on the server |
-| "Connection refused" from client | Firewall blocking | Open port 8585 (see Firewall section) |
-| "Ollama unreachable" in server logs | Ollama not running | Run `ollama serve` on the server |
-| Training fails with OOM | GPU memory insufficient | Use a smaller base model |
+| "Connection refused" from client | Firewall blocking port 8585 | Add firewall rule (see above) |
+| "Ollama unreachable" in server logs | Ollama not running on server | Start Ollama on the server |
+| Ollama not in PATH on Windows | Windows SSH uses cmd.exe | Use full path: `%LOCALAPPDATA%\Programs\Ollama\ollama.exe` |
+| `ollama create` from SSH fails with "timed out" | Ollama CLI tries to start new instance | Use PowerShell: `powershell -Command "& 'path\to\ollama.exe' create ..."` |
+| `ollama create` panics on safetensors | Tokenizer format incompatibility | Convert to GGUF first (see workaround above) |
+| Voice training produces empty persona | Model returns empty content | Fixed: `reasoning_effort=none` added to voice asset generation |
+| Fine-tuned model errors on observation | Small model can't handle tool definitions | Use `gemma4` + voice profile instead, or disable actions |
+| Status bar shows "fallback" | Server was unreachable at startup | Check server, then `/server switch remote` to reconnect |
+| Training OOM | GPU memory insufficient | Unload Ollama models first (automatic in server worker) |
 | Training fails with 401 | HF token missing/invalid | Set HF_TOKEN on the server |
 
 ## Security
