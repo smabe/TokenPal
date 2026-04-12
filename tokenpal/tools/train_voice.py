@@ -27,7 +27,14 @@ from tokenpal.tools.voice_profile import (
     slugify,
 )
 
-_MODEL = "gemma3:4b"
+def _get_model() -> str:
+    """Resolve model name from config, with fallback."""
+    try:
+        from tokenpal.config.loader import load_config
+        config = load_config()
+        return config.llm.model_name
+    except Exception:
+        return "gemma4"
 
 
 def _get_voices_dir() -> Path:
@@ -53,7 +60,7 @@ def _get_ollama_url() -> str:
 def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7) -> str | None:
     """Send a prompt to Ollama and return the response text."""
     payload = json.dumps({
-        "model": _MODEL,
+        "model": _get_model(),
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
