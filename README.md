@@ -80,16 +80,21 @@ geefourteen | gemma4 | Jake | snarky | spoke 12s ago
 
 ## Remote Server
 
-Run inference on a GPU box and have any machine on your LAN use it — no local Ollama or model downloads needed.
+Run inference on a GPU box and have any machine on your LAN use it — no local Ollama or model downloads needed. One command sets up everything: Python, Ollama, model, firewall, auto-start.
 
-**On the GPU box:**
-```bash
-git clone https://github.com/smabe/TokenPal.git tokenpal-server
-cd tokenpal-server
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e '.[server]'
-tokenpal-server --host 0.0.0.0
+**On the GPU box (one command):**
+
+Windows (PowerShell):
+```powershell
+powershell -Command "iwr https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.ps1 -OutFile bootstrap.ps1; .\bootstrap.ps1"
 ```
+
+Linux / macOS:
+```bash
+curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.sh | bash
+```
+
+The script installs Python, Ollama, pulls gemma4, sets up the firewall, and prints the URL to share with clients.
 
 **On your client:**
 ```toml
@@ -98,7 +103,7 @@ tokenpal-server --host 0.0.0.0
 api_url = "http://gpu-box:8585/v1"
 ```
 
-That's it. TokenPal proxies all inference through the server. If the server goes down, it auto-falls back to local Ollama.
+That's it. TokenPal proxies all inference through the server. If the server goes down, it auto-falls back to local Ollama. Works with [Tailscale](https://tailscale.com) out of the box — no firewall or port forwarding needed.
 
 Switch between servers on the fly:
 ```
@@ -107,7 +112,7 @@ Switch between servers on the fly:
 /server switch gpu-box      # switch to remote server
 ```
 
-See [docs/server-setup.md](docs/server-setup.md) for full setup guide (Windows, Linux, macOS), firewall config, auto-start, and troubleshooting.
+See [docs/server-setup.md](docs/server-setup.md) for manual setup, troubleshooting, and advanced configuration.
 
 ## Configuration
 
