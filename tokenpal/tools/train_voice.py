@@ -21,8 +21,11 @@ from pathlib import Path
 
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
+    FANDOM_NAMES,
+    franchise_from_source,
     list_profiles,
     make_profile,
+    parse_catchphrases,
     save_profile,
     slugify,
 )
@@ -89,17 +92,97 @@ def _sample_block(lines: list[str], n: int = 10) -> str:
     return "\n".join(f"- {line}" for line in samples)
 
 
-def _generate_persona(character: str, lines: list[str]) -> str | None:
-    """Ask Ollama to describe the character's voice from sample lines."""
-    samples_block = _sample_block(lines, 15)
+# Franchise → character names for cross-franchise banning
+_FRANCHISE_CHARACTERS: dict[str, list[str]] = {
+    "Adventure Time": [
+        "Finn", "Jake", "BMO", "Marceline", "Princess Bubblegum",
+        "Ice King", "Lumpy Space Princess", "Prismo",
+    ],
+    "Futurama": [
+        "Bender", "Fry", "Leela", "Zoidberg", "Professor",
+        "Hermes", "Amy", "Nibbler",
+    ],
+    "Regular Show": [
+        "Mordecai", "Rigby", "Muscle Man", "Pops", "Benson",
+        "Skips", "Hi Five Ghost", "Thomas",
+    ],
+}
 
-    return _ollama_generate(f"""Here are sample dialogue lines from the character "{character}":
 
-{samples_block}
+def _derive_banned_names(
+    source: str, character: str,
+) -> list[str]:
+    """Build list of character names from OTHER franchises."""
+    franchise = franchise_from_source(source)
+    banned: list[str] = []
+    for fran, names in _FRANCHISE_CHARACTERS.items():
+        if fran == franchise:
+            continue
+        banned.extend(names)
+    # Also exclude own name from banned list (shouldn't ban self-reference)
+    return [n for n in banned if n.lower() != character.lower()]
 
-Based on these lines, write a ONE sentence persona description for an AI that should speak in this character's voice. Cover their tone, slang, and attitude. Max 30 words.
 
-Write ONLY the persona description, nothing else. No quotes. One sentence.""")
+def _score_line(line: str, catchphrases_lower: list[str]) -> float:
+    """Score a dialogue line for character distinctiveness."""
+    score = 0.0
+    # Length sweet spot: 20-80 chars
+    if 20 <= len(line) <= 80:
+        score += 0.3
+    elif len(line) < 15:
+        score -= 0.3
+    # Contains a catchphrase (pre-lowercased)
+    line_lower = line.lower()
+    for phrase in catchphrases_lower:
+        if phrase in line_lower:
+            score += 0.5
+            break
+    # Has personality markers
+    if "!" in line:
+        score += 0.1
+    # Penalize pure exclamations / sound effects
+    stripped = line.strip("!?. ")
+    if len(stripped) < 10:
+        score -= 0.5
+    return score
+
+
+def _extract_anchor_lines(
+    lines: list[str], catchphrases: list[str], max_anchors: int = 150,
+) -> list[str]:
+    """Score all lines and return the top N most distinctive."""
+    catchphrases_lower = [p.lower() for p in catchphrases]
+    scored = [(line, _score_line(line, catchphrases_lower)) for line in lines]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [line for line, _ in scored[:max_anchors]]
+
+
+def _generate_persona(
+    character: str, lines: list[str], franchise: str = "",
+) -> str | None:
+    """Ask Ollama to generate a structured voice card from sample lines."""
+    samples_block = _sample_block(lines, 25)
+    origin = f' from {franchise}' if franchise else ''
+
+    return _ollama_generate(
+        f'You are analyzing dialogue from "{character}"{origin}.\n\n'
+        f"Here are 25 sample lines:\n{samples_block}\n\n"
+        f"Write a character voice card for {character}. "
+        "Use \"You [verb]\" instructions, not personality adjectives.\n"
+        "Use this EXACT format:\n\n"
+        "VOICE: How does this character talk? 2-3 \"You [verb] [pattern]\" "
+        "instructions. Mention specific word choices, sentence structure, "
+        "and energy level.\n"
+        "CATCHPHRASES: 3-5 signature phrases in quotes, comma-separated. "
+        "Only real ones from the dialogue.\n"
+        "NEVER: 3-4 things this character would NEVER say or do. "
+        "Be specific — name actual words or tones to avoid.\n"
+        "WORLDVIEW: 1-2 sentences. What does this character care about? "
+        "How do they see the world?\n\n"
+        "Write ONLY the card. No preamble. Keep each section concise.",
+        max_tokens=500,
+        temperature=0.7,
+    )
 
 
 def _generate_lines_from_prompt(character: str, lines: list[str], task_prompt: str) -> list[str]:
@@ -151,32 +234,47 @@ def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
 
 
 def _generate_voice_assets(
-    character: str, lines: list[str],
-) -> tuple[str, list[str], list[str], dict[str, str], dict[str, str], str, list[str]]:
+    character: str,
+    lines: list[str],
+    source: str = "",
+) -> tuple[
+    str, list[str], list[str], dict[str, str], dict[str, str],
+    str, list[str], list[str], list[str],
+]:
     """Run all voice generation tasks in parallel.
 
     Returns (persona, greetings, offline_quips, mood_prompts, mood_roles,
-             default_mood, structure_hints).
+             default_mood, structure_hints, anchor_lines, banned_names).
     """
     from concurrent.futures import ThreadPoolExecutor
 
+    franchise = franchise_from_source(source)
+
     with ThreadPoolExecutor(max_workers=5) as pool:
-        f_p = pool.submit(_generate_persona, character, lines)
+        f_p = pool.submit(_generate_persona, character, lines, franchise)
         f_g = pool.submit(_generate_greetings, character, lines)
         f_q = pool.submit(_generate_offline_quips, character, lines)
         f_m = pool.submit(_generate_mood_prompts, character, lines)
         f_s = pool.submit(_generate_structure_hints, character, lines)
 
     mood_prompts, mood_roles, default_mood = f_m.result()
+    persona = f_p.result() or ""
+
+    # Extract anchor lines using catchphrases from the persona
+    catchphrases = parse_catchphrases(persona)
+    anchor_lines = _extract_anchor_lines(lines, catchphrases)
+    banned_names = _derive_banned_names(source, character)
 
     return (
-        f_p.result() or "",
+        persona,
         f_g.result(),
         f_q.result(),
         mood_prompts,
         mood_roles,
         default_mood,
         f_s.result(),
+        anchor_lines,
+        banned_names,
     )
 
 
@@ -334,15 +432,18 @@ def train_from_wiki(
     if len(lines) < min_lines:
         return None
 
+    source = f"{wiki}.fandom.com"
     _progress(f"Found {len(lines)} lines. Generating voice...")
-    persona, greetings, offline_quips, mood_prompts, mood_roles, default_mood, structure_hints = (
-        _generate_voice_assets(character, lines)
-    )
+    (
+        persona, greetings, offline_quips, mood_prompts,
+        mood_roles, default_mood, structure_hints,
+        anchor_lines, banned_names,
+    ) = _generate_voice_assets(character, lines, source)
 
     _progress("Saving profile...")
     profile = make_profile(
         character=character,
-        source=f"{wiki}.fandom.com",
+        source=source,
         lines=lines,
         persona=persona,
         greetings=greetings,
@@ -351,10 +452,49 @@ def train_from_wiki(
         mood_roles=mood_roles,
         default_mood=default_mood,
         structure_hints=structure_hints,
+        anchor_lines=anchor_lines,
+        banned_names=banned_names,
     )
 
     out_dir = voices_dir or _get_voices_dir()
     save_profile(profile, out_dir)
+    return profile
+
+
+def regenerate_persona(
+    profile: VoiceProfile,
+    voices_dir: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> VoiceProfile:
+    """Re-generate only the persona for an existing profile.
+
+    Updates persona, anchor_lines, banned_names, and bumps version.
+    Preserves all other fields (greetings, moods, lines, etc.).
+    """
+    def _progress(msg: str) -> None:
+        if progress_callback:
+            progress_callback(msg)
+
+    franchise = franchise_from_source(profile.source)
+    _progress(f"Generating persona for {profile.character}...")
+    persona = _generate_persona(
+        profile.character, profile.lines, franchise,
+    ) or ""
+
+    catchphrases = parse_catchphrases(persona)
+    anchor_lines = _extract_anchor_lines(profile.lines, catchphrases)
+    banned_names = _derive_banned_names(
+        profile.source, profile.character,
+    )
+
+    profile.persona = persona
+    profile.anchor_lines = anchor_lines
+    profile.banned_names = banned_names
+    profile.version = 2
+
+    out_dir = voices_dir or _get_voices_dir()
+    save_profile(profile, out_dir)
+    _progress(f"Saved {profile.character} (v2)")
     return profile
 
 
@@ -526,11 +666,15 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     mood_roles: dict[str, str] = {}
     default_mood: str = ""
     structure_hints: list[str] = []
+    anchor_lines: list[str] = []
+    banned_names: list[str] = []
     if not args.no_persona:
         print("Generating voice assets via Ollama...", flush=True)
-        persona, greetings, offline_quips, mood_prompts, mood_roles, default_mood, structure_hints = (
-            _generate_voice_assets(name, lines)
-        )
+        (
+            persona, greetings, offline_quips, mood_prompts,
+            mood_roles, default_mood, structure_hints,
+            anchor_lines, banned_names,
+        ) = _generate_voice_assets(name, lines, source)
 
         if persona:
             print(f"\nPersona: {persona}")
@@ -564,6 +708,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         mood_roles=mood_roles,
         default_mood=default_mood,
         structure_hints=structure_hints,
+        anchor_lines=anchor_lines,
+        banned_names=banned_names,
     )
     out_path = save_profile(profile, _get_voices_dir())
     slug = slugify(name)

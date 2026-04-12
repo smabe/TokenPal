@@ -495,10 +495,16 @@ def _handle_voice_command(
             subargs, personality, voices_dir, overlay, llm,
         )
 
+    if subcmd == "regenerate":
+        return _start_voice_regenerate(
+            subargs, personality, voices_dir, overlay,
+        )
+
     return CommandResult(
         "Usage: /voice list | switch <name> | off | info"
         " | train <wiki> <character> | finetune <name>"
         " | finetune-setup | import <gguf_path>"
+        " | regenerate [name|--all]"
     )
 
 
@@ -568,6 +574,73 @@ def _start_voice_training(
 
     train_thread = threading.Thread(target=_train, daemon=True, name="voice-train")
     train_thread.start()
+    return CommandResult("")
+
+
+def _start_voice_regenerate(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+) -> CommandResult:
+    """Regenerate persona for existing voice profiles."""
+    from tokenpal.tools.voice_profile import list_profiles, load_profile, slugify
+
+    do_all = args.strip().lower() == "--all"
+    if not args.strip():
+        # Regenerate current voice
+        if not personality.voice_name:
+            return CommandResult(
+                "No active voice. Usage: /voice regenerate <name> or --all"
+            )
+        slugs = [slugify(personality.voice_name)]
+    elif do_all:
+        profiles = list_profiles(voices_dir)
+        slugs = [slug for slug, _, _ in profiles]
+        if not slugs:
+            return CommandResult("No voice profiles found.")
+    else:
+        slugs = [slugify(args.strip())]
+
+    def _regen() -> None:
+        try:
+            from tokenpal.tools.train_voice import regenerate_persona
+
+            for slug in slugs:
+                try:
+                    profile = load_profile(slug, voices_dir)
+                except FileNotFoundError:
+                    _overlay_show(overlay, f"Voice '{slug}' not found.")
+                    continue
+
+                def _on_progress(step: str) -> None:
+                    _overlay_show(overlay, step, persistent=True)
+
+                regenerate_persona(
+                    profile, voices_dir, progress_callback=_on_progress,
+                )
+
+            count = len(slugs)
+            msg = f"Regenerated {count} voice{'s' if count != 1 else ''}."
+            _overlay_show(overlay, msg)
+            log.info("Voice regeneration complete: %s", slugs)
+
+            # Hot-swap if current voice was regenerated
+            current = slugify(personality.voice_name) if personality.voice_name else ""
+            if current in slugs:
+                profile = load_profile(current, voices_dir)
+                personality.set_voice(profile)
+        except Exception:
+            log.exception("Voice regeneration failed")
+            _overlay_show(overlay, "Regeneration failed. Check logs.")
+
+    label = f"{len(slugs)} voices" if do_all else slugs[0]
+    _overlay_show(overlay, f"Regenerating {label}...", persistent=True)
+
+    regen_thread = threading.Thread(
+        target=_regen, daemon=True, name="voice-regen",
+    )
+    regen_thread.start()
     return CommandResult("")
 
 

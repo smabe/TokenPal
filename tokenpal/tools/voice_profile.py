@@ -8,6 +8,29 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+# Fandom slug → display name (shared by training + runtime)
+FANDOM_NAMES: dict[str, str] = {
+    "adventuretime": "Adventure Time",
+    "regularshow": "Regular Show",
+}
+
+
+def franchise_from_source(source: str) -> str:
+    """Derive franchise display name from a fandom wiki source URL."""
+    if not source:
+        return ""
+    slug = source.split(".")[0].split("/")[-1]
+    return FANDOM_NAMES.get(slug, slug.title())
+
+
+def parse_catchphrases(persona: str) -> list[str]:
+    """Extract quoted catchphrases from a structured persona card."""
+    for line in persona.splitlines():
+        if line.strip().upper().startswith("CATCHPHRASES:"):
+            text = line.split(":", 1)[1].strip()
+            return re.findall(r'"([^"]+)"', text)
+    return []
+
 
 @dataclass
 class VoiceProfile:
@@ -25,6 +48,8 @@ class VoiceProfile:
     finetuned_model: str = ""
     finetuned_base: str = ""
     finetuned_date: str = ""
+    anchor_lines: list[str] = field(default_factory=list)
+    banned_names: list[str] = field(default_factory=list)
     version: int = 1
 
     @property
@@ -67,6 +92,8 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         finetuned_model=data.get("finetuned_model", ""),
         finetuned_base=data.get("finetuned_base", ""),
         finetuned_date=data.get("finetuned_date", ""),
+        anchor_lines=data.get("anchor_lines", []),
+        banned_names=data.get("banned_names", []),
         version=data.get("version", 1),
     )
 
@@ -96,6 +123,8 @@ def make_profile(
     mood_roles: dict[str, str] | None = None,
     default_mood: str = "",
     structure_hints: list[str] | None = None,
+    anchor_lines: list[str] | None = None,
+    banned_names: list[str] | None = None,
 ) -> VoiceProfile:
     """Create a new VoiceProfile with the current timestamp."""
     return VoiceProfile(
@@ -110,4 +139,6 @@ def make_profile(
         mood_roles=mood_roles or {},
         default_mood=default_mood,
         structure_hints=structure_hints or [],
+        anchor_lines=anchor_lines or [],
+        banned_names=banned_names or [],
     )

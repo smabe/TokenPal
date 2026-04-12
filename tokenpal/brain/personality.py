@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tokenpal.tools.voice_profile import VoiceProfile
 
+from tokenpal.tools.voice_profile import franchise_from_source, parse_catchphrases
+
 log = logging.getLogger(__name__)
 
 _SILENT_MARKERS = ["[SILENT]", "[silent]", "SILENT"]
@@ -32,6 +34,26 @@ _RE_PREFIX = re.compile(
 _RE_SCORE = re.compile(r"^\d+/10\s*[-:\u2013\u2014]\s*")
 _RE_ORPHAN_PUNCT = re.compile(r"^[.!?,;:\s]+")
 _RE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+# Emoji ranges: emoticons, dingbats, symbols, supplemental, flags, misc
+_RE_EMOJI = re.compile(
+    "["
+    "\U0001f600-\U0001f64f"  # emoticons
+    "\U0001f300-\U0001f5ff"  # symbols & pictographs
+    "\U0001f680-\U0001f6ff"  # transport & map
+    "\U0001f1e0-\U0001f1ff"  # flags
+    "\U00002702-\U000027b0"  # dingbats
+    "\U0000fe00-\U0000fe0f"  # variation selectors
+    "\U0001f900-\U0001f9ff"  # supplemental symbols
+    "\U0001fa00-\U0001fa6f"  # chess symbols
+    "\U0001fa70-\U0001faff"  # symbols extended-A
+    "\U00002600-\U000026ff"  # misc symbols
+    "\U0000200d"             # zero-width joiner
+    "\U00002b50"             # star
+    "\U0000231a-\U0000231b"  # watch/hourglass
+    "\U000023e9-\U000023f3"  # various
+    "\U000023f8-\U000023fa"  # various
+    "]+",
+)
 
 # ---------------------------------------------------------------------------
 # Few-shot example pool (20+). Sampled 5-7 per prompt to break repetition.
@@ -230,7 +252,7 @@ What you see right now:
 
 {recent_comments_block}
 
-Your comment:"""
+{voice_reminder}Your comment:"""
 
 _FREEFORM_TEMPLATE = """\
 {identity}
@@ -249,7 +271,7 @@ Examples of your voice:
 
 {recent_comments_block}
 
-Your thought:"""
+{voice_reminder}Your thought:"""
 
 _CONVERSATION_TEMPLATE = """\
 {identity}
@@ -270,7 +292,7 @@ What you currently see on their screen:
 
 User says: "{user_message}"
 
-Your response:"""
+{voice_reminder}Your response:"""
 
 # ---------------------------------------------------------------------------
 # Simplified templates for fine-tuned models.
@@ -388,6 +410,7 @@ class PersonalityEngine:
     def _apply_voice(self, voice: VoiceProfile | None) -> None:
         """Set all voice fields from a profile (or reset to defaults)."""
         self._voice_name = voice.character if voice else ""
+        self._voice_source = voice.source if voice else ""
         self._voice_persona = voice.persona if voice else ""
         self._voice_greetings = (voice.greetings or []) if voice else []
         self._voice_offline_quips = (voice.offline_quips or []) if voice else []
@@ -395,6 +418,14 @@ class PersonalityEngine:
         self._mood_roles = (voice.mood_roles or {}) if voice else {}
         self._voice_structure_hints = (voice.structure_hints or []) if voice else []
         self._finetuned_model = voice.finetuned_model if voice else ""
+        self._anchor_pool = (voice.anchor_lines or []) if voice else []
+        self._banned_names = (voice.banned_names or []) if voice else []
+        self._banned_names_lower: frozenset[str] = frozenset(
+            n.lower() for n in self._banned_names
+        )
+        self._catchphrases = parse_catchphrases(
+            voice.persona if voice else "",
+        )
         self._example_pool = self._build_example_pool(voice.lines if voice else None)
 
     def get_startup_greeting(self) -> str:
@@ -553,6 +584,7 @@ class PersonalityEngine:
             session_notes=session_notes,
             memory_block=mem_block,
             recent_comments_block=self._recent_comments_block(),
+            voice_reminder=self._voice_reminder(),
         )
 
     def build_freeform_prompt(self) -> str:
@@ -569,6 +601,7 @@ class PersonalityEngine:
             structure_hint=self._pick_hint(),
             examples=self._sample_examples(),
             recent_comments_block=self._recent_comments_block(),
+            voice_reminder=self._voice_reminder(),
         )
 
     @property
@@ -622,6 +655,9 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
+        if self._has_cross_franchise(text):
+            return None
+
         text = self._cap_sentences(text, max_default=2, max_voice=3)
 
         text = text.strip(_QUOTES).strip()
@@ -637,9 +673,32 @@ class PersonalityEngine:
     # ------------------------------------------------------------------
 
     def _sample_examples(self) -> str:
-        """Sample 5-7 few-shot examples from the pool."""
-        k = random.randint(5, min(7, len(self._example_pool)))
-        sampled = random.sample(self._example_pool, k)
+        """Sample few-shot examples, drawing from anchor pool when available."""
+        if self._anchor_pool and len(self._anchor_pool) >= 5:
+            k = random.randint(8, min(12, len(self._example_pool)))
+            n_anchor = max(int(k * 0.6), 3)
+            n_general = k - n_anchor
+            anchors = random.sample(
+                self._anchor_pool,
+                min(n_anchor, len(self._anchor_pool)),
+            )
+            general = random.sample(
+                self._example_pool,
+                min(n_general, len(self._example_pool)),
+            )
+            # Place 2 anchors at the END for recency effect
+            end_anchors = anchors[:2]
+            mid_samples = anchors[2:] + general
+            random.shuffle(mid_samples)
+            sampled = mid_samples + end_anchors
+        else:
+            pool_size = len(self._example_pool)
+            if pool_size >= 50:
+                lo, hi = 10, 14
+            else:
+                lo, hi = 5, 7
+            k = random.randint(lo, min(hi, pool_size))
+            sampled = random.sample(self._example_pool, k)
         return "\n".join(f'- "{ex}"' for ex in sampled)
 
     def _pick_hint(self) -> str:
@@ -685,18 +744,54 @@ class PersonalityEngine:
     def _identity_block(self) -> str:
         """Return the identity preamble — voice persona replaces the default."""
         if self._voice_persona:
+            franchise = franchise_from_source(self._voice_source)
+            origin = f" from {franchise}" if franchise else ""
             return (
-                f"You are {self._voice_name}, a character who lives in a terminal "
-                f"and comments on what the user is doing.\n"
-                f"{self._voice_persona}"
+                f"You are {self._voice_name}{origin}.\n\n"
+                f"{self._voice_persona}\n\n"
+                f"You're watching what the user does on their "
+                f"computer and making short comments in "
+                f"{self._voice_name}'s voice. No emojis."
             )
         return self._DEFAULT_IDENTITY
+
+    def _voice_reminder(self) -> str:
+        """Voice priming placed just before the generation point.
+
+        Uses actual catchphrases instead of a meta-instruction so the
+        model's next-token prediction is primed by character-specific
+        tokens (recency effect).
+        """
+        if self._catchphrases:
+            samples = random.sample(
+                self._catchphrases,
+                min(3, len(self._catchphrases)),
+            )
+            examples = ", ".join(f'"{s}"' for s in samples)
+            return f"({self._voice_name}'s style: {examples})\n"
+        if self._voice_persona:
+            return (
+                f"(Remember: you are {self._voice_name}. "
+                f"Stay in character. No emojis.)\n"
+            )
+        return ""
 
     def _recent_comments_block(self) -> str:
         if not self._recent_comments:
             return ""
         lines = "\n".join(f'- "{c}"' for c in self._recent_comments)
         return "Your last few comments (DON'T repeat these):\n" + lines
+
+    def _has_cross_franchise(self, text: str) -> bool:
+        """Return True if text mentions characters from other franchises."""
+        if not self._banned_names_lower:
+            return False
+        text_lower = text.lower()
+        for name in self._banned_names_lower:
+            if name in text_lower:
+                log.info("Filter: cross-franchise '%s' in: %r", name, text[:60])
+                return True
+        return False
 
     def _cap_sentences(self, text: str, max_default: int = 2, max_voice: int = 3) -> str:
         """Truncate to N sentences. Voices get more room for excitable characters."""
@@ -711,9 +806,12 @@ class PersonalityEngine:
 
         When a voice is active, keeps asterisk expressions (*sound effects*,
         *emphasis*) since those are in-character, not formatting artifacts.
+        Emojis are always stripped — character voices never use them, and
+        default TokenPal is text-only.
         """
         if not self._voice_persona:
             text = _RE_ASTERISK.sub("", text).strip()
+        text = _RE_EMOJI.sub("", text).strip()
         text = _RE_LEAKED_TAG.sub("", text).strip()
         text = _RE_DASHES.sub("", text).strip()
         text = _RE_LEADING_DASH.sub("", text).strip()
@@ -744,6 +842,7 @@ class PersonalityEngine:
             context=context_snapshot,
             recent_comments_block=self._recent_comments_block(),
             user_message=user_message,
+            voice_reminder=self._voice_reminder(),
         )
 
     def filter_conversation_response(self, text: str) -> str | None:
@@ -754,6 +853,9 @@ class PersonalityEngine:
             return None
 
         text = self._clean_llm_text(text)
+
+        if self._has_cross_franchise(text):
+            return None
 
         text = self._cap_sentences(text, max_default=2, max_voice=4)
 
