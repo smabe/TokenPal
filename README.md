@@ -39,7 +39,12 @@ curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstr
 
 Installs Python, Ollama, pulls gemma4, configures firewall, sets up auto-start. Prints the URL when done.
 
-**On your client** — add one line to `config.toml`:
+**On your client** — switch from inside TokenPal:
+```
+/server switch gpu-box
+```
+
+Or make it permanent in `config.toml`:
 ```toml
 [llm]
 api_url = "http://gpu-box:8585/v1"
