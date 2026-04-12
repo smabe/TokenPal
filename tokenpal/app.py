@@ -63,6 +63,7 @@ def main() -> None:
     )
 
     llm_config = dataclasses.asdict(config.llm)
+    llm_config["server_mode"] = config.server.mode
     llm = resolve_backend(llm_config)
 
     ui_config = dataclasses.asdict(config.ui)

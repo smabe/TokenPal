@@ -57,6 +57,16 @@ class AbstractLLMBackend(abc.ABC):
         """Whether the backend is currently reachable."""
         return False
 
+    @property
+    def using_fallback(self) -> bool:
+        """Whether the backend fell back to a secondary endpoint."""
+        return False
+
+    @property
+    def primary_url(self) -> str:
+        """The originally configured API endpoint (before any fallback)."""
+        return self.api_url
+
     def set_model(self, model_name: str) -> None:
         """Swap the active model. Override in backends that support it."""
         raise NotImplementedError(

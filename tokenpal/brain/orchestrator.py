@@ -8,6 +8,7 @@ import logging
 import random
 import time
 from datetime import datetime
+from urllib.parse import urlparse
 from typing import Any, Callable
 
 from tokenpal.actions.base import AbstractAction
@@ -505,7 +506,20 @@ class Brain:
         else:
             ago = f"{int(elapsed / 60)}m ago"
 
-        parts = [model]
+        # Server indicator: show where inference is running
+        server_label = ""
+        api = self._llm.api_url
+        hostname = urlparse(api).hostname or ""
+        if self._llm.using_fallback:
+            primary_host = urlparse(self._llm.primary_url).hostname or ""
+            server_label = f"{primary_host} (fallback)"
+        elif hostname not in ("localhost", "127.0.0.1", "::1", ""):
+            server_label = hostname
+
+        parts = []
+        if server_label:
+            parts.append(server_label)
+        parts.append(model)
         if voice:
             parts.append(voice)
         parts.append(mood)

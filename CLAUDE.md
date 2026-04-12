@@ -122,6 +122,23 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - WSL-specific (legacy): base64-encoded training scripts (survive SSH→PowerShell→WSL quoting), `_resolve_wsl_mount()` for SCP↔WSL bridge
 - See `docs/remote-training-guide.md` for user-facing setup and usage
 
+## Server (Client-Server Architecture)
+- `tokenpal/server/` package: FastAPI app for inference proxy + training orchestration
+- `tokenpal-server` entry point, `[server]` extras group (fastapi, uvicorn)
+- Inference: byte-forwarding `/v1/*` proxy to local Ollama (no JSON deserialization, streaming-ready)
+- Training: `POST /api/v1/train {"wiki": "...", "character": "..."}` → server handles full pipeline (wiki fetch → dataset prep → train → merge → register)
+- Training worker: `asyncio.to_thread()` wrapping `finetune_voice` functions, `asyncio.Lock` for one-job-at-a-time
+- Job state: JSON files at `~/.tokenpal-server/jobs/`, crash recovery on startup (stale job detection)
+- Auth: pluggable `AbstractAuth` → `NoAuth` (v1), `SharedSecretAuth` (v2). Via `app.state.auth_backend`
+- Default bind: `127.0.0.1` (localhost only). LAN access opt-in via `host = "0.0.0.0"` in config
+- Auto-fallback: when configured server unreachable and `mode = "auto"`, HttpBackend tries `localhost:11434/v1`
+- Status bar shows server name when connected to remote (`geefourteen | gemma4 | happy`)
+- `/server status` and `/server switch local/remote/<host>` slash commands
+- Input validation: wiki `^[a-zA-Z0-9-]+$`, character `^[a-zA-Z0-9 _.'-]+$`, model `^[a-zA-Z0-9_.-]+(:[a-zA-Z0-9_.-]+)?$`
+- Config: `ServerConfig` in schema.py with `Literal` types for `mode` and `auth_backend`
+- Installers: `scripts/install-server.sh` (Linux/macOS, systemd user unit) + `scripts/install-server.ps1` (Windows, startup shortcut)
+- See `docs/server-setup.md` for user-facing setup guide
+
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent` (causes text overlap)
 - macOS: app awareness uses Quartz `CGWindowListCopyWindowInfo` (NOT `NSWorkspace.frontmostApplication()`)
