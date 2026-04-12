@@ -3,7 +3,7 @@
 A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — run locally or on a remote GPU over your LAN.
 
 ```
-geefourteen | gemma4 | BMO | snarky | spoke 4s ago
+geefourteen | gemma4 | BMO | playful | spoke 4s ago
 ┌──────────────────────────────────────────┐
 │ Oh look, another terminal window. How    │
 │ original. What are we debugging today,   │
@@ -61,7 +61,8 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Senses** | App awareness (macOS), CPU/RAM/battery, idle detection, time of day |
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
 | **Voices** | Train character voices from Fandom wiki transcripts |
-| **Moods** | 6 moods that shift based on context, with easter eggs |
+| **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
+| **Memory** | Cross-session app visit history, injected into prompts for continuity |
 | **Server** | Remote GPU inference + training over HTTP |
 | **Privacy** | No clipboard, no screen capture, silent near banking/health apps |
 
@@ -81,7 +82,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 ## Voices
 
-Train a character voice from show transcripts — generates persona, greetings, mood prompts, and style hints:
+Train a character voice from show transcripts — generates persona, greetings, custom mood names, and style hints. Each voice gets its own mood set (BMO gets PLAYFUL/TURBO/BLAH instead of SNARKY/HYPER/BORED):
 
 ```bash
 /voice train adventuretime BMO     # inside TokenPal
@@ -169,11 +170,12 @@ scripts/
 └── start-server.bat    # Start Ollama + server (Windows)
 
 docs/
-├── server-setup.md           # Server setup guide
-├── remote-training-guide.md  # LoRA fine-tuning guide
-├── dev-setup-macos.md        # macOS dev environment
-├── dev-setup-windows-*.md    # Windows dev environments
-└── fine-tuning-plan.md       # Fine-tuning architecture notes
+├── server-setup.md              # Server setup guide
+├── remote-training-guide.md     # LoRA fine-tuning guide
+├── dynamic-mood-transitions.md  # V2 mood system design (parked)
+├── dev-setup-macos.md           # macOS dev environment
+├── dev-setup-windows-*.md       # Windows dev environments
+└── fine-tuning-plan.md          # Fine-tuning architecture notes
 ```
 
 </details>
@@ -196,7 +198,7 @@ pip install -e ".[macos,dev]"    # macOS
 pip install -e ".[windows,dev]"  # Windows
 pip install -e ".[server,dev]"   # server extras
 
-pytest                  # 237 tests
+pytest                  # 270 tests
 ruff check tokenpal/    # lint
 tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 ```

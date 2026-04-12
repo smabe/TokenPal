@@ -22,7 +22,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --config PATH` — use specific config file
 - `ollama serve` / `brew services start ollama` — LLM backend must be running
-- `pytest` — run tests (135 tests, asyncio_mode=auto)
+- `pytest` — run tests (270 tests, asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 - `tail -f ~/.tokenpal/logs/tokenpal.log` — debug log (DEBUG level, rotated at 5MB)
@@ -34,7 +34,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `idle` (pynput, cross-platform, three tiers: short/medium/long, transition-only readings)
 
 ## Brain
-- `PersonalityEngine`: rotating few-shot examples (27 pool, sample 5-7), comment history deque, voice-specific structure hints, mood system (6 moods), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio after 3, late-night tone)
+- `PersonalityEngine`: rotating few-shot examples (27 pool, sample 5-7), comment history deque, voice-specific structure hints, mood system (6 moods, custom names per voice via `_ENUM_TO_ROLE` + `mood_roles`), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio after 3, late-night tone)
 - Three prompt paths: `build_prompt()` for observations, `build_freeform_prompt()` for unprompted thoughts (no screen context, rich voices only), `build_conversation_prompt()` for user input
 - `_apply_voice()` consolidates all voice field init; `_sample_examples()` and `_pick_hint()` shared across prompt builders
 - Freeform thoughts: `has_rich_voice` (50+ lines), `_should_freeform()` (15% chance, 45s min gap), `_generate_freeform_comment()`
@@ -81,9 +81,10 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Prompt template in `personality.py` has mood line, structure hint, examples, session notes, memory block, context, recent comments.
 
 ## Voice Training
-- `tokenpal/tools/train_voice.py`: `_generate_voice_assets()` runs 5 parallel Ollama calls (persona, greetings, offline quips, mood prompts, structure hints)
+- `tokenpal/tools/train_voice.py`: `_generate_voice_assets()` runs 5 parallel Ollama calls (persona, greetings, offline quips, mood prompts with custom names, structure hints)
+- Custom moods: pipe-delimited prompt (`ROLE | NAME | description`), `_parse_custom_moods()` regex parser, 1 retry + legacy fallback. Returns `mood_roles` dict (role→display name) and `default_mood`
 - `tokenpal/tools/wiki_fetch.py`: `_strip_wiki_markup()` normalizes all Fandom wiki formats, then `_wikitext_to_dialogue()` extracts `Name: dialogue` lines. Handles `{{L|Name|dialogue}}` templates and `'''Name:'''` bold formats
-- `tokenpal/tools/voice_profile.py`: `VoiceProfile` dataclass with lines, persona, greetings, offline_quips, mood_prompts, structure_hints
+- `tokenpal/tools/voice_profile.py`: `VoiceProfile` dataclass with lines, persona, greetings, offline_quips, mood_prompts, mood_roles, default_mood, structure_hints
 - `train_from_wiki()` accepts `progress_callback` for live UI updates during training
 - Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
 
