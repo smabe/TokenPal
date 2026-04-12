@@ -47,10 +47,26 @@ class AbstractLLMBackend(abc.ABC):
         """Current model name."""
         return self._config.get("model_name", "unknown")
 
+    @property
+    def api_url(self) -> str:
+        """Current API endpoint URL."""
+        return self._config.get("api_url", "unknown")
+
+    @property
+    def is_reachable(self) -> bool:
+        """Whether the backend is currently reachable."""
+        return False
+
     def set_model(self, model_name: str) -> None:
         """Swap the active model. Override in backends that support it."""
         raise NotImplementedError(
             f"{type(self).__name__} does not support model swapping"
+        )
+
+    def set_api_url(self, url: str) -> None:
+        """Switch the API endpoint at runtime. Override in backends that support it."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support URL switching"
         )
 
     @abc.abstractmethod

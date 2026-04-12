@@ -18,6 +18,7 @@ from tokenpal.config.schema import (
     PluginsConfig,
     RemoteTrainConfig,
     SensesConfig,
+    ServerConfig,
     TokenPalConfig,
     UIConfig,
 )
@@ -40,6 +41,7 @@ _SECTION_MAP: dict[str, type] = {
     "paths": PathsConfig,
     "plugins": PluginsConfig,
     "finetune": FinetuneConfig,
+    "server": ServerConfig,
 }
 
 

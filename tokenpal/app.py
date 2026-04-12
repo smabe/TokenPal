@@ -160,12 +160,44 @@ def main() -> None:
             llm, config,
         )
 
+    def _cmd_server(args: str) -> CommandResult:
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else "status"
+
+        if subcmd == "status":
+            state = "connected" if llm.is_reachable else "unreachable"
+            return CommandResult(f"Server: {llm.api_url} ({state})")
+
+        if subcmd == "switch":
+            if len(parts) < 2:
+                return CommandResult("Usage: /server switch <host|local|remote>")
+            target = parts[1].strip()
+            if target == "local":
+                url = "http://localhost:11434/v1"
+            elif target == "remote":
+                host = config.server.host if config.server.host != "127.0.0.1" else "localhost"
+                port = config.server.port
+                url = f"http://{host}:{port}/v1"
+            elif not target.startswith("http"):
+                url = f"http://{target}:8585/v1"
+            else:
+                url = target.rstrip("/")
+                if not url.endswith("/v1"):
+                    url += "/v1"
+
+            llm.set_api_url(url)
+            asyncio.run_coroutine_threadsafe(llm.setup(), brain._loop)
+            return CommandResult(f"Switching to {url}...")
+
+        return CommandResult("Usage: /server [status|switch <host|local|remote>]")
+
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("mood", _cmd_mood)
     dispatcher.register("status", _cmd_status)
     dispatcher.register("model", _cmd_model)
     dispatcher.register("voice", _cmd_voice)
+    dispatcher.register("server", _cmd_server)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

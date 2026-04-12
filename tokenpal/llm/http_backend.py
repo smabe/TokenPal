@@ -146,10 +146,25 @@ class HttpBackend(AbstractLLMBackend):
     def model_name(self) -> str:
         return self._model_name
 
+    @property
+    def api_url(self) -> str:
+        return self._api_url
+
+    @property
+    def is_reachable(self) -> bool:
+        return self._reachable
+
     def set_model(self, model_name: str) -> None:
         """Swap the active model. Next generation call uses the new model."""
         self._model_name = model_name
         log.info("Model swapped to: %s", model_name)
+
+    def set_api_url(self, url: str) -> None:
+        """Switch the API endpoint at runtime. Used by /server switch."""
+        self._api_url = url.rstrip("/")
+        self._reachable = False
+        self._model_available = False
+        log.info("API URL switched to: %s", self._api_url)
 
     async def teardown(self) -> None:
         if self._client:

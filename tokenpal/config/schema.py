@@ -86,6 +86,16 @@ class PluginsConfig:
 
 
 @dataclass
+class ServerConfig:
+    host: str = "127.0.0.1"
+    port: int = 8585
+    mode: Literal["auto", "remote", "local"] = "auto"
+    auth_backend: Literal["none", "shared_secret"] = "none"
+    api_key: str = ""
+    ollama_url: str = "http://localhost:11434"
+
+
+@dataclass
 class RemoteTrainConfig:
     host: str = ""
     user: str = ""
@@ -126,3 +136,4 @@ class TokenPalConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
+    server: ServerConfig = field(default_factory=ServerConfig)

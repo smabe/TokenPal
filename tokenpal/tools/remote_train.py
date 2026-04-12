@@ -1283,6 +1283,20 @@ async def remote_finetune(
     Raises RemoteTrainError on failure.
     """
     remote = config.remote
+
+    # -- HTTP server path: if a TokenPal server is configured, use HTTP --
+    # This replaces ~600 lines of SSH orchestration with a POST + poll loop.
+    # Import here to avoid circular imports and keep server deps optional.
+    if hasattr(config, "_server_url") and config._server_url:
+        result = await _remote_finetune_via_http(
+            profile, config._server_url, config, progress,
+        )
+        # HTTP path returns None — model lives on the server's Ollama.
+        # Return a sentinel dir so callers that check .exists() don't crash.
+        if result is None:
+            return Path("(model on server)")
+        return result
+
     if not remote.host:
         raise RemoteTrainError(
             "config", "No remote host configured. Set [finetune.remote] host in config.toml",
@@ -1911,6 +1925,83 @@ async def remote_finetune(
 
     _progress(f"Done! Model: {model_name}")
     return local_model_dir
+
+
+async def _remote_finetune_via_http(
+    profile: VoiceProfile,
+    server_url: str,
+    config: FinetuneConfig,
+    progress: ProgressCallback | None = None,
+) -> Path | None:
+    """Fine-tune via TokenPal server HTTP API instead of SSH.
+
+    POSTs wiki+character to /api/v1/train, polls /api/v1/train/{job_id}
+    until complete. The model stays on the server (no SCP pull needed).
+    Returns None — the model lives on the server's Ollama, not locally.
+    """
+    import httpx
+
+    from tokenpal.server.models import TrainingStatus
+
+    slug = slugify(profile.character)
+    base_url = server_url.rstrip("/")
+    if base_url.endswith("/v1"):
+        base_url = base_url[:-3]
+
+    def _progress(msg: str) -> None:
+        log.info("Finetune (HTTP): %s", msg)
+        if progress:
+            progress(msg)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        _progress(f"Submitting training job to {base_url}...")
+        wiki = profile.source.replace(".fandom.com", "") if profile.source else ""
+        resp = await client.post(
+            f"{base_url}/api/v1/train",
+            json={
+                "wiki": wiki,
+                "character": profile.character,
+                "base_model": config.base_model,
+            },
+        )
+        if resp.status_code == 409:
+            data = resp.json()
+            raise RemoteTrainError("server", data.get("error", "Training already in progress"))
+        if resp.status_code != 202:
+            raise RemoteTrainError(
+                "server", f"Server returned {resp.status_code}: {resp.text[:200]}",
+            )
+
+        job_id = resp.json()["job_id"]
+        _progress(f"Job submitted: {job_id}")
+
+        last_progress_count = 0
+        while True:
+            await asyncio.sleep(POLL_INTERVAL_SECONDS)
+
+            status_resp = await client.get(f"{base_url}/api/v1/train/{job_id}")
+            if status_resp.status_code != 200:
+                raise RemoteTrainError(
+                    "server", f"Status poll failed: {status_resp.status_code}",
+                )
+
+            job = status_resp.json()
+            status = job["status"]
+
+            progress_msgs = job.get("progress", [])
+            for msg in progress_msgs[last_progress_count:]:
+                _progress(msg)
+            last_progress_count = len(progress_msgs)
+
+            if status == TrainingStatus.COMPLETE:
+                model_name = job.get("model_name", f"tokenpal-{slug}")
+                _progress(f"Done! Model '{model_name}' registered on server")
+                return None
+
+            if status == TrainingStatus.FAILED:
+                error = job.get("error", "Unknown error")
+                hint = job.get("error_hint", "")
+                raise RemoteTrainError("server", error, hint=hint)
 
 
 async def _ensure_wsl(

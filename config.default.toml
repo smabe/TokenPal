@@ -56,6 +56,14 @@ data_dir = "~/.tokenpal"
 [plugins]
 extra_packages = []
 
+[server]
+# host = "127.0.0.1"       # default: localhost only. Set "0.0.0.0" for LAN access
+# port = 8585
+# mode = "auto"            # auto (fallback to local), remote (server only), local (skip server)
+# auth_backend = "none"    # "none" or "shared_secret"
+# api_key = ""
+# ollama_url = "http://localhost:11434"
+
 [finetune]
 base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 # lora_rank = 16              # auto-tuned by dataset size
