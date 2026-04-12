@@ -19,6 +19,7 @@ class SensesConfig:
     vision: bool = False
     voice: bool = False
     web_search: bool = False
+    productivity: bool = False
 
 
 @dataclass

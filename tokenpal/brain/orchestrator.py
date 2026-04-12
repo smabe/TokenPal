@@ -7,9 +7,10 @@ import json
 import logging
 import random
 import time
+from collections import deque
 from datetime import datetime
-from urllib.parse import urlparse
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
@@ -21,8 +22,26 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 log = logging.getLogger(__name__)
 
 # Max comments in a rolling window (guardrail §2)
-_MAX_COMMENTS_PER_WINDOW = 15
+_MAX_COMMENTS_PER_WINDOW = 8
 _WINDOW_SECONDS = 300.0
+
+# Forced silence after N consecutive comments (seconds)
+_FORCED_SILENCE_AFTER = 3
+_FORCED_SILENCE_DURATION = 120.0
+
+# Freeform chance for voices with 50+ example lines
+_FREEFORM_CHANCE_RICH = 0.30
+
+# Topic focus hints prepended to the context snapshot
+_TOPIC_FOCUS_HINTS: dict[str, str] = {
+    "weather": "Focus your comment on the weather conditions.",
+    "music": "Focus your comment on what they're listening to.",
+    "productivity": "Comment on their work pattern or focus level.",
+    "hardware": "Comment on the machine's state (CPU, RAM, etc).",
+    "app_awareness": "Comment on what they're doing right now.",
+    "time_awareness": "Comment on the time of day or how long they've been working.",
+    "idle": "Comment on them returning from being away.",
+}
 
 
 class Brain:
@@ -44,8 +63,8 @@ class Brain:
         memory: MemoryStore | None = None,
         actions: list[AbstractAction] | None = None,
         poll_interval_s: float = 2.0,
-        comment_cooldown_s: float = 15.0,
-        interestingness_threshold: float = 0.3,
+        comment_cooldown_s: float = 30.0,
+        interestingness_threshold: float = 0.4,
         context_max_tokens: int = 2048,
         sense_intervals: dict[str, float] | None = None,
     ) -> None:
@@ -84,6 +103,10 @@ class Brain:
         # Silence tuning state
         self._consecutive_comments: int = 0
         self._comment_timestamps: list[float] = []
+        self._forced_silence_until: float = 0.0
+
+        # Topic roulette state
+        self._recent_topics: deque[str] = deque(maxlen=10)
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -93,6 +116,7 @@ class Brain:
         for sense in self._senses:
             try:
                 await sense.setup()
+                self._context.register_ttl(sense.sense_name, sense.reading_ttl_s)
                 log.info("Sense '%s' initialized", sense.sense_name)
             except Exception:
                 log.exception("Failed to set up sense '%s'", sense.sense_name)
@@ -185,32 +209,43 @@ class Brain:
         if self._paused:
             return False
 
-        elapsed = time.monotonic() - self._last_comment_time
-        if elapsed < self._cooldown:
+        now = time.monotonic()
+        elapsed = now - self._last_comment_time
+
+        # Forced silence period after consecutive comment burst
+        if now < self._forced_silence_until:
             return False
 
-        # Silence tuning: force a gap after 2 consecutive comments
-        if self._consecutive_comments >= 2 and random.random() < 0.6:
-            log.debug("Gate: forced silence after %d consecutive comments", self._consecutive_comments)
+        # Dynamic cooldown: high activity = 30s, idle = 90s
+        activity = self._context.activity_level()
+        dynamic_cooldown = max(self._cooldown, 90.0 - activity * 60.0)
+        # Add jitter so comments don't feel like a metronome
+        jittered_cooldown = dynamic_cooldown + random.uniform(0, 15.0)
+        if elapsed < jittered_cooldown:
+            return False
+
+        # Hard silence after N consecutive comments — force a 2-minute breather
+        if self._consecutive_comments >= _FORCED_SILENCE_AFTER:
+            log.debug(
+                "Gate: forced %ds silence after %d consecutive comments",
+                int(_FORCED_SILENCE_DURATION), self._consecutive_comments,
+            )
+            self._forced_silence_until = now + _FORCED_SILENCE_DURATION
             self._consecutive_comments = 0
             return False
 
-        # Random silence — flat 30% chance to stay quiet even when context is interesting
+        # Random silence — flat 30% chance to stay quiet
         if random.random() < 0.3:
             log.debug("Gate: random silence (30%%)")
             return False
 
         # Guardrail: cap at N comments per 5-minute window
-        now = time.monotonic()
         self._comment_timestamps = [
             t for t in self._comment_timestamps if now - t < _WINDOW_SECONDS
         ]
         if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
             log.debug("Gate: rate limit — %d comments in window", len(self._comment_timestamps))
             return False
-
-        # Activity level: user switching apps / hardware busy → talk more
-        activity = self._context.activity_level()
 
         # Time-of-day weighting: raise threshold at night for quieter behavior
         hour = datetime.now().hour
@@ -227,7 +262,6 @@ class Brain:
 
         # Boredom bonus: gradually lower threshold after prolonged silence,
         # but ONLY when there's at least *some* real context change (score > 0).
-        # Without this guard, hardware jitter alone triggers empty comments.
         if score > 0:
             boredom_bonus = min(0.2, elapsed / 600.0)
             threshold = max(threshold - boredom_bonus, 0.1)
@@ -253,7 +287,8 @@ class Brain:
         if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
             return False
 
-        if random.random() >= self._FREEFORM_CHANCE:
+        chance = _FREEFORM_CHANCE_RICH if self._personality.has_rich_voice else self._FREEFORM_CHANCE
+        if random.random() >= chance:
             return False
 
         log.debug("Gate: freeform thought triggered (%.0fs since last)", elapsed)
@@ -291,6 +326,55 @@ class Brain:
             log.exception("Freeform generation failed")
             self._push_status()
 
+    def _pick_topic(self) -> str:
+        """Weighted random topic selection, penalizing recently used topics."""
+        now = time.monotonic()
+        available: dict[str, float] = {}
+        active = self._context.active_readings()
+
+        for sense_name, reading in active.items():
+            # Freshness: newer readings are more interesting
+            ttl = self._context.ttl_for(sense_name)
+            age = now - reading.timestamp
+            freshness = max(0.1, 1.0 - age / ttl)
+            # Novelty penalty: recently commented topics are less interesting
+            recent_count = sum(1 for t in self._recent_topics if t == sense_name)
+            novelty = max(0.1, 1.0 - recent_count * 0.3)
+            # Change bonus: readings that just changed are more comment-worthy
+            prev = self._context.prev_summary(sense_name)
+            change_bonus = 1.5 if (prev is None or reading.summary != prev) else 0.5
+
+            available[sense_name] = freshness * novelty * change_bonus
+
+        if not available:
+            return "app_awareness"
+
+        # Hard block: no 3+ consecutive same-topic comments
+        if len(self._recent_topics) >= 2:
+            t1, t2 = self._recent_topics[-2], self._recent_topics[-1]
+            if t1 == t2 and t1 in available:
+                blocked = t1
+                available[blocked] = 0.0
+                if not any(v > 0 for v in available.values()):
+                    for k in available:
+                        if k != blocked:
+                            available[k] = 1.0
+
+        names = list(available.keys())
+        weights = [available[n] for n in names]
+        total = sum(weights)
+        if total == 0:
+            return names[0] if names else "app_awareness"
+
+        return random.choices(names, weights=weights, k=1)[0]
+
+    def _apply_topic_focus(self, snapshot: str, topic: str) -> str:
+        """Prepend a focus hint so the LLM knows what aspect to comment on."""
+        hint = _TOPIC_FOCUS_HINTS.get(topic)
+        if hint:
+            return f"[{hint}]\n\n{snapshot}"
+        return snapshot
+
     async def _generate_comment(self, snapshot: str | None = None) -> None:
         if snapshot is None:
             snapshot = self._context.snapshot()
@@ -308,6 +392,10 @@ class Brain:
             log.info("TokenPal (easter egg): %s", egg)
             self._emit_comment(egg, acknowledge=True)
             return
+
+        # Topic roulette: pick what to focus on and hint the LLM
+        topic = self._pick_topic()
+        snapshot = self._apply_topic_focus(snapshot, topic)
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None
         if memory_lines:
@@ -337,6 +425,7 @@ class Brain:
                     log.info("Re-enabled tool-calling after successful generation")
                 self._consecutive_failures = 0
                 self._emit_comment(filtered, acknowledge=True)
+                self._recent_topics.append(topic)
                 # Record comment milestones
                 if self._memory and self._personality._total_comments % 10 == 0:
                     self._memory.record_observation(

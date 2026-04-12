@@ -10,6 +10,7 @@ ocr = false
 vision = false
 voice = false
 web_search = false
+productivity = false
 
 [llm]
 backend = "http"

@@ -66,12 +66,19 @@ class MacOSAppAwareness(AbstractSense):
         else:
             summary = f"App: {app_name}"
 
+        # Track transitions for change detection
+        changed_from = ""
+        if app_name != self._prev_app and self._prev_app:
+            changed_from = f"switched from {self._prev_app}"
+        self._prev_app = app_name
+
         return self._reading(
             data={
                 "app_name": app_name,
                 "window_title": window_title,
             },
             summary=summary,
+            changed_from=changed_from,
         )
 
     async def teardown(self) -> None:

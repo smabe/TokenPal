@@ -17,6 +17,7 @@ class SenseReading:
     data: dict[str, Any]
     summary: str
     confidence: float = 1.0
+    changed_from: str = ""
 
 
 class AbstractSense(abc.ABC):
@@ -32,6 +33,7 @@ class AbstractSense(abc.ABC):
     platforms: ClassVar[tuple[str, ...]]
     priority: ClassVar[int] = 100
     poll_interval_s: ClassVar[float] = 2.0
+    reading_ttl_s: ClassVar[float] = 120.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
@@ -56,7 +58,13 @@ class AbstractSense(abc.ABC):
     def enabled(self) -> bool:
         return self._enabled
 
-    def _reading(self, data: dict[str, Any], summary: str, confidence: float = 1.0) -> SenseReading:
+    def _reading(
+        self,
+        data: dict[str, Any],
+        summary: str,
+        confidence: float = 1.0,
+        changed_from: str = "",
+    ) -> SenseReading:
         """Helper to build a SenseReading with timestamp pre-filled."""
         return SenseReading(
             sense_name=self.sense_name,
@@ -64,4 +72,5 @@ class AbstractSense(abc.ABC):
             data=data,
             summary=summary,
             confidence=confidence,
+            changed_from=changed_from,
         )

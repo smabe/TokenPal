@@ -7,18 +7,19 @@ from collections import deque
 
 from tokenpal.senses.base import SenseReading
 
-# How long readings stay relevant (seconds)
-_READING_TTL = 120.0
+# Default TTL for readings when no per-sense TTL is registered (seconds)
+_DEFAULT_READING_TTL = 120.0
 
 # Per-sense weights for interestingness scoring.
 # Higher weight = this sense changing matters more for triggering comments.
 _SENSE_WEIGHTS: dict[str, float] = {
-    "app_awareness": 0.5,
+    "app_awareness": 0.3,
     "idle": 1.0,
     "clipboard": 0.8,
     "screen_capture": 0.6,
     "hardware": 0.3,
-    "time_awareness": 0.0,
+    "time_awareness": 0.15,
+    "productivity": 0.1,
 }
 _DEFAULT_WEIGHT = 0.5
 
@@ -31,6 +32,15 @@ class ContextWindowBuilder:
         self._readings: dict[str, SenseReading] = {}
         self._history: deque[SenseReading] = deque(maxlen=50)
         self._prev_summaries: dict[str, str] = {}
+        self._sense_ttls: dict[str, float] = {}
+
+    def register_ttl(self, sense_name: str, ttl_s: float) -> None:
+        """Register a per-sense TTL (from AbstractSense.reading_ttl_s)."""
+        self._sense_ttls[sense_name] = ttl_s
+
+    def ttl_for(self, sense_name: str) -> float:
+        """Return the TTL for a sense (or the default)."""
+        return self._sense_ttls.get(sense_name, _DEFAULT_READING_TTL)
 
     def ingest(self, readings: list[SenseReading]) -> None:
         """Ingest a batch of new readings, keeping the latest per sense."""
@@ -45,10 +55,13 @@ class ContextWindowBuilder:
 
         for sense_name, reading in sorted(self._readings.items()):
             age = now - reading.timestamp
-            if age > _READING_TTL:
+            if age > self.ttl_for(sense_name):
                 continue
-            # Use the summary directly — it's already human-readable
-            lines.append(reading.summary)
+            # Include transition metadata when available
+            if reading.changed_from:
+                lines.append(f"{reading.summary} ({reading.changed_from})")
+            else:
+                lines.append(reading.summary)
 
         return "\n".join(lines)
 
@@ -66,7 +79,7 @@ class ContextWindowBuilder:
         score = 0.0
 
         for sense_name, reading in self._readings.items():
-            if now - reading.timestamp > _READING_TTL:
+            if now - reading.timestamp > self.ttl_for(sense_name):
                 continue
 
             weight = _SENSE_WEIGHTS.get(sense_name, _DEFAULT_WEIGHT)
@@ -109,7 +122,7 @@ class ContextWindowBuilder:
         # --- Hardware load ---
         hw_reading = self._readings.get("hardware")
         hw_activity = 0.0
-        if hw_reading and now - hw_reading.timestamp <= _READING_TTL:
+        if hw_reading and now - hw_reading.timestamp <= self.ttl_for("hardware"):
             cpu = hw_reading.data.get("cpu_percent", 0)
             ram = hw_reading.data.get("ram_percent", 0)
             # Use the higher of the two, scaled so 70%+ = meaningful activity
@@ -117,6 +130,18 @@ class ContextWindowBuilder:
 
         # Blend: app switching is the stronger signal
         return min(app_activity * 0.7 + hw_activity * 0.3, 1.0)
+
+    def active_readings(self) -> dict[str, SenseReading]:
+        """Return non-expired readings keyed by sense name."""
+        now = time.monotonic()
+        return {
+            name: r for name, r in self._readings.items()
+            if now - r.timestamp <= self.ttl_for(name)
+        }
+
+    def prev_summary(self, sense_name: str) -> str | None:
+        """Return the last acknowledged summary for a sense, or None."""
+        return self._prev_summaries.get(sense_name)
 
     def acknowledge(self) -> None:
         """Mark the current context as seen. Call after a successful comment."""

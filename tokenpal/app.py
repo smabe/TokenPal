@@ -9,6 +9,7 @@ import signal
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.registry import discover_actions, resolve_actions
@@ -55,11 +56,25 @@ def main() -> None:
     discover_overlays()
     discover_actions()
 
+    # Session memory (before senses, so productivity sense can use it)
+    memory: MemoryStore | None = None
+    if config.memory.enabled:
+        memory = MemoryStore(
+            db_path=data_dir / "memory.db",
+            retention_days=config.memory.retention_days,
+        )
+        memory.setup()
+        memory.record_session_start()
+
     # Resolve implementations for this platform + config
     sense_flags = {f.name: getattr(config.senses, f.name) for f in dataclasses.fields(config.senses)}
+    sense_configs: dict[str, dict[str, Any]] = {}
+    if memory:
+        sense_configs["productivity"] = {"memory_store": memory}
     senses = resolve_senses(
         sense_flags=sense_flags,
         sense_overrides=config.plugins.sense_overrides,
+        sense_configs=sense_configs,
     )
 
     llm_config = dataclasses.asdict(config.llm)
@@ -93,16 +108,6 @@ def main() -> None:
         actions = resolve_actions(enabled=action_flags)
         if actions:
             log.info("Loaded %d actions: %s", len(actions), [a.action_name for a in actions])
-
-    # Session memory
-    memory: MemoryStore | None = None
-    if config.memory.enabled:
-        memory = MemoryStore(
-            db_path=data_dir / "memory.db",
-            retention_days=config.memory.retention_days,
-        )
-        memory.setup()
-        memory.record_session_start()
 
     # Startup summary (before overlay takes over terminal)
     _print_startup_summary(senses, actions, config)
