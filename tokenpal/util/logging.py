@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import stat
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
@@ -39,6 +41,11 @@ def setup_logging(
         file_handler.setFormatter(fmt)
         file_handler.setLevel(logging.DEBUG)
         root.addHandler(file_handler)
+        # Restrict log file permissions to owner-only (match memory.db)
+        try:
+            os.chmod(str(log_file), stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass  # Windows doesn't support Unix permissions
     except OSError:
         # Fall back to stderr only if file logging fails
         stderr_handler = logging.StreamHandler(sys.stderr)

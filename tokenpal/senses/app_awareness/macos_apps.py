@@ -10,6 +10,29 @@ from tokenpal.senses.registry import register_sense
 
 log = logging.getLogger(__name__)
 
+# Browser apps whose window titles may contain sensitive content.
+# Titles are stripped unless they match a known safe pattern.
+_BROWSERS: set[str] = {
+    "google chrome", "firefox", "safari", "arc", "brave browser",
+    "microsoft edge", "chromium", "opera", "vivaldi",
+}
+
+# Safe title patterns that are OK to pass through (music players in browser)
+_SAFE_TITLE_SUFFIXES: tuple[str, ...] = (
+    "- YouTube Music",
+    "- Spotify Web Player",
+    "- Apple Music",
+)
+
+
+def _sanitize_browser_title(app_name: str, title: str) -> str:
+    """Strip browser window titles unless they match a known safe pattern."""
+    if app_name.lower() not in _BROWSERS:
+        return title
+    if any(title.endswith(suffix) for suffix in _SAFE_TITLE_SUFFIXES):
+        return title
+    return ""
+
 
 @register_sense
 class MacOSAppAwareness(AbstractSense):
@@ -58,7 +81,8 @@ class MacOSAppAwareness(AbstractSense):
                 if not owner or owner in ("Window Server", "Dock"):
                     continue
                 app_name = owner
-                window_title = w.get("kCGWindowName", "") or ""
+                raw_title = w.get("kCGWindowName", "") or ""
+                window_title = _sanitize_browser_title(app_name, raw_title)
                 break
 
         if window_title:
