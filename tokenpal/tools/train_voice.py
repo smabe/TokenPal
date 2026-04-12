@@ -64,6 +64,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
+        "reasoning_effort": "none",
     }).encode()
 
     req = urllib.request.Request(
@@ -73,7 +74,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
             text = data["choices"][0]["message"]["content"].strip()
             return text.strip("\"'").strip()
