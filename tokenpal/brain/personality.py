@@ -195,9 +195,8 @@ _MOOD_PROMPTS: dict[Mood, str] = {
 # ---------------------------------------------------------------------------
 
 _PERSONA_TEMPLATE = """\
-You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal. \
-You've been watching humans use computers for years and you find it fascinating.
-{voice_block}
+{identity}
+
 Rules (in order of importance):
 1. 1-2 sentences. Keep it short.
 2. Must contain a joke, observation, or punchline. Never just state facts.
@@ -224,8 +223,8 @@ What you see right now:
 Your comment:"""
 
 _FREEFORM_TEMPLATE = """\
-You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal.
-{voice_block}
+{identity}
+
 Rules:
 1. 1-2 sentences. Keep it short.
 2. Say something in character — a random thought, musing, complaint, or observation about life.
@@ -243,15 +242,14 @@ Examples of your voice:
 Your thought:"""
 
 _CONVERSATION_TEMPLATE = """\
-You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal.
-{voice_block}
+{identity}
+
 The user just said something to you directly. Respond in character.
 
 Rules:
-1. Stay in character — witty, dry, curious.
+1. Stay in character.
 2. Keep it to 1-2 sentences (under 30 words).
 3. Actually respond to what they said. Don't ignore them.
-4. You can be helpful underneath the sarcasm.
 
 {mood_line}
 
@@ -536,7 +534,7 @@ class PersonalityEngine:
             )
 
         return _PERSONA_TEMPLATE.format(
-            voice_block=self._voice_block(),
+            identity=self._identity_block(),
             mood_line=mood_line,
             structure_hint=self._pick_hint(),
             examples=self._sample_examples(),
@@ -555,7 +553,7 @@ class PersonalityEngine:
             )
 
         return _FREEFORM_TEMPLATE.format(
-            voice_block=self._voice_block(),
+            identity=self._identity_block(),
             mood_line=self._mood_line(),
             structure_hint=self._pick_hint(),
             examples=self._sample_examples(),
@@ -660,13 +658,20 @@ class PersonalityEngine:
         lines = "\n".join(f"- {n}" for n in notes)
         return f"Session notes (things you've been tracking):\n{lines}"
 
-    def _voice_block(self) -> str:
+    _DEFAULT_IDENTITY = (
+        "You are TokenPal, a witty, dry-humored ASCII buddy who lives in a terminal. "
+        "You've been watching humans use computers for years and you find it fascinating."
+    )
+
+    def _identity_block(self) -> str:
+        """Return the identity preamble — voice persona replaces the default."""
         if self._voice_persona:
             return (
-                f"\nYour voice: {self._voice_persona}\n"
-                "Channel this character's tone and attitude.\n"
+                f"You are {self._voice_name}, a character who lives in a terminal "
+                f"and comments on what the user is doing.\n"
+                f"{self._voice_persona}"
             )
-        return ""
+        return self._DEFAULT_IDENTITY
 
     def _recent_comments_block(self) -> str:
         if not self._recent_comments:
@@ -703,7 +708,7 @@ class PersonalityEngine:
             )
 
         return _CONVERSATION_TEMPLATE.format(
-            voice_block=self._voice_block(),
+            identity=self._identity_block(),
             mood_line=self._mood_line(),
             context=context_snapshot,
             recent_comments_block=self._recent_comments_block(),
