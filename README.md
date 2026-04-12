@@ -15,12 +15,21 @@ geefourteen | gemma4 | BMO | playful | spoke 4s ago
 
 ```bash
 python3 setup_tokenpal.py   # creates venv, installs deps, checks Ollama
-./run.sh                    # run the buddy
+source .venv/bin/activate
+tokenpal                    # first run walks you through a quick setup wizard
 ```
 
 **Prerequisites:** Python 3.12+, [Ollama](https://ollama.com/download), a model (`ollama pull gemma4`)
 
-Verify: `tokenpal --check`
+Verify everything: `tokenpal --check`
+
+### Client-only install (remote GPU)
+
+If you're using a remote GPU server for inference, skip the Ollama install:
+
+```bash
+python3 setup_tokenpal.py --client   # prompts for server URL, skips Ollama
+```
 
 ## Remote GPU Server
 
@@ -101,8 +110,10 @@ For deeper character embodiment, [LoRA fine-tune](docs/remote-training-guide.md)
 
 ## Configuration
 
+Config is created automatically by the setup script. Edit `config.toml` to customize:
+
 ```bash
-cp config.default.toml config.toml  # gitignored, per-machine
+$EDITOR config.toml   # gitignored, per-machine
 ```
 
 Config auto-discovered: `~/.tokenpal/config.toml` > project root > cwd.
@@ -117,9 +128,14 @@ model_name = "gemma4"
 disable_reasoning = true               # fast responses
 
 [senses]
-productivity = true                    # work patterns from session data
+# These are on by default:
+app_awareness = true
+hardware = true
+idle = true
+time_awareness = true
 music = true                           # detect Music.app/Spotify (macOS)
-weather = true                         # Open-Meteo (set location with /zip)
+productivity = true                    # work patterns from session data
+weather = false                        # opt-in: use /zip or first-run wizard
 
 [brain]
 comment_cooldown_s = 30.0
@@ -158,7 +174,7 @@ Everything is pluggable via decorators (`@register_sense`, `@register_backend`, 
 tokenpal/
 ├── actions/         # LLM-callable tools (timer, system_info, open_app)
 ├── brain/           # Orchestrator, context builder, personality, memory
-├── config/          # TOML schema and loader
+├── config/          # TOML schema, loader, weather config helpers
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
 ├── senses/          # App awareness, hardware, idle, time, weather, music, productivity
 ├── server/          # FastAPI inference proxy + training API
@@ -166,7 +182,8 @@ tokenpal/
 ├── ui/              # Console overlay with ASCII art and input
 ├── util/            # Shared utilities
 ├── commands.py      # Slash command dispatcher
-├── cli.py           # --check, --verbose, --config
+├── cli.py           # --check, --verbose, --config, --skip-welcome
+├── first_run.py     # First-run welcome wizard
 └── app.py           # Bootstrap and main loop
 
 scripts/
@@ -190,12 +207,13 @@ docs/
 ## CLI
 
 ```
-tokenpal               # run the buddy
-tokenpal --check       # verify Ollama, model, senses, actions
-tokenpal --verbose     # debug logs in terminal
-tokenpal --config PATH # specific config file
-tokenpal-server        # run the inference server
-tokenpal-finetune      # LoRA fine-tuning CLI
+tokenpal                  # run the buddy (first-run wizard on fresh install)
+tokenpal --check          # verify Ollama, model, senses, actions
+tokenpal --verbose        # debug logs in terminal
+tokenpal --config PATH    # specific config file
+tokenpal --skip-welcome   # bypass first-run wizard
+tokenpal-server           # run the inference server
+tokenpal-finetune         # LoRA fine-tuning CLI
 ```
 
 ## Development

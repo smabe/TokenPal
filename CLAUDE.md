@@ -12,10 +12,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
 
 ## Key Commands
-- `python3 setup_tokenpal.py` — one-command setup (venv, deps, Ollama, config)
-- `./run.sh` or `tokenpal` — run the buddy
-- `tokenpal --check` — verify Ollama, model, senses, actions
+- `python3 setup_tokenpal.py` — one-command setup (venv, deps, Ollama, config). `--client` for remote GPU, `--local` for full local
+- `tokenpal` — run the buddy (first-run wizard on fresh install)
+- `tokenpal --check` — verify Ollama, model, senses; warns on enabled-but-unimplemented senses
 - `tokenpal --verbose` — show debug logs in terminal
+- `tokenpal --skip-welcome` — bypass first-run wizard
 - `pytest` — run tests (asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
@@ -25,7 +26,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `hardware` — psutil, cross-platform, expressive summaries at high utilization
 - `time_awareness` — cross-platform, session duration tracking
 - `idle` — pynput, cross-platform, three tiers, transition-only readings
-- `weather` — Open-Meteo API (free, no key), poll 30min, TTL 1hr, weight 0.0. Opt-in via `/zip` command. `[weather]` config section
+- `weather` — Open-Meteo API (free, no key), poll 30min, TTL 1hr, weight 0.0. Opt-in via `/zip` command or first-run wizard. Geocoding + config write in `tokenpal/config/weather.py`
 - `music` — macOS: AppleScript for Music.app/Spotify. Checks `System Events` before querying (prevents auto-launch). Track names redacted from logs
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
 
