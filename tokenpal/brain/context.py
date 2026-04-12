@@ -65,6 +65,11 @@ class ContextWindowBuilder:
             else:
                 lines.append(reading.summary)
 
+        # Composite observations — multi-signal patterns
+        composites = self._detect_composites()
+        if composites:
+            lines.extend(composites)
+
         return "\n".join(lines)
 
     def interestingness(self) -> float:
@@ -132,6 +137,54 @@ class ContextWindowBuilder:
 
         # Blend: app switching is the stronger signal
         return min(app_activity * 0.7 + hw_activity * 0.3, 1.0)
+
+    def _detect_composites(self) -> list[str]:
+        """Detect multi-signal patterns worth highlighting to the LLM.
+
+        Returns factual observations — the LLM editorializes, not us.
+        """
+        composites: list[str] = []
+        active = self.active_readings()
+
+        hw = active.get("hardware")
+        prod = active.get("productivity")
+        music = active.get("music")
+        time_r = active.get("time_awareness")
+
+        # High CPU + frequent app switching = something is grinding
+        if hw and prod:
+            cpu = hw.data.get("cpu_percent", 0)
+            switches = prod.data.get("switches_per_hour", 0)
+            if cpu > 70 and switches > 8:
+                composites.append(
+                    f"CPU is at {cpu}% and user has switched apps "
+                    f"{int(switches)} times per hour"
+                )
+
+        # Long focus + music = flow state
+        if prod and music:
+            focus_min = prod.data.get("time_in_current_min", 0)
+            if focus_min > 30 and music.data.get("state") == "playing":
+                composites.append(
+                    f"User has been focused for {focus_min} minutes with music on"
+                )
+
+        # Late night + long session
+        if time_r and prod:
+            hour = time_r.data.get("hour", 12)
+            session_min = prod.data.get("session_minutes", 0)
+            if hour >= 23 and session_min > 120:
+                composites.append(
+                    f"It's past 11 PM and user has been at it for "
+                    f"{session_min // 60} hours"
+                )
+            elif hour < 6 and hour >= 0 and session_min > 60:
+                composites.append(
+                    f"It's {hour} AM and user is still working "
+                    f"after {session_min} minutes"
+                )
+
+        return composites[:2]  # Cap at 2 to avoid bloating the context
 
     def active_readings(self) -> dict[str, SenseReading]:
         """Return non-expired readings keyed by sense name."""
