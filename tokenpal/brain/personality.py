@@ -794,11 +794,25 @@ class PersonalityEngine:
         return False
 
     def _cap_sentences(self, text: str, max_default: int = 2, max_voice: int = 3) -> str:
-        """Truncate to N sentences. Voices get more room for excitable characters."""
+        """Truncate to N sentences. Voices get more room for excitable characters.
+
+        Short exclamations (under 10 chars like "Huh?!" or "Tired?!")
+        don't count toward the cap — exclamatory characters like Finn
+        would otherwise burn through the limit in a few words.
+        """
         limit = max_voice if self._voice_persona else max_default
-        sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > limit:
-            return " ".join(sentences[:limit])
+        fragments = _RE_SENTENCE_SPLIT.split(text)
+        count = 0
+        kept: list[str] = []
+        for frag in fragments:
+            is_full = len(frag.strip()) >= 10
+            if is_full:
+                count += 1
+            if count > limit:
+                break
+            kept.append(frag)
+        if len(kept) < len(fragments):
+            return " ".join(kept)
         return text
 
     def _clean_llm_text(self, text: str) -> str:
