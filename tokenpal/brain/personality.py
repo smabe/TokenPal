@@ -600,10 +600,11 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
-        # Keep at most 2 sentences
+        # Sentence cap: voices get more room for excitable characters
+        max_sentences = 3 if self._voice_persona else 2
         sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > 2:
-            text = " ".join(sentences[:2])
+        if len(sentences) > max_sentences:
+            text = " ".join(sentences[:max_sentences])
 
         text = text.strip(_QUOTES).strip()
 
@@ -724,10 +725,11 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
-        # Allow up to 2 sentences (vs 1 for observations)
+        # Sentence cap: voices get more room (excitable characters use short bursts)
+        max_sentences = 4 if self._voice_persona else 2
         sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > 2:
-            text = " ".join(sentences[:2])
+        if len(sentences) > max_sentences:
+            text = " ".join(sentences[:max_sentences])
 
         text = text.strip(_QUOTES).strip()
 
