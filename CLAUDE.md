@@ -142,6 +142,9 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Ollama on Windows: not in PATH from cmd.exe SSH — use full path `%LOCALAPPDATA%\Programs\Ollama\ollama.exe`. CLI from SSH may try to start a new instance; use PowerShell wrapper or ensure Ollama is already running
 - Ollama safetensors crash: `ollama create` panics on Gemma-2's `additional_special_tokens` (string format, expects dict). Workaround: convert to GGUF via `convert_hf_to_gguf.py` (b4921 tag matches gguf 0.18.0)
 - Fine-tuned 2B models can't handle tool calling — use gemma4 + voice profiles for daily use, fine-tuned models for experiments
+- `OLLAMA_KEEP_ALIVE=1m` in `start-server.bat` — unloads model from VRAM after 1 min idle (frees GPU for gaming)
+- Voice persona replaces default TokenPal identity (not appended) — `_identity_block()` in personality.py
+- Response filter sentence cap relaxed for voices: observations 3 (was 2), conversations 4 (was 2) — via `_cap_sentences()` helper
 - See `docs/server-setup.md` for user-facing setup guide
 
 ## Platform Notes

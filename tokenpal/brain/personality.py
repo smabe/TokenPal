@@ -600,11 +600,7 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
-        # Sentence cap: voices get more room for excitable characters
-        max_sentences = 3 if self._voice_persona else 2
-        sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > max_sentences:
-            text = " ".join(sentences[:max_sentences])
+        text = self._cap_sentences(text, max_default=2, max_voice=3)
 
         text = text.strip(_QUOTES).strip()
 
@@ -680,6 +676,14 @@ class PersonalityEngine:
         lines = "\n".join(f'- "{c}"' for c in self._recent_comments)
         return "Your last few comments (DON'T repeat these):\n" + lines
 
+    def _cap_sentences(self, text: str, max_default: int = 2, max_voice: int = 3) -> str:
+        """Truncate to N sentences. Voices get more room for excitable characters."""
+        limit = max_voice if self._voice_persona else max_default
+        sentences = _RE_SENTENCE_SPLIT.split(text)
+        if len(sentences) > limit:
+            return " ".join(sentences[:limit])
+        return text
+
     @staticmethod
     def _clean_llm_text(text: str) -> str:
         """Shared cleanup for LLM output — strips artifacts, markdown, prefixes."""
@@ -725,11 +729,7 @@ class PersonalityEngine:
 
         text = self._clean_llm_text(text)
 
-        # Sentence cap: voices get more room (excitable characters use short bursts)
-        max_sentences = 4 if self._voice_persona else 2
-        sentences = _RE_SENTENCE_SPLIT.split(text)
-        if len(sentences) > max_sentences:
-            text = " ".join(sentences[:max_sentences])
+        text = self._cap_sentences(text, max_default=2, max_voice=4)
 
         text = text.strip(_QUOTES).strip()
 
