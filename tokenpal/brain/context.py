@@ -20,6 +20,7 @@ _SENSE_WEIGHTS: dict[str, float] = {
     "hardware": 0.3,
     "time_awareness": 0.15,
     "productivity": 0.1,
+    "music": 0.2,
 }
 _DEFAULT_WEIGHT = 0.5
 
