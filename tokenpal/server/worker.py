@@ -59,10 +59,30 @@ def _run_pipeline(job: TrainingJob, data_dir: Path, output_dir: Path) -> None:
     num_train = _count_lines(train_path)
     progress(f"Dataset ready: {num_train} training samples")
 
-    # Step 2: Train
+    # Step 2: Train — first unload Ollama's model to free VRAM
     job.status = TrainingStatus.TRAINING
     if not _check_gpu():
         raise RuntimeError("No CUDA GPU detected. Training requires a CUDA GPU.")
+    progress("Unloading Ollama models to free VRAM...")
+    try:
+        import json as _json
+        import urllib.request
+
+        # Find loaded models and unload each one
+        resp = urllib.request.urlopen("http://localhost:11434/api/ps", timeout=10)
+        running = _json.loads(resp.read()).get("models", [])
+        for m in running:
+            name = m.get("name", "")
+            if name:
+                req = urllib.request.Request(
+                    "http://localhost:11434/api/generate",
+                    data=_json.dumps({"model": name, "keep_alive": 0}).encode(),
+                    headers={"Content-Type": "application/json"},
+                )
+                urllib.request.urlopen(req, timeout=10)
+                progress(f"Unloaded {name}")
+    except Exception:
+        pass  # Best-effort — Ollama may not have models loaded
     config = LoRAConfig(base_model=job.base_model)
     config = auto_tune(config, num_train)
     progress(f"Training (rank={config.lora_rank}, epochs={config.epochs})...")
