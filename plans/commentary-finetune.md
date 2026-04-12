@@ -46,3 +46,4 @@ Give TokenPal more things to talk about and smarter topic selection so comments 
 - Manual test: run the buddy for 10+ minutes and observe varied commentary topics
 
 ## Parking lot
+- **Status bar enrichment**: Show current weather (temp + condition), currently playing song (artist - track), productivity streak, and other live sense data in the console status bar. UX designer recommended: `snarky | Ghostty | 72F sunny | Radiohead - OK Computer | 11 min` with truncation rules (app 12 chars, weather temp + 1 word, music 25 chars, omit segments with no data)
