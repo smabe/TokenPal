@@ -46,6 +46,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--config", type=Path, default=None, metavar="PATH",
         help="path to config.toml",
     )
+    parser.add_argument(
+        "--skip-welcome", action="store_true",
+        help="skip the first-run welcome wizard",
+    )
     return parser.parse_args(argv)
 
 
@@ -105,6 +109,14 @@ async def _check(config_path: Path | None) -> int:
     senses = resolve_senses(sense_flags=sense_flags, sense_overrides=config.plugins.sense_overrides)
     names = [s.sense_name for s in senses]
     print(f"  {_CHECK} {len(senses)} senses: {', '.join(names)}")
+
+    # Warn about enabled senses that couldn't load on this platform
+    resolved_names = set(names)
+    enabled_names = {name for name, on in sense_flags.items() if on}
+    skipped = enabled_names - resolved_names
+    for name in sorted(skipped):
+        print(f"  {_WARN} '{name}' enabled but no implementation for this platform")
+        problems += 1
 
     # Actions
     from tokenpal.actions.registry import discover_actions, resolve_actions

@@ -2,16 +2,21 @@
 """TokenPal setup script — gets you from fresh clone to running in one command.
 
 Usage:
-    python3 setup_tokenpal.py
+    python3 setup_tokenpal.py            # auto-detect (default)
+    python3 setup_tokenpal.py --local    # full local install + Ollama
+    python3 setup_tokenpal.py --client   # client-only (remote GPU server)
 """
 
 from __future__ import annotations
 
+import argparse
 import platform
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -209,31 +214,72 @@ def check_ollama() -> bool:
         return True  # Non-fatal
 
 
-def setup_config() -> None:
+def setup_config(mode: str) -> None:
     step("Setting up config")
     config_path = PROJECT_ROOT / "config.toml"
     default_path = PROJECT_ROOT / "config.default.toml"
 
     if config_path.exists():
         ok("config.toml already exists")
-        return
-
-    if not default_path.exists():
+    elif not default_path.exists():
         fail("config.default.toml not found — is this the project root?")
         return
+    else:
+        shutil.copy(default_path, config_path)
+        ok("Created config.toml from defaults")
 
-    shutil.copy(default_path, config_path)
-    ok("Created config.toml from defaults")
-    print("  Edit config.toml to customize model, senses, and UI settings.")
+    if mode == "client":
+        _configure_client(config_path)
+
+
+def _configure_client(config_path: Path) -> None:
+    """Prompt for remote server URL and write it to config.toml."""
+    step("Configuring remote server")
+    print("  TokenPal will connect to a remote GPU server for inference.")
+    print("  Example: http://gpu-box.local:8585")
+
+    if not sys.stdin.isatty():
+        warn("Non-interactive — set [server] in config.toml manually")
+        return
+
+    try:
+        url = input("  Server URL: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        warn("Skipped — set [server] in config.toml manually")
+        return
+
+    if not url:
+        warn("Skipped — set [server] in config.toml manually")
+        return
+
+    parsed = urlparse(url if "://" in url else f"http://{url}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8585
+
+    server_block = f'[server]\nhost = "{host}"\nport = {port}\nmode = "remote"\n'
+
+    content = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    if re.search(r"^\[server\]\s*$", content, re.MULTILINE):
+        content = re.sub(
+            r"^\[server\].*?(?=\n\[|\Z)",
+            server_block.rstrip(),
+            content,
+            flags=re.DOTALL | re.MULTILINE,
+        )
+    else:
+        content = content.rstrip() + "\n\n" + server_block
+
+    config_path.write_text(content, encoding="utf-8")
+    ok(f"Server configured: {host}:{port}")
+    print("  TokenPal will use the remote server for LLM inference.")
 
 
 def check_permissions_macos() -> None:
     step("macOS permissions reminder")
-    print("  TokenPal needs these permissions (grant on first run):")
-    print("    - Screen Recording (for screen capture sense)")
-    print("    - Accessibility (for idle detection / keyboard listener)")
-    print("  Go to: System Settings → Privacy & Security")
-    print("  Grant permissions to your terminal app (Terminal, iTerm2, Ghostty, etc.)")
+    print("  TokenPal needs Accessibility permission (for idle detection).")
+    print("  Go to: System Settings → Privacy & Security → Accessibility")
+    print("  Grant permission to your terminal app (Terminal, iTerm2, Ghostty, etc.)")
 
 
 def verify_install(python: str) -> bool:
@@ -260,23 +306,49 @@ def print_summary(plat: str, venv_dir: Path) -> None:
     # Activation command
     if sys.prefix == sys.base_prefix:
         if plat == "windows":
-            print(f"  1. Activate venv:  .venv\\Scripts\\Activate.ps1")
+            print("  1. Activate venv:  .venv\\Scripts\\Activate.ps1")
         else:
-            print(f"  1. Activate venv:  source .venv/bin/activate")
+            print("  1. Activate venv:  source .venv/bin/activate")
 
-    print(f"  2. Start Ollama:   ollama serve  (if not already running)")
-    print(f"  3. Run TokenPal:   python -m tokenpal")
-    print(f"  4. Stop:           Ctrl+C")
+    print("  2. Start Ollama:   ollama serve  (if not already running)")
+    print("  3. Run TokenPal:   tokenpal")
+    print("  4. Health check:   tokenpal --check")
+    print("  5. Stop:           Ctrl+C")
     print(f"\n  Config:   {PROJECT_ROOT / 'config.toml'}")
-    print(f"  Logs:     ~/.tokenpal/logs/tokenpal.log")
-    print(f"  Voices:   python -m tokenpal.tools.train_voice --help")
+    print("  Logs:     ~/.tokenpal/logs/tokenpal.log")
     print()
+    print(f"  {BOLD}On first run, TokenPal will walk you through a quick setup wizard.{RESET}")
+    print()
+
+
+# ── Argument parsing ─────────────────────────────────────────────────────────
+
+def parse_setup_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="TokenPal setup — from fresh clone to running in one command.",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
+        "--local", action="store_const", dest="mode", const="local",
+        help="full local install (Ollama + model download)",
+    )
+    group.add_argument(
+        "--client", action="store_const", dest="mode", const="client",
+        help="client-only install (skip Ollama, configure remote server)",
+    )
+    parser.set_defaults(mode="default")
+    return parser.parse_args()
 
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    args = parse_setup_args()
+    mode = args.mode
+
     print(f"\n{BOLD}TokenPal Setup{RESET}")
+    if mode != "default":
+        print(f"Mode: {mode}")
     print(f"{'─' * 50}")
 
     plat = detect_platform()
@@ -291,8 +363,10 @@ def main() -> None:
     if not install_deps(python, plat):
         sys.exit(1)
 
-    check_ollama()
-    setup_config()
+    if mode != "client":
+        check_ollama()
+
+    setup_config(mode)
 
     if plat == "macos":
         check_permissions_macos()

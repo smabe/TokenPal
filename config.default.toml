@@ -1,17 +1,17 @@
 [senses]
-screen_capture = true
 app_awareness = true
-clipboard = true
-music = false
 hardware = true
 idle = true
 time_awareness = true
-ocr = false
-vision = false
-voice = false
-web_search = false
-productivity = false
-weather = false
+music = true
+productivity = true
+weather = false              # opt-in: needs zip code (run /zip or first-run wizard)
+screen_capture = false       # not yet implemented
+clipboard = false            # not yet implemented
+ocr = false                  # not yet implemented
+vision = false               # not yet implemented
+voice = false                # not yet implemented
+web_search = false           # not yet implemented
 
 [llm]
 backend = "http"
