@@ -684,10 +684,14 @@ class PersonalityEngine:
             return " ".join(sentences[:limit])
         return text
 
-    @staticmethod
-    def _clean_llm_text(text: str) -> str:
-        """Shared cleanup for LLM output — strips artifacts, markdown, prefixes."""
-        text = _RE_ASTERISK.sub("", text).strip()
+    def _clean_llm_text(self, text: str) -> str:
+        """Cleanup for LLM output — strips artifacts, markdown, prefixes.
+
+        When a voice is active, keeps asterisk expressions (*sound effects*,
+        *emphasis*) since those are in-character, not formatting artifacts.
+        """
+        if not self._voice_persona:
+            text = _RE_ASTERISK.sub("", text).strip()
         text = _RE_LEAKED_TAG.sub("", text).strip()
         text = _RE_DASHES.sub("", text).strip()
         text = _RE_LEADING_DASH.sub("", text).strip()
