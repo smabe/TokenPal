@@ -2,11 +2,12 @@
 set -euo pipefail
 
 # TokenPal Server Installer — Linux / macOS
-# Sets up: Python venv, tokenpal[server], Ollama, firewall rule, systemd unit
+# Sets up: Ollama, model, Python venv, tokenpal[server], firewall, systemd
 
 INSTALL_DIR="${TOKENPAL_SERVER_DIR:-$HOME/.tokenpal}"
 VENV_DIR="$INSTALL_DIR/server-venv"
 PORT="${TOKENPAL_PORT:-8585}"
+MODEL="${TOKENPAL_MODEL:-gemma4}"
 PYTHON="${PYTHON:-python3}"
 
 echo "=== TokenPal Server Setup ==="
@@ -14,7 +15,7 @@ echo "Install dir: $INSTALL_DIR"
 echo ""
 
 # --- Phase 1: Python check ---
-echo "[1/6] Checking Python..."
+echo "[1/7] Checking Python..."
 if ! command -v "$PYTHON" &>/dev/null; then
     echo "ERROR: $PYTHON not found. Install Python 3.12+."
     exit 1
@@ -27,22 +28,40 @@ if (( PY_MINOR < 12 )); then
 fi
 echo "  Python $PY_VER OK"
 
-# --- Phase 2: Ollama check ---
-echo "[2/6] Checking Ollama..."
+# --- Phase 2: Ollama install ---
+echo "[2/7] Checking Ollama..."
 if ! command -v ollama &>/dev/null; then
     echo "  Ollama not found. Installing..."
     if [[ "$(uname)" == "Darwin" ]]; then
-        echo "  On macOS, install from https://ollama.com/download"
-        echo "  Or: brew install ollama"
-        exit 1
+        if command -v brew &>/dev/null; then
+            brew install ollama
+        else
+            echo "  Install Ollama from https://ollama.com/download"
+            echo "  Or: brew install ollama"
+            exit 1
+        fi
     else
         curl -fsSL https://ollama.com/install.sh | sh
     fi
 fi
 echo "  Ollama OK: $(ollama --version 2>/dev/null || echo 'installed')"
 
-# --- Phase 3: Venv + tokenpal[server] ---
-echo "[3/6] Setting up Python environment..."
+# --- Phase 3: Start Ollama + pull model ---
+echo "[3/7] Ensuring Ollama is running and pulling model..."
+if ! curl -sf http://localhost:11434/ >/dev/null 2>&1; then
+    echo "  Starting Ollama..."
+    ollama serve &>/dev/null &
+    sleep 3
+fi
+if ! ollama list 2>/dev/null | grep -q "$MODEL"; then
+    echo "  Pulling $MODEL (this may take a few minutes)..."
+    ollama pull "$MODEL"
+else
+    echo "  Model $MODEL already available"
+fi
+
+# --- Phase 4: Venv + tokenpal[server] ---
+echo "[4/7] Setting up Python environment..."
 mkdir -p "$INSTALL_DIR"
 "$PYTHON" -m venv "$VENV_DIR"
 source "$VENV_DIR/bin/activate"
@@ -50,8 +69,8 @@ pip install --upgrade pip -q
 pip install 'tokenpal[server]' -q
 echo "  tokenpal-server installed"
 
-# --- Phase 4: Firewall ---
-echo "[4/6] Configuring firewall..."
+# --- Phase 5: Firewall ---
+echo "[5/7] Configuring firewall..."
 if [[ "$(uname)" == "Darwin" ]]; then
     echo "  macOS: firewall will prompt on first connection. No action needed."
 elif command -v ufw &>/dev/null; then
@@ -65,8 +84,8 @@ else
     echo "  No firewall manager detected. Manually open port $PORT/tcp if needed."
 fi
 
-# --- Phase 5: HF Token ---
-echo "[5/6] HuggingFace token (for gated models like Gemma)..."
+# --- Phase 6: HF Token ---
+echo "[6/7] HuggingFace token (for gated models like Gemma)..."
 if [[ -z "${HF_TOKEN:-}" ]]; then
     echo -n "  Paste your HF token (or press Enter to skip): "
     read -r hf_token
@@ -83,8 +102,8 @@ else
     chmod 600 "$INSTALL_DIR/server.env"
 fi
 
-# --- Phase 6: Systemd (Linux only) ---
-echo "[6/6] Service setup..."
+# --- Phase 7: Systemd (Linux only) ---
+echo "[7/7] Service setup..."
 if [[ "$(uname)" == "Linux" ]] && command -v systemctl &>/dev/null; then
     UNIT_DIR="$HOME/.config/systemd/user"
     mkdir -p "$UNIT_DIR"
