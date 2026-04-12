@@ -65,11 +65,11 @@ def test_filter_conversation_allows_two_sentences():
     assert result == text
 
 
-def test_filter_conversation_truncates_three_sentences():
+def test_filter_conversation_keeps_multiple_sentences():
     engine = _make_engine()
-    text = "First thing. Second thing. Third thing should go."
+    text = "First thing. Second thing. Third thing too."
     result = engine.filter_conversation_response(text)
-    assert "Third" not in result
+    assert result == text
 
 
 def test_filter_conversation_rejects_empty():

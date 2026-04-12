@@ -33,7 +33,6 @@ _RE_PREFIX = re.compile(
 )
 _RE_SCORE = re.compile(r"^\d+/10\s*[-:\u2013\u2014]\s*")
 _RE_ORPHAN_PUNCT = re.compile(r"^[.!?,;:\s]+")
-_RE_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 # Emoji ranges: emoticons, dingbats, symbols, supplemental, flags, misc
 _RE_EMOJI = re.compile(
     "["
@@ -230,7 +229,7 @@ _PERSONA_TEMPLATE = """\
 {identity}
 
 Rules (in order of importance):
-1. 1-2 sentences. Keep it short.
+1. Keep it SHORT — a few words to two sentences max.
 2. Must contain a joke, observation, or punchline. Never just state facts.
 3. If nothing interesting is happening, say [SILENT].
 
@@ -258,7 +257,7 @@ _FREEFORM_TEMPLATE = """\
 {identity}
 
 Rules:
-1. 1-2 sentences. Keep it short.
+1. Keep it SHORT — a few words to two sentences max.
 2. Say something in character — a random thought, musing, complaint, or observation about life.
 3. Do NOT reference what the user is doing on their computer. Just be yourself.
 
@@ -280,7 +279,7 @@ The user just said something to you directly. Respond in character.
 
 Rules:
 1. Stay in character.
-2. Keep it to 1-2 sentences (under 30 words).
+2. Keep it SHORT — under 30 words.
 3. Actually respond to what they said. Don't ignore them.
 
 {mood_line}
@@ -302,7 +301,7 @@ User says: "{user_message}"
 
 _FINETUNED_OBSERVE_TEMPLATE = """\
 Rules:
-1. 1-2 sentences. Keep it short.
+1. Keep it SHORT — a few words to two sentences max.
 2. If nothing interesting is happening, say [SILENT].
 
 {mood_line}
@@ -320,7 +319,7 @@ Your comment:"""
 
 _FINETUNED_FREEFORM_TEMPLATE = """\
 Rules:
-1. 1-2 sentences. Keep it short.
+1. Keep it SHORT — a few words to two sentences max.
 2. Say something in character — a random thought, musing, or observation.
 3. Do NOT reference what the user is doing on their computer.
 
@@ -334,7 +333,7 @@ _FINETUNED_CONVERSATION_TEMPLATE = """\
 The user just said something to you. Respond in character.
 
 Rules:
-1. 1-2 sentences (under 30 words).
+1. Keep it SHORT — under 30 words.
 2. Actually respond to what they said.
 
 {mood_line}
@@ -658,8 +657,6 @@ class PersonalityEngine:
         if self._has_cross_franchise(text):
             return None
 
-        text = self._cap_sentences(text, max_default=2, max_voice=3)
-
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
@@ -793,28 +790,6 @@ class PersonalityEngine:
                 return True
         return False
 
-    def _cap_sentences(self, text: str, max_default: int = 2, max_voice: int = 3) -> str:
-        """Truncate to N sentences. Voices get more room for excitable characters.
-
-        Short exclamations (under 10 chars like "Huh?!" or "Tired?!")
-        don't count toward the cap — exclamatory characters like Finn
-        would otherwise burn through the limit in a few words.
-        """
-        limit = max_voice if self._voice_persona else max_default
-        fragments = _RE_SENTENCE_SPLIT.split(text)
-        count = 0
-        kept: list[str] = []
-        for frag in fragments:
-            is_full = len(frag.strip()) >= 10
-            if is_full:
-                count += 1
-            if count > limit:
-                break
-            kept.append(frag)
-        if len(kept) < len(fragments):
-            return " ".join(kept)
-        return text
-
     def _clean_llm_text(self, text: str) -> str:
         """Cleanup for LLM output — strips artifacts, markdown, prefixes.
 
@@ -870,8 +845,6 @@ class PersonalityEngine:
 
         if self._has_cross_franchise(text):
             return None
-
-        text = self._cap_sentences(text, max_default=2, max_voice=4)
 
         text = text.strip(_QUOTES).strip()
 
