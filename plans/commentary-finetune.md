@@ -47,3 +47,4 @@ Give TokenPal more things to talk about and smarter topic selection so comments 
 
 ## Parking lot
 - **Status bar enrichment**: Show current weather (temp + condition), currently playing song (artist - track), productivity streak, and other live sense data in the console status bar. UX designer recommended: `snarky | Ghostty | 72F sunny | Radiohead - OK Computer | 11 min` with truncation rules (app 12 chars, weather temp + 1 word, music 25 chars, omit segments with no data)
+- **Conversation history in main view**: Show the last few comments in the console alongside the buddy (not in the status bar). Scrollable or fading log of recent speech bubbles so the user can glance at what the buddy has been saying without it disappearing after the next comment
