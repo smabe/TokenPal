@@ -58,13 +58,14 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 | | |
 |---|---|
-| **Senses** | App awareness (macOS), CPU/RAM/battery, idle detection, time of day |
+| **Senses** | App awareness (macOS), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns |
+| **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
 | **Voices** | Train character voices from Fandom wiki transcripts |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
 | **Server** | Remote GPU inference + training over HTTP |
-| **Privacy** | No clipboard, no screen capture, silent near banking/health apps |
+| **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized |
 
 ## Commands
 
@@ -76,6 +77,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /server status           show server connection
 /server switch local     use local Ollama
 /server switch hostname  switch to remote server
+/zip 90210               set weather location (geocodes, writes config)
 /mood                    current mood
 /status                  model, senses, actions
 ```
@@ -114,8 +116,13 @@ api_url = "http://localhost:11434/v1"  # or remote server
 model_name = "gemma4"
 disable_reasoning = true               # fast responses
 
+[senses]
+productivity = true                    # work patterns from session data
+music = true                           # detect Music.app/Spotify (macOS)
+weather = true                         # Open-Meteo (set location with /zip)
+
 [brain]
-comment_cooldown_s = 20.0
+comment_cooldown_s = 30.0
 active_voice = ""                      # e.g. "bmo"
 
 [actions]
@@ -153,7 +160,7 @@ tokenpal/
 ├── brain/           # Orchestrator, context builder, personality, memory
 ├── config/          # TOML schema and loader
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
-├── senses/          # App awareness, hardware, idle, time
+├── senses/          # App awareness, hardware, idle, time, weather, music, productivity
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
 ├── ui/              # Console overlay with ASCII art and input
@@ -198,7 +205,7 @@ pip install -e ".[macos,dev]"    # macOS
 pip install -e ".[windows,dev]"  # Windows
 pip install -e ".[server,dev]"   # server extras
 
-pytest                  # 270 tests
+pytest                  # tests
 ruff check tokenpal/    # lint
 tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 ```
@@ -207,5 +214,8 @@ tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 
 - No clipboard monitoring, no screen content capture
 - Goes silent around banking, passwords, health apps
-- Session memory stores only app names and timestamps
+- Browser window titles sanitized (stripped unless music player detected)
+- Session memory stores only app names and timestamps, never content
+- Log files restricted to owner-only (0o600)
 - Everything local — no cloud. Optional LAN server for GPU offload
+- Weather is the only sense that makes network requests (opt-in, Open-Meteo)

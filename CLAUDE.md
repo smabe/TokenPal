@@ -28,19 +28,25 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tail -f ~/.tokenpal/logs/tokenpal.log` — debug log (DEBUG level, rotated at 5MB)
 
 ## Senses
-- `app_awareness` (macOS: Quartz window list, NOT NSWorkspace — NSWorkspace is unreliable from background threads)
+- `app_awareness` (macOS: Quartz window list, NOT NSWorkspace — NSWorkspace is unreliable from background threads). Browser window titles sanitized — stripped unless matching music player patterns
 - `hardware` (psutil, cross-platform, expressive summaries at high utilization)
 - `time_awareness` (cross-platform, session duration tracking)
 - `idle` (pynput, cross-platform, three tiers: short/medium/long, transition-only readings)
+- `weather` (Open-Meteo API, free, no key, poll 30min, TTL 1hr, weight 0.0 — enriches context only, never triggers alone). Opt-in via `/zip` command. Lat/lon rounded to 1 decimal for privacy. `WeatherConfig` dataclass at top-level `[weather]` section
+- `music` (macOS: AppleScript for Music.app/Spotify, checks `System Events` process list before querying to avoid auto-launching apps, poll 15s, weight 0.2). Track names redacted from DEBUG logs. Returns None when nothing playing
+- `productivity` (derives from existing MemoryStore data: time-in-app, switches/hour, longest streak, app categories. Poll 60s, weight 0.1). MemoryStore injected via `sense_configs["productivity"]["memory_store"]`. Filters sensitive app names from summaries. Returns None when session < 5 min
 
 ## Brain
 - `PersonalityEngine`: rotating few-shot examples (27 pool, sample 5-7), comment history deque, voice-specific structure hints, mood system (6 moods, custom names per voice via `_ENUM_TO_ROLE` + `mood_roles`), running gags (dynamic app detection), guardrails (sensitive apps, compliment ratio after 3, late-night tone)
 - Three prompt paths: `build_prompt()` for observations, `build_freeform_prompt()` for unprompted thoughts (no screen context, rich voices only), `build_conversation_prompt()` for user input
 - `_apply_voice()` consolidates all voice field init; `_sample_examples()` and `_pick_hint()` shared across prompt builders
-- Freeform thoughts: `has_rich_voice` (50+ lines), `_should_freeform()` (15% chance, 45s min gap), `_generate_freeform_comment()`
+- Freeform thoughts: `has_rich_voice` (50+ lines), `_should_freeform()` (15% default, 30% for rich voices, 45s min gap), `_generate_freeform_comment()`
 - `_emit_comment()` consolidates comment bookkeeping (record, show, timestamps) across observation/freeform/easter egg paths
 - Shared `_clean_llm_text()` with pre-compiled regex constants for response cleanup (includes orphan punctuation stripping)
-- `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern prevents consumed changes
+- `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern prevents consumed changes, per-sense TTL via `reading_ttl_s` ClassVar, composite observations (`_detect_composites()` for multi-signal patterns), public API: `active_readings()`, `prev_summary()`, `ttl_for()`
+- Topic roulette: `_pick_topic()` in orchestrator, weighted random selection (freshness, novelty penalty, change bonus), hard block on 3+ consecutive same-topic, focus hints prepended to context
+- Change detection: `changed_from` field on `SenseReading`, app_awareness populates "switched from X"
+- Pacing: dynamic cooldown (30-90s based on activity level), max 8 comments/5min, forced 2-min silence after 3 consecutive, random timing jitter
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom → "Condolences.", Calculator → "Math. Voluntarily.")
 - Graceful degradation: confused quips when Ollama is unreachable, "Ollama unreachable" pushed to status bar on first failure
 - Session memory: `MemoryStore` in `tokenpal/brain/memory.py`, cross-session app visit counts + history lines in prompt
@@ -56,7 +62,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Slash Commands
 - `tokenpal/commands.py`: `CommandDispatcher` with `CommandResult` dataclass
-- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`, `/voice [list|switch|off|info|train]`
+- Built-in: `/help`, `/clear`, `/mood`, `/status`, `/model [name|list|pull|browse]`, `/voice [list|switch|off|info|train]`, `/zip <zipcode>`
+- `/zip 90210` — geocodes via Open-Meteo, writes lat/lon + `weather = true` to config.toml, requires restart
 - `/model` shows current, `/model <name>` swaps, `/model list` shows installed, `/model pull <name>` downloads, `/model browse` shows recommended
 - `/voice train <wiki> "<character>"` — background thread, progress callbacks, pauses brain during training
 - `/voice finetune <name>` — remote LoRA fine-tuning (see Fine-Tuning section below)
@@ -157,9 +164,13 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 ## Privacy
 - No clipboard monitoring (explicitly rejected — privacy liability)
 - Sensitive app exclusion list: banking, password managers, health apps, messaging — goes silent
+- Browser window titles sanitized: stripped for all browser apps unless matching safe patterns (music players). Prevents leaking email subjects, document names, private content
 - Session memory stores only app names and timestamps, never content/URLs/keystrokes
 - SQLite db at `{data_dir}/memory.db` with 0o600 permissions
-- Browser content guardrails deferred — needs tab title/URL awareness
+- Log files at 0o600 (owner-only, matches memory.db)
+- Music track names redacted from DEBUG logs, full data only in LLM context
+- Weather is the ONLY sense making network requests (Open-Meteo, opt-in via `/zip`). No ip-api.com auto-detect. Lat/lon rounded to 1 decimal (~11km)
+- Weather readings ephemeral only — not stored in memory.db
 
 ## Code Style
 - Python 3.12+, strict mypy, ruff for linting
@@ -176,8 +187,10 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Better ASCII art (user designing their own)
 - Daily summaries in SQLite (end-of-day aggregation)
 - MLX backend (native macOS inference, skip Ollama)
-- Music detection sense
+- Status bar enrichment: show weather, music, productivity in console status bar (GitHub #7)
+- Conversation history: recent comments visible alongside buddy in console (GitHub #8)
+- YouTube Music detection via browser window title (deferred — fragile, many edge cases)
+- News/Reddit/HN integration (Tier 2 content sources)
 - Windows app_awareness impl (macOS-only right now)
 - Windows text input (needs msvcrt instead of termios)
-- Browser content guardrails (needs tab title/URL filtering)
 - Security review (pre-release audit of input listeners + privacy surface)
