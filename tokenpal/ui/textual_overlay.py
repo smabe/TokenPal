@@ -9,10 +9,10 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.message import Message
 from textual.timer import Timer
-from textual.widgets import Input, RichLog, Static
+from textual.widgets import Input, Static
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
@@ -204,7 +204,8 @@ class TokenPalApp(App[None]):
             yield BuddyWidget()
             yield Input(placeholder="Type a message or /command...", id="user-input")
             yield StatusBarWidget()
-        yield RichLog(id="chat-log", wrap=True, markup=True)
+        with VerticalScroll(id="chat-log"):
+            yield Static(id="chat-log-content")
 
     def on_mount(self) -> None:
         self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
@@ -229,14 +230,17 @@ class TokenPalApp(App[None]):
                 self._overlay._input_callback(text)
 
     def _log_user(self, text: str) -> None:
-        chat = self.query_one("#chat-log", RichLog)
-        chat.write(f"[bold #dcdcdc]> {text}[/]")
-        chat.scroll_end(animate=False)
+        content = self.query_one("#chat-log-content", Static)
+        current = content.render().plain
+        line = f"> {text}"
+        content.update(f"{current}\n{line}" if current else line)
+        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
 
     def _log_buddy(self, text: str) -> None:
-        chat = self.query_one("#chat-log", RichLog)
-        chat.write(f"[#00ff88]{text}[/]")
-        chat.scroll_end(animate=False)
+        content = self.query_one("#chat-log-content", Static)
+        current = content.render().plain
+        content.update(f"{current}\n{text}" if current else text)
+        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
 
     # --- Message handlers (all run on app thread) ---
 
@@ -262,7 +266,7 @@ class TokenPalApp(App[None]):
         self._log_user(message.text)
 
     def on_clear_log(self, _message: ClearLog) -> None:
-        self.query_one("#chat-log", RichLog).clear()
+        self.query_one("#chat-log-content", Static).update("")
 
     def on_run_callback(self, message: RunCallback) -> None:
         if message.delay_ms <= 0:

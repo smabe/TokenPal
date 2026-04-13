@@ -6,7 +6,7 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import Input, RichLog
+from textual.widgets import Input, Static
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.textual_overlay import (
@@ -187,7 +187,7 @@ async def test_overlay_post_is_thread_safe(
 
 async def test_chat_log_exists(app: TokenPalApp) -> None:
     async with app.run_test():
-        chat = app.query_one("#chat-log", RichLog)
+        chat = app.query_one("#chat-log-content", Static)
         assert chat is not None
 
 
@@ -195,24 +195,24 @@ async def test_speech_logs_to_chat(app: TokenPalApp) -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         app.post_message(ShowSpeech(SpeechBubble(text="Hello human")))
         await pilot.pause()
-        chat = app.query_one("#chat-log", RichLog)
-        assert chat.virtual_size.height > 0
+        chat = app.query_one("#chat-log-content", Static)
+        assert chat.render().plain.strip() != ""
 
 
 async def test_user_input_logs_to_chat(app: TokenPalApp) -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         app.post_message(LogUserMessage("hey buddy"))
         await pilot.pause()
-        chat = app.query_one("#chat-log", RichLog)
-        assert chat.virtual_size.height > 0
+        chat = app.query_one("#chat-log-content", Static)
+        assert chat.render().plain.strip() != ""
 
 
 async def test_buddy_message_logs_to_chat(app: TokenPalApp) -> None:
     async with app.run_test(size=(100, 30)) as pilot:
         app.post_message(LogBuddyMessage("observation comment"))
         await pilot.pause()
-        chat = app.query_one("#chat-log", RichLog)
-        assert chat.virtual_size.height > 0
+        chat = app.query_one("#chat-log-content", Static)
+        assert chat.render().plain.strip() != ""
 
 
 async def test_clear_log(app: TokenPalApp) -> None:
@@ -220,13 +220,12 @@ async def test_clear_log(app: TokenPalApp) -> None:
         app.post_message(LogBuddyMessage("first"))
         app.post_message(LogBuddyMessage("second"))
         await pilot.pause()
-        chat = app.query_one("#chat-log", RichLog)
-        height_before = chat.virtual_size.height
-        assert height_before > 0
+        chat = app.query_one("#chat-log-content", Static)
+        assert chat.render().plain.strip() != ""
 
         app.post_message(ClearLog())
         await pilot.pause()
-        assert chat.virtual_size.height < height_before
+        assert chat.render().plain.strip() == ""
 
 
 async def test_input_submit_logs_user_message(
@@ -240,5 +239,5 @@ async def test_input_submit_logs_user_message(
         inp.value = "what's up"
         await inp.action_submit()
         await pilot.pause()
-        chat = app.query_one("#chat-log", RichLog)
-        assert chat.virtual_size.height > 0
+        chat = app.query_one("#chat-log-content", Static)
+        assert chat.render().plain.strip() != ""

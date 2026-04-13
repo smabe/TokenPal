@@ -56,6 +56,11 @@ Screen {
     background: #1a1a2e;
     border-left: tall #333333;
     padding: 0 1;
-    color: #999999;
     scrollbar-size: 1 1;
+}
+
+#chat-log-content {
+    width: 100%;
+    height: auto;
+    color: #00ff88;
 }
