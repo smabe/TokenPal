@@ -173,14 +173,31 @@ class BuddyWidget(Static):
         self.update("\n".join(frame.lines))
 
 
+_MOOD_COLORS: dict[str, str] = {
+    "snarky": "#00ff88",
+    "impressed": "#ffcc00",
+    "bored": "#888888",
+    "concerned": "#ff6666",
+    "hyper": "#ff88ff",
+    "sleepy": "#6688cc",
+}
+
+
 class StatusBarWidget(Static):
-    """Bottom status text."""
+    """Bottom status text with mood-colored first segment."""
 
     def __init__(self) -> None:
-        super().__init__("Ctrl+C to quit", id="status-bar")
+        super().__init__("Ctrl+C to quit", id="status-bar", markup=True)
 
     def set_text(self, text: str) -> None:
-        self.update(text)
+        parts = text.split(" | ", maxsplit=1)
+        mood = parts[0].lower()
+        color = _MOOD_COLORS.get(mood, "#666666")
+        if len(parts) > 1:
+            markup = f"[{color}]{parts[0]}[/] | {parts[1]}"
+        else:
+            markup = f"[{color}]{text}[/]"
+        self.update(markup)
 
 
 # --- App ---
@@ -190,7 +207,11 @@ class TokenPalApp(App[None]):
     """Main Textual application for TokenPal."""
 
     CSS_PATH = str(_CSS_PATH)
-    BINDINGS = [Binding("ctrl+c", "quit", "Quit", show=False)]
+    BINDINGS = [
+        Binding("ctrl+c", "quit", "Quit", show=False),
+        Binding("f1", "command_help", "Help", show=False),
+        Binding("ctrl+l", "command_clear", "Clear", show=False),
+    ]
 
     def __init__(self, overlay: TextualOverlay) -> None:
         super().__init__()
@@ -211,6 +232,16 @@ class TokenPalApp(App[None]):
         self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
         self._overlay._is_running = True
         log.info("TextualOverlay ready")
+
+    # --- Keyboard shortcuts ---
+
+    def action_command_help(self) -> None:
+        if self._overlay._command_callback:
+            self._overlay._command_callback("/help")
+
+    def action_command_clear(self) -> None:
+        if self._overlay._command_callback:
+            self._overlay._command_callback("/clear")
 
     # --- Input handling ---
 
