@@ -1,25 +1,19 @@
 Screen {
-    layout: vertical;
-    background: #1a1a2e;
-}
-
-#header {
-    dock: top;
-    height: 3;
-    content-align: center middle;
-    color: #00ff88;
-    text-style: bold;
-}
-
-#main-area {
     layout: horizontal;
-    height: 1fr;
+    background: #1a1a2e;
 }
 
 #buddy-panel {
     width: 1fr;
     min-width: 30;
     layout: vertical;
+}
+
+#header {
+    height: 3;
+    content-align: center middle;
+    color: #00ff88;
+    text-style: bold;
 }
 
 #spacer {
@@ -42,18 +36,7 @@ Screen {
     padding: 1 0;
 }
 
-#chat-log {
-    width: 40;
-    min-width: 25;
-    height: 100%;
-    border-left: tall #333333;
-    padding: 0 1;
-    color: #999999;
-    scrollbar-size: 1 1;
-}
-
 #user-input {
-    dock: bottom;
     margin: 0 1;
     background: #1a1a2e;
     color: #dcdcdc;
@@ -61,8 +44,18 @@ Screen {
 }
 
 #status-bar {
-    dock: bottom;
     height: 1;
     color: #666666;
     padding: 0 2;
+}
+
+#chat-log {
+    width: 40;
+    min-width: 25;
+    height: 100%;
+    background: #1a1a2e;
+    border-left: tall #333333;
+    padding: 0 1;
+    color: #999999;
+    scrollbar-size: 1 1;
 }

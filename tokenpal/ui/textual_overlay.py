@@ -9,7 +9,7 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, RichLog, Static
@@ -197,15 +197,14 @@ class TokenPalApp(App[None]):
         self._overlay = overlay
 
     def compose(self) -> ComposeResult:
-        yield HeaderWidget(self._overlay._buddy_name)
-        with Horizontal(id="main-area"):
-            with Vertical(id="buddy-panel"):
-                yield Static(id="spacer")
-                yield SpeechBubbleWidget()
-                yield BuddyWidget()
-            yield RichLog(id="chat-log", wrap=True, markup=True)
-        yield Input(placeholder="Type a message or /command...", id="user-input")
-        yield StatusBarWidget()
+        with Vertical(id="buddy-panel"):
+            yield HeaderWidget(self._overlay._buddy_name)
+            yield Static(id="spacer")
+            yield SpeechBubbleWidget()
+            yield BuddyWidget()
+            yield Input(placeholder="Type a message or /command...", id="user-input")
+            yield StatusBarWidget()
+        yield RichLog(id="chat-log", wrap=True, markup=True)
 
     def on_mount(self) -> None:
         self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
