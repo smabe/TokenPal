@@ -184,8 +184,8 @@ class TokenPalApp(App[None]):
         yield Static(id="spacer")
         yield SpeechBubbleWidget()
         yield BuddyWidget()
-        yield StatusBarWidget()
         yield Input(placeholder="Type a message or /command...", id="user-input")
+        yield StatusBarWidget()
 
     def on_mount(self) -> None:
         self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))

@@ -3,16 +3,16 @@ Screen {
     background: #1a1a2e;
 }
 
-#spacer {
-    height: 1fr;
-}
-
 #header {
     dock: top;
     height: 3;
     content-align: center middle;
     color: #00ff88;
     text-style: bold;
+}
+
+#spacer {
+    height: 1fr;
 }
 
 #speech {
@@ -32,7 +32,6 @@ Screen {
 }
 
 #user-input {
-    dock: bottom;
     margin: 0 1;
     background: #1a1a2e;
     color: #dcdcdc;
@@ -40,7 +39,6 @@ Screen {
 }
 
 #status-bar {
-    dock: bottom;
     height: 1;
     color: #666666;
     padding: 0 2;
