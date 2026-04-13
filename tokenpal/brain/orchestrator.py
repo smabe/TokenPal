@@ -766,9 +766,13 @@ class Brain:
         if "music" in active:
             music_label = active["music"].summary[:25]
 
+        voice = self._personality.voice_name
+
         parts = [mood]
         if server_label:
             parts.append(server_label)
+        if voice:
+            parts.append(voice)
         if app_label:
             parts.append(app_label)
         if weather_label:
@@ -782,11 +786,10 @@ class Brain:
     @staticmethod
     def _abbreviate_weather(summary: str) -> str:
         """Condense weather summary to 'temp condition' for the status bar."""
-        # Weather summaries look like "72°F, clear sky" or "54°F and partly cloudy"
-        # Extract temp + first condition word
-        m = re.match(r"(\d+°[FC])\b.*?(?:,|and)?\s*(\w+)", summary)
+        # Summary format: "It's 73°F and overcast outside"
+        m = re.search(r"(\d+).?([FC]).*?and\s+(.+?)\s+outside", summary)
         if m:
-            return f"{m.group(1)} {m.group(2)}"
+            return f"{m.group(1)}{m.group(2)} {m.group(3)}"
         return summary[:15]
 
     async def stop(self) -> None:
