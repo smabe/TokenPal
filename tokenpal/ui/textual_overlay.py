@@ -9,9 +9,10 @@ from typing import Any
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.timer import Timer
-from textual.widgets import Input, Static
+from textual.widgets import Input, RichLog, Static
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
@@ -45,6 +46,22 @@ class UpdateStatus(Message):
     def __init__(self, text: str) -> None:
         self.text = text
         super().__init__()
+
+
+class LogBuddyMessage(Message):
+    def __init__(self, text: str) -> None:
+        self.text = text
+        super().__init__()
+
+
+class LogUserMessage(Message):
+    def __init__(self, text: str) -> None:
+        self.text = text
+        super().__init__()
+
+
+class ClearLog(Message):
+    pass
 
 
 class RunCallback(Message):
@@ -181,9 +198,12 @@ class TokenPalApp(App[None]):
 
     def compose(self) -> ComposeResult:
         yield HeaderWidget(self._overlay._buddy_name)
-        yield Static(id="spacer")
-        yield SpeechBubbleWidget()
-        yield BuddyWidget()
+        with Horizontal(id="main-area"):
+            with Vertical(id="buddy-panel"):
+                yield Static(id="spacer")
+                yield SpeechBubbleWidget()
+                yield BuddyWidget()
+            yield RichLog(id="chat-log", wrap=True, markup=True)
         yield Input(placeholder="Type a message or /command...", id="user-input")
         yield StatusBarWidget()
 
@@ -204,14 +224,27 @@ class TokenPalApp(App[None]):
             if self._overlay._command_callback:
                 self._overlay._command_callback(text)
         else:
+            # Log user message to chat, then send to brain
+            self._log_user(text)
             if self._overlay._input_callback:
                 self._overlay._input_callback(text)
+
+    def _log_user(self, text: str) -> None:
+        chat = self.query_one("#chat-log", RichLog)
+        chat.write(f"[bold #dcdcdc]> {text}[/]")
+        chat.scroll_end(animate=False)
+
+    def _log_buddy(self, text: str) -> None:
+        chat = self.query_one("#chat-log", RichLog)
+        chat.write(f"[#00ff88]{text}[/]")
+        chat.scroll_end(animate=False)
 
     # --- Message handlers (all run on app thread) ---
 
     def on_show_speech(self, message: ShowSpeech) -> None:
         self.query_one(BuddyWidget).show_frame(BuddyFrame.get("talking"))
         self.query_one(SpeechBubbleWidget).start_typing(message.bubble)
+        self._log_buddy(message.bubble.text)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()
@@ -222,6 +255,15 @@ class TokenPalApp(App[None]):
 
     def on_update_status(self, message: UpdateStatus) -> None:
         self.query_one(StatusBarWidget).set_text(message.text)
+
+    def on_log_buddy_message(self, message: LogBuddyMessage) -> None:
+        self._log_buddy(message.text)
+
+    def on_log_user_message(self, message: LogUserMessage) -> None:
+        self._log_user(message.text)
+
+    def on_clear_log(self, _message: ClearLog) -> None:
+        self.query_one("#chat-log", RichLog).clear()
 
     def on_run_callback(self, message: RunCallback) -> None:
         if message.delay_ms <= 0:
@@ -268,6 +310,15 @@ class TextualOverlay(AbstractOverlay):
 
     def update_status(self, text: str) -> None:
         self._post(UpdateStatus(text))
+
+    def log_buddy_message(self, text: str) -> None:
+        self._post(LogBuddyMessage(text))
+
+    def log_user_message(self, text: str) -> None:
+        self._post(LogUserMessage(text))
+
+    def clear_log(self) -> None:
+        self._post(ClearLog())
 
     def set_input_callback(self, callback: Callable[[str], None]) -> None:
         self._input_callback = callback

@@ -155,6 +155,7 @@ def main() -> None:
 
     def _cmd_clear(_args: str) -> CommandResult:
         overlay.schedule_callback(overlay.hide_speech)
+        overlay.clear_log()
         brain.reset_conversation()
         return CommandResult("")
 

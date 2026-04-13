@@ -6,13 +6,16 @@ import asyncio
 from unittest.mock import MagicMock
 
 import pytest
-from textual.widgets import Input
+from textual.widgets import Input, RichLog
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.textual_overlay import (
     BuddyWidget,
+    ClearLog,
     HeaderWidget,
     HideSpeech,
+    LogBuddyMessage,
+    LogUserMessage,
     ShowBuddy,
     ShowSpeech,
     SpeechBubbleWidget,
@@ -73,7 +76,6 @@ async def test_speech_bubble_typing_completes(app: TokenPalApp) -> None:
         app.post_message(ShowSpeech(SpeechBubble(text="Hi")))
         await pilot.pause()
 
-        # Advance past typing (2 chars * 30ms + margin)
         await asyncio.sleep(0.15)
         await pilot.pause()
 
@@ -157,7 +159,6 @@ async def test_persistent_bubble_no_auto_hide(app: TokenPalApp) -> None:
         app.post_message(ShowSpeech(SpeechBubble(text="Loading...", persistent=True)))
         await pilot.pause()
 
-        # Let typing complete
         await asyncio.sleep(0.4)
         await pilot.pause()
 
@@ -179,3 +180,65 @@ async def test_overlay_post_is_thread_safe(
 
         speech = app.query_one(SpeechBubbleWidget)
         assert speech.display is True
+
+
+# --- Chat log tests ---
+
+
+async def test_chat_log_exists(app: TokenPalApp) -> None:
+    async with app.run_test():
+        chat = app.query_one("#chat-log", RichLog)
+        assert chat is not None
+
+
+async def test_speech_logs_to_chat(app: TokenPalApp) -> None:
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(ShowSpeech(SpeechBubble(text="Hello human")))
+        await pilot.pause()
+        chat = app.query_one("#chat-log", RichLog)
+        assert chat.virtual_size.height > 0
+
+
+async def test_user_input_logs_to_chat(app: TokenPalApp) -> None:
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(LogUserMessage("hey buddy"))
+        await pilot.pause()
+        chat = app.query_one("#chat-log", RichLog)
+        assert chat.virtual_size.height > 0
+
+
+async def test_buddy_message_logs_to_chat(app: TokenPalApp) -> None:
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(LogBuddyMessage("observation comment"))
+        await pilot.pause()
+        chat = app.query_one("#chat-log", RichLog)
+        assert chat.virtual_size.height > 0
+
+
+async def test_clear_log(app: TokenPalApp) -> None:
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(LogBuddyMessage("first"))
+        app.post_message(LogBuddyMessage("second"))
+        await pilot.pause()
+        chat = app.query_one("#chat-log", RichLog)
+        height_before = chat.virtual_size.height
+        assert height_before > 0
+
+        app.post_message(ClearLog())
+        await pilot.pause()
+        assert chat.virtual_size.height < height_before
+
+
+async def test_input_submit_logs_user_message(
+    app: TokenPalApp, overlay: TextualOverlay,
+) -> None:
+    """User text (non-command) should appear in chat log."""
+    overlay.set_input_callback(lambda _: None)
+
+    async with app.run_test(size=(100, 30)) as pilot:
+        inp = app.query_one("#user-input", expect_type=Input)
+        inp.value = "what's up"
+        await inp.action_submit()
+        await pilot.pause()
+        chat = app.query_one("#chat-log", RichLog)
+        assert chat.virtual_size.height > 0

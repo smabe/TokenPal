@@ -41,6 +41,15 @@ class AbstractOverlay(abc.ABC):
     def update_status(self, text: str) -> None:
         """Update the status bar text. Optional — overlays may ignore."""
 
+    def log_user_message(self, text: str) -> None:
+        """Append a user message to the chat log. Optional."""
+
+    def log_buddy_message(self, text: str) -> None:
+        """Append a buddy message to the chat log. Optional."""
+
+    def clear_log(self) -> None:
+        """Clear the chat log. Optional."""
+
     def set_input_callback(self, callback: Callable[[str], None]) -> None:
         """Register handler for user text input. Optional."""
 
