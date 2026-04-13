@@ -31,7 +31,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
 
 ## Brain
-- `PersonalityEngine`: rotating few-shot examples, mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone)
+- `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
 - Three prompt paths: `build_prompt()` (observations), `build_freeform_prompt()` (unprompted thoughts), `build_conversation_prompt()` (user input)
 - `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern, composite observations (`_detect_composites()`), public API: `active_readings()`, `prev_summary()`, `ttl_for()`
 - Topic roulette: `_pick_topic()` in orchestrator, no 3+ consecutive same-topic, focus hints prepended to context
@@ -44,7 +44,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 ## Slash Commands
 - `/help`, `/clear`, `/mood`, `/status`
 - `/model [name|list|pull|browse]` — model management
-- `/voice [train|switch|list|off|info|finetune|finetune-setup]` — voice management
+- `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|import]` — voice management
 - `/server [status|switch]` — server connection
 - `/zip <zipcode>` — set weather location (geocodes via Open-Meteo, writes to config.toml)
 
@@ -52,15 +52,12 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Default model: `gemma4` via Ollama. Supports tool calling.
 - `disable_reasoning: true` sends `reasoning_effort: "none"` — without this, gemma4 burns ~900 tokens thinking
 - Qwen3 models use `<think>` tags → empty responses via OpenAI-compat API. Don't use.
-- Response filter: strips asterisks, leaked tags, prefixes, orphan punctuation
+- Response filter: strips asterisks, emojis, leaked tags, prefixes, orphan punctuation. Cross-franchise name filter suppresses responses mentioning characters from wrong show
 - Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported.
 
 ## Voice Training
-- `/voice train <wiki> "<character>"` — generates persona, greetings, custom mood names, structure hints via 5 parallel Ollama calls
-- Custom moods: pipe-delimited prompt, `_parse_custom_moods()` regex parser
-- Profiles saved to `~/.tokenpal/voices/<slug>.json`, auto-activated in config.toml
-- Voice persona replaces default TokenPal identity (not appended)
-- Response filter sentence cap relaxed for voices: observations 3, conversations 4
+- `/voice train`, `/voice regenerate` — structured persona cards with catchphrase priming and cross-franchise guardrails
+- See `docs/voice-training.md` for persona format, anchor lines, banned names, and architecture
 
 ## Fine-Tuning
 - Remote LoRA fine-tuning via SSH. Recommended: `google/gemma-2-2b-it` on RTX 4070 (~15 min Windows, ~7 min Linux)
