@@ -241,25 +241,38 @@ def _generate_ascii_art(
     Returns (idle, idle_alt, talking) as lists of markup lines.
     """
     text = _ollama_generate(
-        f'You are an ASCII artist. Create 3 character art frames for '
-        f'"{character}" using Unicode characters and Rich markup color tags.\n\n'
-        f'Character description:\n{persona[:300]}\n\n'
-        f'RULES:\n'
-        f'- Each frame is EXACTLY 8 lines tall, max 24 characters wide '
-        f'(not counting color tags)\n'
-        f'- Use Rich markup for colors: [bold #ff6600]text[/], [#00ccff]text[/]\n'
-        f'- Pick 2-3 colors that fit the character\n'
-        f'- Use Unicode box-drawing, blocks, and symbols freely: '
-        f'▄▀█░▓▒╔╗╚╝║═─│┌┐└┘◆◇○●♦★\n'
-        f'- The art should be recognizable as {character}\n'
-        f'- idle_alt differs from idle by ONE small detail (blink, shifted eyes)\n'
-        f'- talking has an open mouth or speech indicator\n\n'
-        f'Output EXACTLY this format, no other text:\n'
-        f'IDLE:\n(8 lines)\n'
-        f'IDLE_ALT:\n(8 lines)\n'
-        f'TALKING:\n(8 lines)',
-        max_tokens=800,
-        temperature=0.9,
+        f'You are a pixel artist who creates detailed terminal character art '
+        f'using Unicode and Rich markup.\n\n'
+        f'Create 3 frames of "{character}" for a terminal buddy app.\n\n'
+        f'Character info:\n{persona[:300]}\n\n'
+        f'REQUIREMENTS:\n'
+        f'- Each frame EXACTLY 10 lines tall, 20-24 characters wide '
+        f'(not counting markup tags)\n'
+        f'- Use Rich markup: [#ff6600]text[/], [bold #00ccff]text[/]\n'
+        f'- Use 2-3 colors that match the character (hair, outfit, etc)\n'
+        f'- Build the FULL body: head, face, torso, arms, legs\n'
+        f'- Use half-block chars ▄▀ for curves, █░▓▒ for fills, '
+        f'│─┌┐└┘ for edges, ◆○● for eyes\n'
+        f'- Make it DETAILED — fill the space, no empty rectangles\n'
+        f'- Include the character\'s signature features (hat, hair, '
+        f'weapon, outfit details)\n'
+        f'- idle_alt: same as idle but eyes change (blink: ○→─)\n'
+        f'- talking: mouth open or speech indicator\n\n'
+        f'Here is an example of the level of detail expected:\n'
+        f'[#00ccff]    ▄███▄[/]\n'
+        f'[#00ccff]   █[/][#ffffff]○   ○[/][#00ccff]█[/]\n'
+        f'[#00ccff]   █[/][#ffffff]  ▽  [/][#00ccff]█[/]\n'
+        f'[#00ccff]    ▀███▀[/]\n'
+        f'[#ff6600]   ╔═════╗[/]\n'
+        f'[#ff6600]   ║  ◇  ║[/]\n'
+        f'[#ff6600]   ╚══╦══╝[/]\n'
+        f'[#ffffff]    ▄▀ ▀▄[/]\n\n'
+        f'Output EXACTLY this format, nothing else:\n'
+        f'IDLE:\n(10 lines of art)\n'
+        f'IDLE_ALT:\n(10 lines of art)\n'
+        f'TALKING:\n(10 lines of art)',
+        max_tokens=1200,
+        temperature=0.8,
     )
 
     if not text:
@@ -287,12 +300,12 @@ def _parse_ascii_frames(text: str) -> tuple[list[str], list[str], list[str]]:
             current = idle_alt
         elif upper == "TALKING":
             current = talking
-        elif current is not None and len(current) < 8:
+        elif current is not None and len(current) < 10:
             current.append(line.rstrip())
 
-    # Pad short frames to 8 lines
+    # Pad short frames to 10 lines
     for frame in (idle, idle_alt, talking):
-        while len(frame) < 8:
+        while len(frame) < 10:
             frame.append("")
 
     # If idle_alt is empty/identical, copy idle with a minor tweak
