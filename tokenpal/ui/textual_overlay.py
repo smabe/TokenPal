@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,7 @@ class TokenPalApp(App[None]):
         buddy = self.query_one(BuddyWidget)
         buddy.show_frame(BuddyFrame.get("idle"))
         self._overlay._is_running = True
+        self._overlay._app_thread_id = threading.get_ident()
         log.info("TextualOverlay ready")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -182,48 +184,48 @@ class TextualOverlay(AbstractOverlay):
         self._buddy_name = config.get("buddy_name", "TokenPal")
         self._app: TokenPalApp | None = None
         self._is_running = False
+        self._app_thread_id: int | None = None
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
+
+    def _run_on_app_thread(self, callback: Callable[[], None]) -> None:
+        """Run callback on the Textual app thread. Safe from any thread."""
+        if not self._app or not self._is_running:
+            return
+        if threading.get_ident() == self._app_thread_id:
+            callback()
+        else:
+            self._app.call_from_thread(callback)
 
     def setup(self) -> None:
         self._app = TokenPalApp(self)
 
     def show_buddy(self, frame: BuddyFrame) -> None:
-        if not self._app or not self._is_running:
-            return
-        self._app.call_from_thread(
-            self._app.query_one(BuddyWidget).show_frame, frame
+        self._run_on_app_thread(
+            lambda: self._app.query_one(BuddyWidget).show_frame(frame)  # type: ignore[union-attr]
         )
 
     def show_speech(self, bubble: SpeechBubble) -> None:
-        if not self._app or not self._is_running:
-            return
-
         def _show() -> None:
             self._app.query_one(BuddyWidget).show_frame(  # type: ignore[union-attr]
                 BuddyFrame.get("talking")
             )
             self._app.query_one(SpeechBubbleWidget).start_typing(bubble)  # type: ignore[union-attr]
 
-        self._app.call_from_thread(_show)
+        self._run_on_app_thread(_show)
 
     def hide_speech(self) -> None:
-        if not self._app or not self._is_running:
-            return
-
         def _hide() -> None:
             self._app.query_one(SpeechBubbleWidget).hide()  # type: ignore[union-attr]
             self._app.query_one(BuddyWidget).show_frame(  # type: ignore[union-attr]
                 BuddyFrame.get("idle")
             )
 
-        self._app.call_from_thread(_hide)
+        self._run_on_app_thread(_hide)
 
     def update_status(self, text: str) -> None:
-        if not self._app or not self._is_running:
-            return
-        self._app.call_from_thread(
-            self._app.query_one(StatusBarWidget).set_text, text
+        self._run_on_app_thread(
+            lambda: self._app.query_one(StatusBarWidget).set_text(text)  # type: ignore[union-attr]
         )
 
     def set_input_callback(self, callback: Callable[[str], None]) -> None:
@@ -239,16 +241,19 @@ class TextualOverlay(AbstractOverlay):
     def schedule_callback(
         self, callback: Callable[[], None], delay_ms: int = 0
     ) -> None:
-        if not self._app or not self._is_running:
-            return
         if delay_ms <= 0:
-            self._app.call_from_thread(callback)
+            self._run_on_app_thread(callback)
         else:
-            self._app.call_from_thread(
-                lambda: self._app.set_timer(delay_ms / 1000.0, lambda: callback())  # type: ignore[union-attr]
+            self._run_on_app_thread(
+                lambda: self._app.set_timer(  # type: ignore[union-attr]
+                    delay_ms / 1000.0, lambda: callback()
+                )
             )
 
     def teardown(self) -> None:
         self._is_running = False
         if self._app:
-            self._app.call_from_thread(self._app.exit)
+            if threading.get_ident() == self._app_thread_id:
+                self._app.exit()
+            else:
+                self._app.call_from_thread(self._app.exit)
