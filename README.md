@@ -3,12 +3,19 @@
 A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — run locally or on a remote GPU over your LAN.
 
 ```
-apollyon | gemma4:26b | BMO | playful | spoke 4s ago
-┌──────────────────────────────────────────┐
-│ Oh look, another terminal window. How    │
-│ original. What are we debugging today,   │
-│ your life choices?                       │
-└──────────────────────────────────────────┘
+┌─ buddy ──────────────────────────┐  ┌─ chat log ─┐
+│                                  │  │ > hey buddy │
+│  ╭──────────────────────────╮    │  │ Oh great,   │
+│  │ Oh look, another terminal│    │  │ you again.  │
+│  │ window. How original.    │    │  │             │
+│  ╰──────────────────────────╯    │  │ > what's up │
+│       ▄███▄                      │  │ Not much,   │
+│      █ ○ ○ █                     │  │ just judging│
+│       ▀███▀                      │  │ your tabs.  │
+│                                  │  │             │
+│  Type a message or /command...   │  │             │
+│  playful | apollyon | BMO | 4s   │  │             │
+└──────────────────────────────────┘  └─────────────┘
 ```
 
 ## Quick Start
@@ -79,7 +86,8 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Senses** | App awareness (macOS), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
-| **Voices** | Train character voices from Fandom wiki transcripts |
+| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log, color-coded status bar, keyboard shortcuts (F1, Ctrl+L) |
+| **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
@@ -103,7 +111,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 ## Voices
 
-Train a character voice from show transcripts — generates persona, greetings, custom mood names, and style hints. Each voice gets its own mood set (BMO gets PLAYFUL/TURBO/BLAH instead of SNARKY/HYPER/BORED):
+Train a character voice from show transcripts — generates persona, greetings, custom mood names, style hints, and colored ASCII art. Each voice gets its own mood set (BMO gets PLAYFUL/TURBO/BLAH instead of SNARKY/HYPER/BORED) and unique buddy art with idle blink animation:
 
 ```bash
 /voice train adventuretime BMO     # inside TokenPal
@@ -193,7 +201,7 @@ tokenpal/
 ├── senses/          # App awareness, hardware, idle, time, weather, music, productivity
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
-├── ui/              # Console overlay with ASCII art and input
+├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
 ├── util/            # Shared utilities
 ├── commands.py      # Slash command dispatcher
 ├── cli.py           # --check, --verbose, --config, --skip-welcome

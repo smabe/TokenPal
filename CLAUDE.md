@@ -6,8 +6,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Plugin discovery: `@register_sense` / `@register_backend` / `@register_overlay` / `@register_action` decorators + `pkgutil.walk_packages`
 - Config: TOML (`config.default.toml` defaults, `config.toml` user overrides gitignored) → dataclass schema in `tokenpal/config/schema.py`
 - Config loading: location-independent — finds defaults relative to package, searches `~/.tokenpal/config.toml` → project root → cwd
-- Threading: async brain loop in daemon thread, sync UI on main thread. Communication via `overlay.schedule_callback()`
-- User input: main thread captures keystrokes in cbreak mode, routes via `brain.submit_user_input()` (asyncio.Queue + call_soon_threadsafe)
+- Threading: async brain loop in daemon thread, Textual UI on main thread. Communication via `post_message()` (thread-safe)
+- User input: Textual `Input` widget, routes via `brain.submit_user_input()` (asyncio.Queue + call_soon_threadsafe)
 - Senses produce `SenseReading` with `.summary` (natural language, NOT bracketed tags), `.changed_from` (transition metadata), `.confidence`, per-sense `reading_ttl_s`
 - Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
 
@@ -42,6 +42,16 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom, Calculator)
 - See `plans/commentary-finetune-master.md` for full commentary system design
 
+## UI
+- Default overlay: Textual (`tokenpal/ui/textual_overlay.py`). Console and tkinter overlays as fallbacks
+- Layout: horizontal split — buddy panel (left) with header/speech/buddy/input/status, scrollable chat log (right)
+- Chat log shows all buddy comments (observations + conversation) and user messages
+- Status bar: `mood | server | voice | app | weather | music | spoke Xs ago` — mood is color-coded
+- Keyboard shortcuts: F1=/help, Ctrl+L=/clear, Ctrl+C=quit
+- Typing animation on speech bubbles via `set_interval(0.03)`
+- Thread safety: brain→UI via typed `Message` subclasses + `post_message()`, never `call_from_thread`
+- Voice-specific ASCII art: LLM-generated Rich-markup frames (idle, idle_alt, talking) with 4s blink animation
+
 ## Slash Commands
 - `/help`, `/clear`, `/mood`, `/status`
 - `/model [name|list|pull|browse]` — model management
@@ -58,6 +68,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Voice Training
 - `/voice train`, `/voice regenerate` — structured persona cards with catchphrase priming and cross-franchise guardrails
+- ASCII art generation: LLM generates 3 Rich-markup frames (idle, idle_alt, talking) per voice during training. Stored in voice profile JSON as `ascii_idle`, `ascii_idle_alt`, `ascii_talking`
 - See `docs/voice-training.md` for persona format, anchor lines, banned names, and architecture
 
 ## Fine-Tuning
@@ -86,7 +97,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent`
 - macOS: app awareness uses Quartz `CGWindowListCopyWindowInfo` (NOT `NSWorkspace`)
-- Console overlay is default and more reliable than tkinter
+- Textual overlay is default (cross-platform including Windows). Console and tkinter as fallbacks
 - `config.toml` is gitignored — each machine has its own
 
 ## Code Style
