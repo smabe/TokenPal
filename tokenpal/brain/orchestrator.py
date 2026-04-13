@@ -309,6 +309,10 @@ class Brain:
         if elapsed < jittered_cooldown:
             return False
 
+        # Long gap between comments breaks a burst — reset before the check below.
+        if elapsed > _FORCED_SILENCE_DURATION and self._consecutive_comments > 0:
+            self._consecutive_comments = 0
+
         # Hard silence after N consecutive comments — force a 2-minute breather
         if self._consecutive_comments >= _FORCED_SILENCE_AFTER:
             log.debug(

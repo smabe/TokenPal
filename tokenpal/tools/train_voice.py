@@ -615,7 +615,7 @@ def _find_config_toml() -> Path:
     return cwd / "config.toml"
 
 
-def _activate_voice(slug: str) -> None:
+def activate_voice(slug: str) -> None:
     """Set active_voice in config.toml, creating the file/section if needed."""
     config_path = _find_config_toml()
     new_line = f'active_voice = "{slug}"'
@@ -690,11 +690,11 @@ def _cmd_activate() -> None:
 
     idx = int(choice)
     if idx == 0:
-        _activate_voice("")
+        activate_voice("")
         print("Switched to default TokenPal voice. Restart to apply.")
     elif 1 <= idx <= len(profiles):
         slug, character, count = profiles[idx - 1]
-        _activate_voice(slug)
+        activate_voice(slug)
         print(f"Switched to {character} ({count} lines). Restart TokenPal to apply.")
     else:
         print("Invalid choice.")
@@ -822,7 +822,7 @@ def _cmd_extract(args: argparse.Namespace) -> None:
     print(f"Saved voice \"{slug}\" ({len(lines)} lines) to {out_path}")
 
     # Auto-activate in config.toml
-    _activate_voice(slug)
+    activate_voice(slug)
     print(f"Activated voice \"{slug}\" in config.toml — restart TokenPal to use it.")
 
 

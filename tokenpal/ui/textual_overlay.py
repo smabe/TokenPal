@@ -280,8 +280,13 @@ class TokenPalApp(App[None]):
             yield Static(id="chat-log-content")
 
     def on_mount(self) -> None:
-        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
         self._overlay._is_running = True
+        buddy = self.query_one(BuddyWidget)
+        if self._overlay._pending_voice_frames:
+            buddy.set_custom_frames(self._overlay._pending_voice_frames)
+            self._overlay._pending_voice_frames = None
+        else:
+            buddy.show_frame(BuddyFrame.get("idle"))
         log.info("TextualOverlay ready")
 
     # --- Keyboard shortcuts ---
@@ -383,6 +388,7 @@ class TextualOverlay(AbstractOverlay):
         self._is_running = False
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
+        self._pending_voice_frames: dict[str, BuddyFrame] | None = None
 
     def _post(self, message: Message) -> None:
         """Post a message to the app. Thread-safe, no-op if app not ready."""
@@ -405,6 +411,9 @@ class TextualOverlay(AbstractOverlay):
         self._post(UpdateStatus(text))
 
     def load_voice_frames(self, frames: dict[str, BuddyFrame]) -> None:
+        if not self._is_running:
+            self._pending_voice_frames = frames
+            return
         self._post(LoadVoiceFrames(frames))
 
     def clear_voice_frames(self) -> None:

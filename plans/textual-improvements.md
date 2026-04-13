@@ -6,11 +6,11 @@ Catalog Textual-enabled improvements now that the framework is in place. Each it
 ## Items
 
 ### Quick wins
-- [ ] **Conversation history panel (#8)** — RichLog/ListView above buddy showing chat back-and-forth
+- [x] **Conversation history panel (#8)** — Shipped as right-side chat log
 - [ ] **Scrollable speech bubbles** — Wrap SpeechBubbleWidget in VerticalScroll for long responses
-- [ ] **Focus management** — Auto-refocus Input on blur so keyboard input never gets lost
-- [ ] **Keyboard shortcuts** — F1=/help, Ctrl+L=/clear, Up/Down for input history recall
-- [ ] **Color-coded status bar** — Mood-colored segments via Rich markup
+- [x] ~~**Focus management**~~ — Skipped: conflicts with chat log text selection
+- [x] **Keyboard shortcuts** — F1=/help, Ctrl+L=/clear
+- [x] **Color-coded status bar** — Mood-colored first segment via Rich markup
 
 ### Medium effort
 - [ ] **ASCII art from images (#10)** — Per-voice buddy art as swappable widget content

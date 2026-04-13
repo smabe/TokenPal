@@ -486,22 +486,27 @@ def _handle_voice_command(
         return CommandResult(f"Voice: {name}{ft}")
 
     if subcmd == "off":
+        from tokenpal.tools.train_voice import activate_voice
         personality.set_voice(None)
         if llm and config:
             llm.set_model(config.llm.model_name)
+        activate_voice("")
         return CommandResult("Back to default TokenPal.")
 
     if subcmd == "switch":
+        from tokenpal.tools.train_voice import activate_voice
+        from tokenpal.tools.voice_profile import slugify
         if not subargs:
             return CommandResult("Usage: /voice switch <name>")
         try:
-            from tokenpal.tools.voice_profile import slugify
-            profile = load_profile(slugify(subargs), voices_dir)
+            slug = slugify(subargs)
+            profile = load_profile(slug, voices_dir)
             personality.set_voice(profile)
             if profile.finetuned_model and llm:
                 llm.set_model(profile.finetuned_model)
             elif llm and config:
                 llm.set_model(config.llm.model_name)
+            activate_voice(slug)
             return CommandResult(f"Switched to {profile.character}.")
         except FileNotFoundError:
             return CommandResult(f"Voice '{subargs}' not found.")
