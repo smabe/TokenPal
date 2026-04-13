@@ -2,7 +2,9 @@
 
 Target: AMD Ryzen 7 9800X3D (no NPU), Radeon RX 9070 XT (16 GB VRAM, RDNA 4). Desktop.
 
-**Primary inference target: RX 9070 XT via ROCm HIP or Vulkan.** No NPU on this chip. The 16 GB VRAM makes this your most capable inference machine — can run 13B+ models comfortably.
+**Primary inference target: RX 9070 XT via Vulkan (Ollama).** No NPU on this chip. The 16 GB VRAM makes this your most capable inference machine — runs gemma4:26b MoE comfortably.
+
+> **Status (April 2026):** Ollama Vulkan backend works out of the box. HIP SDK 7.1.1 installs but Ollama doesn't detect it — use Vulkan. Set `OLLAMA_VULKAN=1` and `GGML_VK_VISIBLE_DEVICES=0` (disables iGPU, uses only the discrete 9070 XT) as persistent user environment variables.
 
 ---
 
@@ -105,23 +107,29 @@ pip install pytest pytest-asyncio ruff mypy
 
 ## 4. LLM Backend — llama.cpp with ROCm HIP (Recommended)
 
-### Option A: Pre-built ROCm binaries via Ollama (easiest)
+### Option A: Ollama with Vulkan (recommended — tested and working)
 ```powershell
 winget install Ollama.Ollama
 
-# Ollama 0.16.2+ supports RX 9000 series via ROCm
-# It auto-detects the 9070 XT
-ollama pull phi3:mini
-ollama pull llama3:8b
-ollama pull llama3:13b          # 13B fits easily in 16 GB VRAM
-ollama pull qwen2.5:14b         # another strong option
+# Set persistent env vars for Vulkan GPU support (run once, then reopen terminal):
+[System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
+[System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
+# GGML_VK_VISIBLE_DEVICES=0 disables the 9800X3D iGPU, uses only the discrete 9070 XT
+
+# Close and reopen terminal, then:
 ollama serve
-# API at http://localhost:11434/v1
+# Should show: library=Vulkan description="AMD Radeon RX 9070 XT" total="15.8 GiB"
+
+# Pull models — 16 GB VRAM handles bigger models:
+ollama pull gemma4              # 12B default
+ollama pull gemma4:26b          # 26B MoE (3.8B active params) — sweet spot for 16 GB
 
 # Verify GPU is being used:
 ollama ps
-# Should show the model loaded on GPU
+# Should show the model loaded on GPU, not CPU
 ```
+
+> **Note:** `$env:OLLAMA_VULKAN` (per-session) and `set OLLAMA_VULKAN=1` (cmd) don't reliably propagate to child processes on Windows. Always use `[System.Environment]::SetEnvironmentVariable()` for persistent system-wide values, then reopen your terminal.
 
 ### Option B: llama-cpp-python with ROCm
 ```powershell
@@ -152,7 +160,7 @@ python -c "from llama_cpp import Llama; print('OK')"
 pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
 ```
 
-**Recommendation:** Start with Ollama (Option A). If you need tighter integration, move to llama-cpp-python with ROCm (Option B). Vulkan (Option C) is the safe fallback if ROCm is giving trouble.
+**Recommendation:** Use Ollama with Vulkan (Option A). HIP SDK 7.1.1 installs on Windows but Ollama 0.20.6 doesn't detect it for the 9070 XT — Vulkan is the proven path. Performance is excellent for inference workloads.
 
 ### Option D: PyTorch with ROCm
 ```powershell
@@ -317,7 +325,7 @@ winget install UB-Mannheim.TesseractOCR
 
 - **ROCm on Windows is less mature than CUDA.** Expect rougher edges. Ollama abstracts most of this away — start there.
 - **HIP SDK version must match.** RDNA 4 (gfx1200) requires HIP SDK 6.3+. Older versions silently fall back to CPU.
-- **Vulkan vs ROCm:** Vulkan is easier to set up but slower (~70-80% of ROCm HIP speed). Fine for a desktop buddy; matters more for throughput workloads.
+- **Vulkan vs ROCm:** Vulkan is the working path as of April 2026. HIP SDK installs but Ollama doesn't detect it for gfx1201. Vulkan performance is solid for inference — no noticeable bottleneck for TokenPal commentary.
 - **No pynvml.** Don't install it — it'll import but crash when trying to talk to an AMD GPU. Use `amdsmi` or WMI instead.
 - **PyTorch ROCm on Windows:** Works but wheels are larger and less frequently updated than CUDA wheels. Check https://pytorch.org/get-started/locally/ for current availability.
 - **VRAM headroom:** 16 GB sounds generous, but Windows + Adrenalin driver + desktop compositor eat ~1-2 GB. Budget 14 GB for models.
@@ -330,9 +338,10 @@ winget install UB-Mannheim.TesseractOCR
 ## 12. What This Machine Is Best For
 
 This is your **power station** for TokenPal development:
-- **Run the biggest models:** 13B-14B Q4 fits in 16 GB VRAM. Higher quality commentary.
+- **Run the biggest models:** gemma4:26b MoE fits in 16 GB VRAM with room to spare. 3.8B active params = fast inference with 26B knowledge.
 - **Vision model headroom:** Can load a chat LLM (8B, ~5 GB) AND a vision model (Florence-2, ~1 GB) simultaneously.
 - **Fast iteration:** Desktop CPU + GPU = fastest build/test cycles.
 - **No battery concerns:** Can run inference flat-out without worrying about power efficiency.
+- **TokenPal inference server:** Serves the whole LAN via `scripts/install-server.ps1`. Mac clients point at `http://apollyon:8585/v1`.
 
 The laptop NPU story is about efficiency; this machine is about capability.

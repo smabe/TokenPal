@@ -3,7 +3,7 @@
 A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — run locally or on a remote GPU over your LAN.
 
 ```
-geefourteen | gemma4 | BMO | playful | spoke 4s ago
+apollyon | gemma4:26b | BMO | playful | spoke 4s ago
 ┌──────────────────────────────────────────┐
 │ Oh look, another terminal window. How    │
 │ original. What are we debugging today,   │
@@ -19,7 +19,7 @@ source .venv/bin/activate
 tokenpal                    # first run walks you through a quick setup wizard
 ```
 
-**Prerequisites:** Python 3.12+, [Ollama](https://ollama.com/download), a model (`ollama pull gemma4`)
+**Prerequisites:** Python 3.12+, [Ollama](https://ollama.com/download), a model (`ollama pull gemma4` or `ollama pull gemma4:26b` with 16GB+ VRAM)
 
 Verify everything: `tokenpal --check`
 
@@ -33,20 +33,29 @@ python3 setup_tokenpal.py --client   # prompts for server URL, skips Ollama
 
 ## Remote GPU Server
 
-Got a GPU box on your network? One command turns it into an inference server for all your machines.
+Got a GPU box on your network? One command turns it into an inference server for all your machines. Works with NVIDIA (CUDA) and AMD (Vulkan) GPUs.
 
 **On the GPU box:**
 
 ```powershell
 # Windows (PowerShell)
-powershell -Command "iwr https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.ps1 -OutFile bootstrap.ps1; .\bootstrap.ps1"
+git clone https://github.com/smabe/TokenPal.git && cd TokenPal
+.\scripts\install-server.ps1
 ```
 ```bash
 # Linux / macOS
-curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.sh | bash
+git clone https://github.com/smabe/TokenPal.git && cd TokenPal
+./scripts/install-server.sh
 ```
 
 Installs Python, Ollama, pulls gemma4, configures firewall, sets up auto-start. Prints the URL when done.
+
+**AMD GPU (RX 9070 XT / RDNA 4):** Set Vulkan env vars before first run:
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
+[System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
+# Reopen terminal after setting these
+```
 
 **On your client** — switch from inside TokenPal:
 ```
@@ -74,7 +83,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
-| **Server** | Remote GPU inference + training over HTTP |
+| **Server** | Remote GPU inference + training over HTTP (NVIDIA CUDA, AMD Vulkan) |
 | **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized |
 
 ## Commands

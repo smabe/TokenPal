@@ -5,14 +5,14 @@ Run LLM inference and voice training on a GPU box. Clients on other machines poi
 ## Prerequisites
 
 - Python 3.12+
-- NVIDIA GPU with CUDA drivers
+- GPU with Ollama support (NVIDIA CUDA or AMD Vulkan)
 - Network access between client and server machines
 
 Ollama will be installed during setup if not already present.
 
 ## Quick Setup
 
-### Windows (tested on RTX 4070)
+### Windows (tested on RTX 4070 and RX 9070 XT)
 
 ```cmd
 git clone https://github.com/smabe/TokenPal.git tokenpal-server
@@ -30,6 +30,13 @@ Start Ollama (find it in Start Menu, or run directly):
 ```cmd
 "%LOCALAPPDATA%\Programs\Ollama\ollama.exe" serve
 ```
+
+**AMD GPU (RX 9070 XT / RDNA 4):** Set persistent Vulkan env vars before first run:
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
+[System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
+```
+Close and reopen your terminal after setting these. Ollama should show `library=Vulkan` and your GPU name in the serve output.
 
 Pull a model:
 ```cmd
@@ -94,7 +101,7 @@ api_url = "http://YOUR-SERVER:8585/v1"
 
 That's it. TokenPal will use the remote server for inference. If the server is unreachable, it falls back to local Ollama automatically (when `mode = "auto"`).
 
-The status bar shows which server is active: `geefourteen | gemma4 | finn | happy`.
+The status bar shows which server is active: `apollyon | gemma4:26b | finn | happy`.
 
 ## Voice Training
 
@@ -216,6 +223,9 @@ For gated models (e.g., Gemma), set HF_TOKEN on the server:
 | "Connection refused" from client | Firewall blocking port 8585 | Add firewall rule (see above) |
 | "Ollama unreachable" in server logs | Ollama not running on server | Start Ollama on the server |
 | Ollama not in PATH on Windows | Windows SSH uses cmd.exe | Use full path: `%LOCALAPPDATA%\Programs\Ollama\ollama.exe` |
+| Ollama using CPU on AMD GPU | OLLAMA_VULKAN not set | Set `OLLAMA_VULKAN=1` as persistent User env var (see AMD GPU section above) |
+| Ollama using system RAM with Vulkan | iGPU detected alongside discrete GPU | Set `GGML_VK_VISIBLE_DEVICES=0` to use only the discrete GPU |
+| `start-server.bat` says "cannot find the file serve" | `start /B` treats first quoted arg as window title | Fixed in latest `install-server.ps1` — re-run the installer or `git pull` |
 | `ollama create` from SSH fails with "timed out" | Ollama CLI tries to start new instance | Use PowerShell: `powershell -Command "& 'path\to\ollama.exe' create ..."` |
 | `ollama create` panics on safetensors | Tokenizer format incompatibility | Convert to GGUF first (see workaround above) |
 | Voice training produces empty persona | Model returns empty content | Fixed: `reasoning_effort=none` added to voice asset generation |
