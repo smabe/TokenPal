@@ -22,7 +22,7 @@ disable_reasoning = true
 temperature = 1.0
 
 [ui]
-overlay = "console"
+overlay = "textual"
 buddy_name = "TokenPal"
 font_size = 14
 position = "bottom_right"
