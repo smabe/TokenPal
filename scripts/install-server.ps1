@@ -119,7 +119,9 @@ $batPath = "$RepoDir\start-server.bat"
 @"
 @echo off
 cd /d $RepoDir
-start /B "$ollamaExe" serve
+set OLLAMA_VULKAN=1
+set OLLAMA_KEEP_ALIVE=1m
+start "" /B "$ollamaExe" serve
 timeout /t 3 /nobreak >nul
 call .venv\Scripts\activate.bat
 tokenpal-server --host 0.0.0.0 --port $Port
