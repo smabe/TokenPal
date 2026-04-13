@@ -1,0 +1,47 @@
+Screen {
+    layout: vertical;
+    background: #1a1a2e;
+}
+
+#spacer {
+    height: 1fr;
+}
+
+#header {
+    dock: top;
+    height: 3;
+    content-align: center middle;
+    color: #00ff88;
+    text-style: bold;
+}
+
+#speech {
+    height: auto;
+    max-height: 50%;
+    content-align: center middle;
+    color: #dcdcdc;
+    padding: 0 2;
+    display: none;
+}
+
+#buddy {
+    height: auto;
+    content-align: center middle;
+    color: #00ff88;
+    padding: 1 0;
+}
+
+#user-input {
+    dock: bottom;
+    margin: 0 1;
+    background: #1a1a2e;
+    color: #dcdcdc;
+    border: tall #333333;
+}
+
+#status-bar {
+    dock: bottom;
+    height: 1;
+    color: #666666;
+    padding: 0 2;
+}

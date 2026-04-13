@@ -40,11 +40,16 @@ def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
     plat = current_platform()
 
     if overlay_name == "auto":
-        # Prefer platform-specific, fall back to tkinter
-        for name, cls in _OVERLAY_REGISTRY.items():
-            if name != "tkinter" and plat in cls.platforms:
-                log.info("Auto-selected overlay: %s", cls.__name__)
-                return cls(config)
+        # Prefer textual, then platform-specific, fall back to tkinter
+        for preferred in ("textual", None):
+            for name, cls in _OVERLAY_REGISTRY.items():
+                if name == "tkinter":
+                    continue
+                if preferred and name != preferred:
+                    continue
+                if plat in cls.platforms:
+                    log.info("Auto-selected overlay: %s", cls.__name__)
+                    return cls(config)
         overlay_name = "tkinter"
 
     cls = _OVERLAY_REGISTRY.get(overlay_name)

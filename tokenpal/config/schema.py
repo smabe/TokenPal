@@ -44,7 +44,7 @@ class LLMConfig:
 
 @dataclass
 class UIConfig:
-    overlay: str = "console"
+    overlay: str = "textual"
     buddy_name: str = "TokenPal"
     font_family: str = "Courier"
     font_size: int = 14

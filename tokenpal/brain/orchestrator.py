@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -727,8 +728,6 @@ class Brain:
             return
 
         mood = self._personality.mood
-        model = self._llm.model_name
-        voice = self._personality.voice_name
         elapsed = time.monotonic() - self._last_comment_time
         if elapsed < 60:
             ago = f"{int(elapsed)}s ago"
@@ -745,16 +744,43 @@ class Brain:
         elif hostname not in ("localhost", "127.0.0.1", "::1", ""):
             server_label = hostname
 
-        parts = []
+        # Pull live sense data for the status bar
+        active = self._context.active_readings()
+
+        app_label = ""
+        if "app_awareness" in active:
+            app_label = active["app_awareness"].summary[:12]
+
+        weather_label = ""
+        if "weather" in active:
+            weather_label = self._abbreviate_weather(active["weather"].summary)
+
+        music_label = ""
+        if "music" in active:
+            music_label = active["music"].summary[:25]
+
+        parts = [mood]
         if server_label:
             parts.append(server_label)
-        parts.append(model)
-        if voice:
-            parts.append(voice)
-        parts.append(mood)
+        if app_label:
+            parts.append(app_label)
+        if weather_label:
+            parts.append(weather_label)
+        if music_label:
+            parts.append(music_label)
         parts.append(f"spoke {ago}")
         status = " | ".join(parts)
         self._status_callback(status)
+
+    @staticmethod
+    def _abbreviate_weather(summary: str) -> str:
+        """Condense weather summary to 'temp condition' for the status bar."""
+        # Weather summaries look like "72°F, clear sky" or "54°F and partly cloudy"
+        # Extract temp + first condition word
+        m = re.match(r"(\d+°[FC])\b.*?(?:,|and)?\s*(\w+)", summary)
+        if m:
+            return f"{m.group(1)} {m.group(2)}"
+        return summary[:15]
 
     async def stop(self) -> None:
         """Shut down all components."""
