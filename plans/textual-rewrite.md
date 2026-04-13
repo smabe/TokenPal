@@ -32,15 +32,15 @@ Replace the hand-rolled console overlay (`console_overlay.py`) with a Textual-ba
 - `schedule_callback` with delay > 0 needs Textual `set_timer`, delay == 0 needs `call_from_thread`
 
 ## Done criteria
-- `tokenpal` launches with Textual overlay by default, renders header/buddy/input/status bar
-- Typing text into the Input widget works without stuck/repeated keys
-- Speech bubble appears with typing animation, auto-hides after display duration
-- Status bar shows: `mood | app | weather | music | spoke Xs ago` (omitting empty segments)
-- `/help`, `/clear`, `/mood`, `/status`, `/model`, `/voice`, `/server`, `/zip` all work
-- Brain thread comments arrive and render correctly via `call_from_thread`
-- `overlay = "console"` in config.toml falls back to old overlay
-- `pytest` passes (existing + new tests)
-- `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean
+- [x] `tokenpal` launches with Textual overlay by default, renders header/buddy/input/status bar
+- [ ] Typing text into the Input widget works without stuck/repeated keys
+- [x] Speech bubble appears with typing animation, auto-hides after display duration
+- [x] Status bar shows: `mood | app | weather | music | spoke Xs ago` (omitting empty segments)
+- [ ] `/help`, `/clear`, `/mood`, `/status`, `/model`, `/voice`, `/server`, `/zip` all work
+- [ ] Brain thread comments arrive and render correctly via `call_from_thread`
+- [ ] `overlay = "console"` in config.toml falls back to old overlay
+- [x] `pytest` passes (existing + new tests)
+- [x] `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean
 
 ## Parking lot
 

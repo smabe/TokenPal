@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -23,8 +22,43 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 
 
-class AutoHideSpeech(Message):
-    """Posted when the speech bubble auto-hide timer fires."""
+# --- Messages (all thread-safe via post_message) ---
+
+
+class ShowSpeech(Message):
+    def __init__(self, bubble: SpeechBubble) -> None:
+        self.bubble = bubble
+        super().__init__()
+
+
+class HideSpeech(Message):
+    pass
+
+
+class ShowBuddy(Message):
+    def __init__(self, frame: BuddyFrame) -> None:
+        self.frame = frame
+        super().__init__()
+
+
+class UpdateStatus(Message):
+    def __init__(self, text: str) -> None:
+        self.text = text
+        super().__init__()
+
+
+class RunCallback(Message):
+    def __init__(self, callback: Callable[[], None], delay_ms: int = 0) -> None:
+        self.callback = callback
+        self.delay_ms = delay_ms
+        super().__init__()
+
+
+class RequestExit(Message):
+    pass
+
+
+# --- Widgets ---
 
 
 class HeaderWidget(Static):
@@ -96,7 +130,7 @@ class SpeechBubbleWidget(Static):
 
     def _fire_auto_hide(self) -> None:
         self._hide_timer = None
-        self.post_message(AutoHideSpeech())
+        self.post_message(HideSpeech())
 
     def hide(self) -> None:
         self._cancel_timers()
@@ -132,6 +166,9 @@ class StatusBarWidget(Static):
         self.update(text)
 
 
+# --- App ---
+
+
 class TokenPalApp(App[None]):
     """Main Textual application for TokenPal."""
 
@@ -151,11 +188,11 @@ class TokenPalApp(App[None]):
         yield Input(placeholder="Type a message or /command...", id="user-input")
 
     def on_mount(self) -> None:
-        buddy = self.query_one(BuddyWidget)
-        buddy.show_frame(BuddyFrame.get("idle"))
+        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
         self._overlay._is_running = True
-        self._overlay._app_thread_id = threading.get_ident()
         log.info("TextualOverlay ready")
+
+    # --- Input handling ---
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -170,8 +207,33 @@ class TokenPalApp(App[None]):
             if self._overlay._input_callback:
                 self._overlay._input_callback(text)
 
-    def on_auto_hide_speech(self, _event: AutoHideSpeech) -> None:
-        self._overlay.hide_speech()
+    # --- Message handlers (all run on app thread) ---
+
+    def on_show_speech(self, message: ShowSpeech) -> None:
+        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("talking"))
+        self.query_one(SpeechBubbleWidget).start_typing(message.bubble)
+
+    def on_hide_speech(self, _message: HideSpeech) -> None:
+        self.query_one(SpeechBubbleWidget).hide()
+        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
+
+    def on_show_buddy(self, message: ShowBuddy) -> None:
+        self.query_one(BuddyWidget).show_frame(message.frame)
+
+    def on_update_status(self, message: UpdateStatus) -> None:
+        self.query_one(StatusBarWidget).set_text(message.text)
+
+    def on_run_callback(self, message: RunCallback) -> None:
+        if message.delay_ms <= 0:
+            message.callback()
+        else:
+            self.set_timer(message.delay_ms / 1000.0, message.callback)
+
+    def on_request_exit(self, _message: RequestExit) -> None:
+        self.exit()
+
+
+# --- Overlay ---
 
 
 @register_overlay
@@ -184,49 +246,28 @@ class TextualOverlay(AbstractOverlay):
         self._buddy_name = config.get("buddy_name", "TokenPal")
         self._app: TokenPalApp | None = None
         self._is_running = False
-        self._app_thread_id: int | None = None
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
 
-    def _run_on_app_thread(self, callback: Callable[[], None]) -> None:
-        """Run callback on the Textual app thread. Safe from any thread."""
-        if not self._app or not self._is_running:
-            return
-        if threading.get_ident() == self._app_thread_id:
-            callback()
-        else:
-            self._app.call_from_thread(callback)
+    def _post(self, message: Message) -> None:
+        """Post a message to the app. Thread-safe, no-op if app not ready."""
+        if self._app and self._is_running:
+            self._app.post_message(message)
 
     def setup(self) -> None:
         self._app = TokenPalApp(self)
 
     def show_buddy(self, frame: BuddyFrame) -> None:
-        self._run_on_app_thread(
-            lambda: self._app.query_one(BuddyWidget).show_frame(frame)  # type: ignore[union-attr]
-        )
+        self._post(ShowBuddy(frame))
 
     def show_speech(self, bubble: SpeechBubble) -> None:
-        def _show() -> None:
-            self._app.query_one(BuddyWidget).show_frame(  # type: ignore[union-attr]
-                BuddyFrame.get("talking")
-            )
-            self._app.query_one(SpeechBubbleWidget).start_typing(bubble)  # type: ignore[union-attr]
-
-        self._run_on_app_thread(_show)
+        self._post(ShowSpeech(bubble))
 
     def hide_speech(self) -> None:
-        def _hide() -> None:
-            self._app.query_one(SpeechBubbleWidget).hide()  # type: ignore[union-attr]
-            self._app.query_one(BuddyWidget).show_frame(  # type: ignore[union-attr]
-                BuddyFrame.get("idle")
-            )
-
-        self._run_on_app_thread(_hide)
+        self._post(HideSpeech())
 
     def update_status(self, text: str) -> None:
-        self._run_on_app_thread(
-            lambda: self._app.query_one(StatusBarWidget).set_text(text)  # type: ignore[union-attr]
-        )
+        self._post(UpdateStatus(text))
 
     def set_input_callback(self, callback: Callable[[str], None]) -> None:
         self._input_callback = callback
@@ -241,19 +282,9 @@ class TextualOverlay(AbstractOverlay):
     def schedule_callback(
         self, callback: Callable[[], None], delay_ms: int = 0
     ) -> None:
-        if delay_ms <= 0:
-            self._run_on_app_thread(callback)
-        else:
-            self._run_on_app_thread(
-                lambda: self._app.set_timer(  # type: ignore[union-attr]
-                    delay_ms / 1000.0, lambda: callback()
-                )
-            )
+        self._post(RunCallback(callback, delay_ms))
 
     def teardown(self) -> None:
         self._is_running = False
         if self._app:
-            if threading.get_ident() == self._app_thread_id:
-                self._app.exit()
-            else:
-                self._app.call_from_thread(self._app.exit)
+            self._app.post_message(RequestExit())
