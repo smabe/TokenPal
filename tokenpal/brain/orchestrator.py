@@ -30,7 +30,7 @@ _FORCED_SILENCE_AFTER = 3
 _FORCED_SILENCE_DURATION = 120.0
 
 # Freeform chance for voices with 50+ example lines
-_FREEFORM_CHANCE_RICH = 0.30
+_FREEFORM_CHANCE_RICH = 0.20
 
 # Topic focus hints prepended to the context snapshot
 _TOPIC_FOCUS_HINTS: dict[str, str] = {
@@ -50,7 +50,7 @@ class Brain:
     # Max tool call rounds per comment to prevent infinite loops
     _MAX_TOOL_ROUNDS = 3
     # Freeform (unprompted) thought settings
-    _FREEFORM_MIN_GAP_S = 45.0
+    _FREEFORM_MIN_GAP_S = 90.0
     _FREEFORM_CHANCE = 0.15
 
     def __init__(
@@ -282,7 +282,13 @@ class Brain:
         if not self._personality.has_rich_voice:
             return False
 
-        elapsed = time.monotonic() - self._last_comment_time
+        now = time.monotonic()
+
+        # Respect forced silence — same gate as _should_comment()
+        if now < self._forced_silence_until:
+            return False
+
+        elapsed = now - self._last_comment_time
         if elapsed < self._FREEFORM_MIN_GAP_S:
             return False
 

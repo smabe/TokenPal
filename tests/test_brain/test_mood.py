@@ -93,7 +93,7 @@ def test_update_mood_concerned_late_night():
 
 def test_update_mood_bored_stale_context():
     engine = _make_engine()
-    engine._context_unchanged_count = 12
+    engine._context_unchanged_count = 100
     engine._last_mood_app = "Terminal"
     engine._last_seen_app = "Terminal"
     with patch("tokenpal.brain.personality.datetime") as mock_dt:
@@ -151,7 +151,7 @@ def test_custom_mood_default_display():
 def test_custom_mood_display_after_transition():
     engine = _make_engine()
     engine.set_voice(_make_custom_mood_profile())
-    engine._context_unchanged_count = 12
+    engine._context_unchanged_count = 100
     engine._last_mood_app = "Terminal"
     engine._last_seen_app = "Terminal"
     with patch("tokenpal.brain.personality.datetime") as mock_dt:

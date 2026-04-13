@@ -500,8 +500,8 @@ class PersonalityEngine:
         # Concerned: 2-5 AM usage
         elif 2 <= hour < 5:
             new_mood = Mood.CONCERNED
-        # Bored: same app for a long time (>= 10 unchanged polls)
-        elif self._context_unchanged_count >= 10:
+        # Bored: same app for a long time (>= 90 unchanged polls ≈ 3 min at 2s)
+        elif self._context_unchanged_count >= 90:
             new_mood = Mood.BORED
         # Hyper: rapid app switching (app changes every cycle for 30s+)
         elif self._context_unchanged_count == 0 and elapsed_in_mood > 30:
