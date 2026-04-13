@@ -168,7 +168,7 @@ class TestPersonalityConversation:
         engine = _make_engine()
         msg = engine.build_conversation_system_message()
         assert "Respond in character" in msg
-        assert "under 30 words" in msg
+        assert "top priority" in msg
 
     def test_build_conversation_system_message_finetuned(self):
         engine = _make_engine()
@@ -195,12 +195,12 @@ class TestPersonalityConversation:
         assert result is not None
         assert len(result) > 70
 
-    def test_filter_conversation_truncates_at_250(self):
+    def test_filter_conversation_truncates_at_500(self):
         engine = _make_engine()
-        text = "A" * 300
+        text = "A" * 600
         result = engine.filter_conversation_response(text)
         assert result is not None
-        assert len(result) <= 250
+        assert len(result) <= 500
 
     def test_filter_conversation_strips_markdown(self):
         engine = _make_engine()

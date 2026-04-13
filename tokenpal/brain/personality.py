@@ -819,10 +819,11 @@ class PersonalityEngine:
             return (
                 "The user is talking to you directly. Respond in character.\n\n"
                 "Rules:\n"
-                "1. Keep it SHORT — under 30 words.\n"
-                "2. Actually respond to what they said.\n"
-                "3. You can reference things said earlier in this conversation.\n"
-                "4. Stay in your character voice — same tone as your observations.\n\n"
+                "1. Actually help the user with what they asked. This is your top priority.\n"
+                "2. If they ask a technical question, give the answer FIRST, then add personality.\n"
+                "3. Stay in your character voice — same tone as your observations.\n"
+                "4. Keep casual chat short, but give detailed answers when they ask for help.\n"
+                "5. You can reference things said earlier in this conversation.\n\n"
                 f"{self._mood_line()}\n\n"
                 f"{self._recent_comments_block()}"
             )
@@ -831,10 +832,11 @@ class PersonalityEngine:
             f"{self._identity_block()}\n\n"
             "The user is talking to you directly. Respond in character.\n\n"
             "Rules:\n"
-            "1. Stay in character.\n"
-            "2. Keep it SHORT — under 30 words.\n"
-            "3. Actually respond to what they said. Don't ignore them.\n"
-            "4. You can reference things said earlier in this conversation.\n\n"
+            "1. Actually help the user with what they asked. This is your top priority.\n"
+            "2. If they ask a technical question, give the answer FIRST, then add personality.\n"
+            "3. Stay in character but don't let personality override helpfulness.\n"
+            "4. Keep casual chat short, but give detailed answers when they ask for help.\n"
+            "5. You can reference things said earlier in this conversation.\n\n"
             f"{self._mood_line()}\n\n"
             f"{self._recent_comments_block()}\n\n"
             f"{self._voice_reminder()}"
@@ -886,8 +888,8 @@ class PersonalityEngine:
         if not text or len(text) < 5:
             return None
 
-        # Relaxed cap for conversation — 250 chars
-        if len(text) > 250:
-            text = text[:247] + "..."
+        # Relaxed cap for conversation — 500 chars
+        if len(text) > 500:
+            text = text[:497] + "..."
 
         return text

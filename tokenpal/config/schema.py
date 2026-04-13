@@ -139,7 +139,7 @@ class FinetuneConfig:
 class ConversationConfig:
     max_turns: int = 10           # 10 turn pairs = 20 messages
     timeout_s: float = 120.0      # 2 minutes of silence ends session
-    max_response_tokens: int = 150  # per-turn response token budget
+    max_response_tokens: int = 300  # per-turn response token budget
 
 
 @dataclass

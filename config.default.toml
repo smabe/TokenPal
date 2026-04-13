@@ -45,7 +45,7 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." -- boring."""
 [conversation]
 max_turns = 10              # turn pairs kept in history (bump for larger models)
 timeout_s = 120             # seconds of silence before session expires
-# max_response_tokens = 150
+# max_response_tokens = 300
 
 [memory]
 enabled = true
