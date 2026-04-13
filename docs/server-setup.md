@@ -225,6 +225,7 @@ For gated models (e.g., Gemma), set HF_TOKEN on the server:
 | Ollama not in PATH on Windows | Windows SSH uses cmd.exe | Use full path: `%LOCALAPPDATA%\Programs\Ollama\ollama.exe` |
 | Ollama using CPU on AMD GPU | OLLAMA_VULKAN not set | Set `OLLAMA_VULKAN=1` as persistent User env var (see AMD GPU section above) |
 | Ollama using system RAM with Vulkan | iGPU detected alongside discrete GPU | Set `GGML_VK_VISIBLE_DEVICES=0` to use only the discrete GPU |
+| Model reloads into system RAM after idle | `OLLAMA_KEEP_ALIVE` too short, model evicted from VRAM | Set `OLLAMA_KEEP_ALIVE=24h` (see Model Keep-Alive section) |
 | `start-server.bat` says "cannot find the file serve" | `start /B` treats first quoted arg as window title | Fixed in latest `install-server.ps1` — re-run the installer or `git pull` |
 | `ollama create` from SSH fails with "timed out" | Ollama CLI tries to start new instance | Use PowerShell: `powershell -Command "& 'path\to\ollama.exe' create ..."` |
 | `ollama create` panics on safetensors | Tokenizer format incompatibility | Convert to GGUF first (see workaround above) |
@@ -233,6 +234,28 @@ For gated models (e.g., Gemma), set HF_TOKEN on the server:
 | Status bar shows "fallback" | Server was unreachable at startup | Check server, then `/server switch remote` to reconnect |
 | Training OOM | GPU memory insufficient | Unload Ollama models first (automatic in server worker) |
 | Training fails with 401 | HF token missing/invalid | Set HF_TOKEN on the server |
+
+## Model Keep-Alive
+
+Ollama unloads models from VRAM after a period of inactivity. The `OLLAMA_KEEP_ALIVE` env var controls this:
+
+| Value | Behavior |
+|-------|----------|
+| `1m` | Unload after 1 minute (Ollama default) |
+| `24h` | Keep loaded for 24 hours — good for dedicated inference boxes |
+| `-1` | Never unload |
+
+`start-server.bat` sets this to `24h`. Without it, the model gets evicted during idle periods (e.g., overnight) and must reload on the next request. On AMD Vulkan GPUs, this reload can briefly land in system RAM before migrating to VRAM, causing slow first responses.
+
+If you're running Ollama outside of `start-server.bat`, set the env var yourself:
+
+**Windows (persistent):**
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_KEEP_ALIVE", "24h", "User")
+```
+
+**Linux (systemd):**
+Add `Environment="OLLAMA_KEEP_ALIVE=24h"` to your Ollama service unit.
 
 ## Security
 
