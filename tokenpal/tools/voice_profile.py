@@ -50,6 +50,9 @@ class VoiceProfile:
     finetuned_date: str = ""
     anchor_lines: list[str] = field(default_factory=list)
     banned_names: list[str] = field(default_factory=list)
+    ascii_idle: list[str] = field(default_factory=list)
+    ascii_idle_alt: list[str] = field(default_factory=list)
+    ascii_talking: list[str] = field(default_factory=list)
     version: int = 1
 
     @property
@@ -94,6 +97,9 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         finetuned_date=data.get("finetuned_date", ""),
         anchor_lines=data.get("anchor_lines", []),
         banned_names=data.get("banned_names", []),
+        ascii_idle=data.get("ascii_idle", []),
+        ascii_idle_alt=data.get("ascii_idle_alt", []),
+        ascii_talking=data.get("ascii_talking", []),
         version=data.get("version", 1),
     )
 

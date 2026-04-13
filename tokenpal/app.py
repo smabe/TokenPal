@@ -25,7 +25,7 @@ from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
-from tokenpal.ui.ascii_renderer import SpeechBubble
+from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.registry import discover_overlays, resolve_overlay
 from tokenpal.util.logging import setup_logging
@@ -147,6 +147,18 @@ def main() -> None:
         conversation=config.conversation,
     )
 
+    # Load voice-specific buddy art into the overlay
+    def _load_voice_art() -> None:
+        idle, idle_alt, talking = personality.voice_frames
+        if idle:
+            frames = BuddyFrame.from_voice("custom", idle, idle_alt, talking)
+            if hasattr(overlay, "load_voice_frames"):
+                overlay.load_voice_frames(frames)
+        elif hasattr(overlay, "clear_voice_frames"):
+            overlay.clear_voice_frames()
+
+    _load_voice_art()
+
     # Slash command dispatcher
     dispatcher = CommandDispatcher()
 
@@ -186,6 +198,7 @@ def main() -> None:
         )
         if personality.voice_name != prev_voice:
             brain.reset_conversation()
+            _load_voice_art()
         return result
 
     def _cmd_server(args: str) -> CommandResult:

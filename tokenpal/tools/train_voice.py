@@ -233,6 +233,75 @@ def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
         "Match this character's personality.")
 
 
+def _generate_ascii_art(
+    character: str, persona: str,
+) -> tuple[list[str], list[str], list[str]]:
+    """Generate 3 Rich-markup ASCII art frames for a character.
+
+    Returns (idle, idle_alt, talking) as lists of markup lines.
+    """
+    text = _ollama_generate(
+        f'You are an ASCII artist. Create 3 character art frames for '
+        f'"{character}" using Unicode characters and Rich markup color tags.\n\n'
+        f'Character description:\n{persona[:300]}\n\n'
+        f'RULES:\n'
+        f'- Each frame is EXACTLY 8 lines tall, max 24 characters wide '
+        f'(not counting color tags)\n'
+        f'- Use Rich markup for colors: [bold #ff6600]text[/], [#00ccff]text[/]\n'
+        f'- Pick 2-3 colors that fit the character\n'
+        f'- Use Unicode box-drawing, blocks, and symbols freely: '
+        f'▄▀█░▓▒╔╗╚╝║═─│┌┐└┘◆◇○●♦★\n'
+        f'- The art should be recognizable as {character}\n'
+        f'- idle_alt differs from idle by ONE small detail (blink, shifted eyes)\n'
+        f'- talking has an open mouth or speech indicator\n\n'
+        f'Output EXACTLY this format, no other text:\n'
+        f'IDLE:\n(8 lines)\n'
+        f'IDLE_ALT:\n(8 lines)\n'
+        f'TALKING:\n(8 lines)',
+        max_tokens=800,
+        temperature=0.9,
+    )
+
+    if not text:
+        return [], [], []
+
+    return _parse_ascii_frames(text)
+
+
+def _parse_ascii_frames(text: str) -> tuple[list[str], list[str], list[str]]:
+    """Parse LLM output into three 8-line frames."""
+    # Strip markdown fences
+    text = re.sub(r"```\w*\n?", "", text)
+
+    idle: list[str] = []
+    idle_alt: list[str] = []
+    talking: list[str] = []
+
+    current: list[str] | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        upper = stripped.upper().rstrip(":")
+        if upper == "IDLE":
+            current = idle
+        elif upper in ("IDLE_ALT", "IDLE ALT"):
+            current = idle_alt
+        elif upper == "TALKING":
+            current = talking
+        elif current is not None and len(current) < 8:
+            current.append(line.rstrip())
+
+    # Pad short frames to 8 lines
+    for frame in (idle, idle_alt, talking):
+        while len(frame) < 8:
+            frame.append("")
+
+    # If idle_alt is empty/identical, copy idle with a minor tweak
+    if idle and not any(idle_alt):
+        idle_alt[:] = list(idle)
+
+    return idle, idle_alt, talking
+
+
 def _generate_voice_assets(
     character: str,
     lines: list[str],
@@ -240,11 +309,13 @@ def _generate_voice_assets(
 ) -> tuple[
     str, list[str], list[str], dict[str, str], dict[str, str],
     str, list[str], list[str], list[str],
+    list[str], list[str], list[str],
 ]:
     """Run all voice generation tasks in parallel.
 
     Returns (persona, greetings, offline_quips, mood_prompts, mood_roles,
-             default_mood, structure_hints, anchor_lines, banned_names).
+             default_mood, structure_hints, anchor_lines, banned_names,
+             ascii_idle, ascii_idle_alt, ascii_talking).
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -265,6 +336,11 @@ def _generate_voice_assets(
     anchor_lines = _extract_anchor_lines(lines, catchphrases)
     banned_names = _derive_banned_names(source, character)
 
+    # Generate ASCII art (needs persona for character description)
+    ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
+        character, persona,
+    )
+
     return (
         persona,
         f_g.result(),
@@ -275,6 +351,9 @@ def _generate_voice_assets(
         f_s.result(),
         anchor_lines,
         banned_names,
+        ascii_idle,
+        ascii_idle_alt,
+        ascii_talking,
     )
 
 
@@ -438,6 +517,7 @@ def train_from_wiki(
         persona, greetings, offline_quips, mood_prompts,
         mood_roles, default_mood, structure_hints,
         anchor_lines, banned_names,
+        ascii_idle, ascii_idle_alt, ascii_talking,
     ) = _generate_voice_assets(character, lines, source)
 
     _progress("Saving profile...")
@@ -455,6 +535,9 @@ def train_from_wiki(
         anchor_lines=anchor_lines,
         banned_names=banned_names,
     )
+    profile.ascii_idle = ascii_idle
+    profile.ascii_idle_alt = ascii_idle_alt
+    profile.ascii_talking = ascii_talking
 
     out_dir = voices_dir or _get_voices_dir()
     save_profile(profile, out_dir)
@@ -490,6 +573,15 @@ def regenerate_persona(
     profile.persona = persona
     profile.anchor_lines = anchor_lines
     profile.banned_names = banned_names
+
+    _progress(f"Generating ASCII art for {profile.character}...")
+    ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
+        profile.character, persona,
+    )
+    profile.ascii_idle = ascii_idle
+    profile.ascii_idle_alt = ascii_idle_alt
+    profile.ascii_talking = ascii_talking
+
     profile.version = 2
 
     out_dir = voices_dir or _get_voices_dir()

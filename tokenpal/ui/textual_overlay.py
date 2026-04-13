@@ -71,6 +71,16 @@ class RunCallback(Message):
         super().__init__()
 
 
+class LoadVoiceFrames(Message):
+    def __init__(self, frames: dict[str, BuddyFrame]) -> None:
+        self.frames = frames
+        super().__init__()
+
+
+class ClearVoiceFrames(Message):
+    pass
+
+
 class RequestExit(Message):
     pass
 
@@ -164,13 +174,54 @@ class SpeechBubbleWidget(Static):
 
 
 class BuddyWidget(Static):
-    """ASCII buddy art."""
+    """ASCII buddy art with optional Rich markup and idle blink animation."""
 
     def __init__(self) -> None:
-        super().__init__(id="buddy")
+        super().__init__(id="buddy", markup=True)
+        self._custom_frames: dict[str, BuddyFrame] = {}
+        self._blink_timer: Timer | None = None
+        self._blink_state: bool = False  # False=idle, True=idle_alt
+        self._is_talking: bool = False
+
+    def set_custom_frames(self, frames: dict[str, BuddyFrame]) -> None:
+        """Load voice-specific frames and start idle blink if idle_alt exists."""
+        self._custom_frames = frames
+        self._stop_blink()
+        if "idle_alt" in frames and "idle" in frames:
+            self._blink_timer = self.set_interval(4.0, self._toggle_blink)
+        if not self._is_talking:
+            self.show_frame(self._get_frame("idle"))
+
+    def clear_custom_frames(self) -> None:
+        """Revert to generic frames."""
+        self._custom_frames = {}
+        self._stop_blink()
+        self.show_frame(BuddyFrame.get("idle"))
 
     def show_frame(self, frame: BuddyFrame) -> None:
+        self._is_talking = frame.name == "talking"
+        if self._is_talking:
+            self._blink_state = False
         self.update("\n".join(frame.lines))
+
+    def _get_frame(self, name: str) -> BuddyFrame:
+        if name in self._custom_frames:
+            return self._custom_frames[name]
+        return BuddyFrame.get(name)
+
+    def _toggle_blink(self) -> None:
+        if self._is_talking:
+            return
+        self._blink_state = not self._blink_state
+        name = "idle_alt" if self._blink_state else "idle"
+        frame = self._get_frame(name)
+        self.update("\n".join(frame.lines))
+
+    def _stop_blink(self) -> None:
+        if self._blink_timer:
+            self._blink_timer.stop()
+            self._blink_timer = None
+        self._blink_state = False
 
 
 _MOOD_COLORS: dict[str, str] = {
@@ -276,16 +327,24 @@ class TokenPalApp(App[None]):
     # --- Message handlers (all run on app thread) ---
 
     def on_show_speech(self, message: ShowSpeech) -> None:
-        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("talking"))
+        buddy = self.query_one(BuddyWidget)
+        buddy.show_frame(buddy._get_frame("talking"))
         self.query_one(SpeechBubbleWidget).start_typing(message.bubble)
         self._log_buddy(message.bubble.text)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()
-        self.query_one(BuddyWidget).show_frame(BuddyFrame.get("idle"))
+        buddy = self.query_one(BuddyWidget)
+        buddy.show_frame(buddy._get_frame("idle"))
 
     def on_show_buddy(self, message: ShowBuddy) -> None:
         self.query_one(BuddyWidget).show_frame(message.frame)
+
+    def on_load_voice_frames(self, message: LoadVoiceFrames) -> None:
+        self.query_one(BuddyWidget).set_custom_frames(message.frames)
+
+    def on_clear_voice_frames(self, _message: ClearVoiceFrames) -> None:
+        self.query_one(BuddyWidget).clear_custom_frames()
 
     def on_update_status(self, message: UpdateStatus) -> None:
         self.query_one(StatusBarWidget).set_text(message.text)
@@ -344,6 +403,12 @@ class TextualOverlay(AbstractOverlay):
 
     def update_status(self, text: str) -> None:
         self._post(UpdateStatus(text))
+
+    def load_voice_frames(self, frames: dict[str, BuddyFrame]) -> None:
+        self._post(LoadVoiceFrames(frames))
+
+    def clear_voice_frames(self) -> None:
+        self._post(ClearVoiceFrames())
 
     def log_buddy_message(self, text: str) -> None:
         self._post(LogBuddyMessage(text))

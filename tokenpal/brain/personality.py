@@ -401,6 +401,17 @@ class PersonalityEngine:
         """Ollama model name for the fine-tuned voice, or empty string."""
         return self._finetuned_model
 
+    @property
+    def voice_frames(
+        self,
+    ) -> tuple[list[str], list[str], list[str]]:
+        """Return (idle, idle_alt, talking) art for the active voice."""
+        return (
+            self._voice_ascii_idle,
+            self._voice_ascii_idle_alt,
+            self._voice_ascii_talking,
+        )
+
     def set_voice(self, voice: VoiceProfile | None) -> None:
         """Hot-swap the active voice at runtime."""
         self._apply_voice(voice)
@@ -426,6 +437,15 @@ class PersonalityEngine:
             voice.persona if voice else "",
         )
         self._example_pool = self._build_example_pool(voice.lines if voice else None)
+
+        # Voice-specific ASCII art frames
+        self._voice_ascii_idle: list[str] = (voice.ascii_idle or []) if voice else []
+        self._voice_ascii_idle_alt: list[str] = (
+            (voice.ascii_idle_alt or []) if voice else []
+        )
+        self._voice_ascii_talking: list[str] = (
+            (voice.ascii_talking or []) if voice else []
+        )
 
     def get_startup_greeting(self) -> str:
         """Return a random greeting for when TokenPal first boots up."""

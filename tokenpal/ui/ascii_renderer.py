@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import textwrap
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 BUDDY_IDLE = [
     r"     ▄███████████▄     ",
@@ -61,10 +61,32 @@ FRAMES: dict[str, list[str]] = {
 class BuddyFrame:
     lines: list[str]
     name: str = "idle"
+    markup: bool = False
 
     @staticmethod
     def get(name: str) -> BuddyFrame:
         return BuddyFrame(lines=FRAMES.get(name, BUDDY_IDLE), name=name)
+
+    @staticmethod
+    def from_voice(
+        name: str,
+        idle: list[str],
+        idle_alt: list[str],
+        talking: list[str],
+    ) -> dict[str, BuddyFrame]:
+        """Build a frame set from voice profile art. Returns name→frame dict."""
+        frames: dict[str, BuddyFrame] = {}
+        if idle:
+            frames["idle"] = BuddyFrame(lines=idle, name="idle", markup=True)
+        if idle_alt:
+            frames["idle_alt"] = BuddyFrame(
+                lines=idle_alt, name="idle_alt", markup=True,
+            )
+        if talking:
+            frames["talking"] = BuddyFrame(
+                lines=talking, name="talking", markup=True,
+            )
+        return frames
 
 
 @dataclass
