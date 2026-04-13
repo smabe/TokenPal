@@ -245,8 +245,14 @@ def main() -> None:
     overlay.set_input_callback(_on_user_input)
 
     # Brain runs in a background thread with its own asyncio loop
+    def _run_brain() -> None:
+        try:
+            asyncio.run(brain.start())
+        except Exception:
+            log.exception("Brain thread crashed")
+
     brain_thread = threading.Thread(
-        target=lambda: asyncio.run(brain.start()),
+        target=_run_brain,
         daemon=True,
         name="tokenpal-brain",
     )

@@ -275,9 +275,12 @@ class Brain:
 
     def reset_conversation(self) -> None:
         """Clear the conversation session. Thread-safe: can be called from main thread."""
-        if self._loop is not None:
+        if self._loop is None:
+            self._clear_conversation()
+            return
+        try:
             self._loop.call_soon_threadsafe(self._clear_conversation)
-        else:
+        except RuntimeError:
             self._clear_conversation()
 
     def _clear_conversation(self) -> None:
@@ -619,10 +622,14 @@ class Brain:
 
     def submit_user_input(self, text: str) -> None:
         """Thread-safe: enqueue user text from the main thread."""
-        if self._loop is not None:
+        if self._loop is None:
+            return
+        try:
             self._loop.call_soon_threadsafe(
                 self._user_input_queue.put_nowait, text
             )
+        except RuntimeError:
+            log.warning("Brain event loop closed — input dropped")
 
     async def _handle_user_input(self, user_message: str) -> None:
         """Respond to direct user input using multi-turn conversation context."""
