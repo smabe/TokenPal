@@ -144,6 +144,7 @@ def main() -> None:
         interestingness_threshold=config.brain.interestingness_threshold,
         context_max_tokens=config.brain.context_max_tokens,
         sense_intervals=config.brain.sense_intervals,
+        conversation=config.conversation,
     )
 
     # Slash command dispatcher
@@ -154,6 +155,7 @@ def main() -> None:
 
     def _cmd_clear(_args: str) -> CommandResult:
         overlay.schedule_callback(overlay.hide_speech)
+        brain.reset_conversation()
         return CommandResult("")
 
     def _cmd_mood(_args: str) -> CommandResult:
@@ -169,13 +171,21 @@ def main() -> None:
         )
 
     def _cmd_model(args: str) -> CommandResult:
-        return _handle_model_command(args, llm, overlay)
+        prev_model = llm.model_name
+        result = _handle_model_command(args, llm, overlay)
+        if llm.model_name != prev_model:
+            brain.reset_conversation()
+        return result
 
     def _cmd_voice(args: str) -> CommandResult:
-        return _handle_voice_command(
+        prev_voice = personality.voice_name
+        result = _handle_voice_command(
             args, personality, data_dir / "voices", overlay, brain,
             llm, config,
         )
+        if personality.voice_name != prev_voice:
+            brain.reset_conversation()
+        return result
 
     def _cmd_server(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)

@@ -72,6 +72,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
 | **Voices** | Train character voices from Fandom wiki transcripts |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
+| **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
 | **Server** | Remote GPU inference + training over HTTP |
 | **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized |
@@ -140,6 +141,10 @@ weather = false                        # opt-in: use /zip or first-run wizard
 [brain]
 comment_cooldown_s = 30.0
 active_voice = ""                      # e.g. "bmo"
+
+[conversation]
+max_turns = 10                         # turn pairs in history (bump for larger models)
+timeout_s = 120                        # seconds of silence before session expires
 
 [actions]
 enabled = true
@@ -234,6 +239,7 @@ tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 - Goes silent around banking, passwords, health apps
 - Browser window titles sanitized (stripped unless music player detected)
 - Session memory stores only app names and timestamps, never content
+- Conversation history is ephemeral (in-memory only, cleared after ~2 min silence or on sensitive app detection)
 - Log files restricted to owner-only (0o600)
 - Everything local — no cloud. Optional LAN server for GPU offload
 - Weather is the only sense that makes network requests (opt-in, Open-Meteo)

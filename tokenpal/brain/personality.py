@@ -813,10 +813,45 @@ class PersonalityEngine:
     # Conversation (user-initiated)
     # ------------------------------------------------------------------
 
+    def build_conversation_system_message(self) -> str:
+        """Build the system message for multi-turn conversation mode."""
+        if self.is_finetuned:
+            return (
+                "The user is talking to you directly. Respond in character.\n\n"
+                "Rules:\n"
+                "1. Keep it SHORT — under 30 words.\n"
+                "2. Actually respond to what they said.\n"
+                "3. You can reference things said earlier in this conversation.\n"
+                "4. Stay in your character voice — same tone as your observations.\n\n"
+                f"{self._mood_line()}\n\n"
+                f"{self._recent_comments_block()}"
+            )
+
+        return (
+            f"{self._identity_block()}\n\n"
+            "The user is talking to you directly. Respond in character.\n\n"
+            "Rules:\n"
+            "1. Stay in character.\n"
+            "2. Keep it SHORT — under 30 words.\n"
+            "3. Actually respond to what they said. Don't ignore them.\n"
+            "4. You can reference things said earlier in this conversation.\n\n"
+            f"{self._mood_line()}\n\n"
+            f"{self._recent_comments_block()}\n\n"
+            f"{self._voice_reminder()}"
+        )
+
+    def build_context_injection(self, context_snapshot: str) -> str:
+        """Build a context message with current screen state."""
+        return f"What you currently see on their screen:\n{context_snapshot}"
+
     def build_conversation_prompt(
         self, user_message: str, context_snapshot: str
     ) -> str:
-        """Build a prompt for responding to direct user input."""
+        """Build a single-string prompt for responding to direct user input.
+
+        Kept as fallback for single-turn mode. Multi-turn uses
+        build_conversation_system_message() + build_context_injection().
+        """
         if self.is_finetuned:
             return _FINETUNED_CONVERSATION_TEMPLATE.format(
                 mood_line=self._mood_line(),
@@ -851,8 +886,8 @@ class PersonalityEngine:
         if not text or len(text) < 5:
             return None
 
-        # Relaxed cap — 150 chars (vs 70 for observations)
-        if len(text) > 150:
-            text = text[:147] + "..."
+        # Relaxed cap for conversation — 250 chars
+        if len(text) > 250:
+            text = text[:247] + "..."
 
         return text

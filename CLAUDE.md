@@ -32,7 +32,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Brain
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
-- Three prompt paths: `build_prompt()` (observations), `build_freeform_prompt()` (unprompted thoughts), `build_conversation_prompt()` (user input)
+- Three prompt paths: `build_prompt()` (observations), `build_freeform_prompt()` (unprompted thoughts), `build_conversation_prompt()` (user input, single-turn fallback)
+- Multi-turn conversation: `ConversationSession` in orchestrator tracks history buffer, `build_conversation_system_message()` + `build_context_injection()` compose the messages array. Config in `[conversation]` section. Observations/freeform suppressed during active session. Session auto-expires after `timeout_s` (default 120s). History capped at `max_turns` pairs (default 10, limited by gemma4's 4-8k context — bump for larger models)
 - `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern, composite observations (`_detect_composites()`), public API: `active_readings()`, `prev_summary()`, `ttl_for()`
 - Topic roulette: `_pick_topic()` in orchestrator, no 3+ consecutive same-topic, focus hints prepended to context
 - Change detection: `changed_from` field on `SenseReading`, app_awareness populates "switched from X"
@@ -77,6 +78,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Sensitive app exclusion: banking, passwords, health, messaging — goes silent
 - Browser window titles sanitized (stripped unless matching music player patterns)
 - Session memory stores only app names and timestamps, never content
+- During active conversations, user messages are held in memory (not saved to disk) until the session times out (~2 min of silence). Conversation buffer is cleared on sensitive app detection. User input truncated to 30 chars in log output
 - Log files and memory.db at 0o600 (owner-only)
 - Music track names redacted from DEBUG logs
 - Weather is the ONLY network request (Open-Meteo, opt-in). No ip-api.com. Lat/lon rounded to 1 decimal

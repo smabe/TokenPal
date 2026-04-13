@@ -8,6 +8,7 @@ import logging
 import random
 import time
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
 from urllib.parse import urlparse
@@ -16,10 +17,54 @@ from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Conversation session — tracks multi-turn history for user conversations
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ConversationSession:
+    """Tracks state for an active multi-turn conversation."""
+
+    history: list[dict[str, str]] = field(default_factory=list)
+    started_at: float = field(default_factory=time.monotonic)
+    last_activity: float = field(default_factory=time.monotonic)
+    max_turns: int = 10
+    timeout_s: float = 120.0
+
+    @property
+    def is_expired(self) -> bool:
+        return (time.monotonic() - self.last_activity) > self.timeout_s
+
+    @property
+    def is_active(self) -> bool:
+        return len(self.history) > 0 and not self.is_expired
+
+    @property
+    def turn_count(self) -> int:
+        """Number of completed turn pairs (user + assistant)."""
+        return sum(1 for m in self.history if m["role"] == "assistant")
+
+    def add_user_turn(self, content: str) -> None:
+        self.last_activity = time.monotonic()
+        self.history.append({"role": "user", "content": content})
+        self._enforce_cap()
+
+    def add_assistant_turn(self, content: str) -> None:
+        self.history.append({"role": "assistant", "content": content})
+        self._enforce_cap()
+
+    def _enforce_cap(self) -> None:
+        """Drop oldest turn pair when over budget."""
+        if len(self.history) > self.max_turns * 2:
+            del self.history[:2]
+
 
 # Max comments in a rolling window (guardrail §2)
 _MAX_COMMENTS_PER_WINDOW = 8
@@ -67,6 +112,7 @@ class Brain:
         interestingness_threshold: float = 0.4,
         context_max_tokens: int = 2048,
         sense_intervals: dict[str, float] | None = None,
+        conversation: ConversationConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -107,6 +153,10 @@ class Brain:
 
         # Topic roulette state
         self._recent_topics: deque[str] = deque(maxlen=10)
+
+        # Conversation session state
+        self._conversation: ConversationSession | None = None
+        self._conv_config = conversation or ConversationConfig()
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -160,6 +210,15 @@ class Brain:
                     except asyncio.QueueEmpty:
                         break
 
+                # Clean up expired conversation sessions
+                if self._conversation and self._conversation.is_expired:
+                    log.debug(
+                        "Conversation session expired (%.0fs idle, %d turns)",
+                        time.monotonic() - self._conversation.last_activity,
+                        self._conversation.turn_count,
+                    )
+                    self._conversation = None
+
                 if self._should_comment():
                     await self._generate_comment(snapshot)
                 elif self._should_freeform():
@@ -208,8 +267,27 @@ class Brain:
     def paused(self, value: bool) -> None:
         self._paused = value
 
+    @property
+    def _in_conversation(self) -> bool:
+        """True when an active conversation session is suppressing observations."""
+        return self._conversation is not None and self._conversation.is_active
+
+    def reset_conversation(self) -> None:
+        """Clear the conversation session. Thread-safe: can be called from main thread."""
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._clear_conversation)
+        else:
+            self._clear_conversation()
+
+    def _clear_conversation(self) -> None:
+        if self._conversation is not None:
+            log.debug("Conversation session cleared (%d turns)", self._conversation.turn_count)
+            self._conversation = None
+
     def _should_comment(self) -> bool:
         if self._paused:
+            return False
+        if self._in_conversation:
             return False
 
         now = time.monotonic()
@@ -278,6 +356,8 @@ class Brain:
     def _should_freeform(self) -> bool:
         """Check if we should generate an unprompted in-character thought."""
         if self._paused:
+            return False
+        if self._in_conversation:
             return False
         if not self._personality.has_rich_voice:
             return False
@@ -471,11 +551,17 @@ class Brain:
                 self._last_confused_quip = now
                 self._last_comment_time = now
 
-    async def _generate_with_tools(self, prompt: str) -> LLMResponse:
-        """Multi-turn tool-calling loop. Sends prompt with tool defs, executes
-        any tool calls the LLM requests, feeds results back, and repeats until
-        the LLM produces a final text response (or we hit the round limit)."""
-        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    async def _generate_with_tools(
+        self,
+        prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> LLMResponse:
+        """Multi-turn tool-calling loop. Sends prompt (or pre-built messages)
+        with tool defs, executes tool calls, feeds results back, and repeats
+        until the LLM produces a final text response (or we hit the round limit)."""
+        if messages is None:
+            assert prompt is not None
+            messages = [{"role": "user", "content": prompt}]
 
         for _round in range(self._MAX_TOOL_ROUNDS):
             response = await self._llm.generate_with_tools(
@@ -538,32 +624,77 @@ class Brain:
             )
 
     async def _handle_user_input(self, user_message: str) -> None:
-        """Respond to direct user input with a conversational prompt."""
+        """Respond to direct user input using multi-turn conversation context."""
+        # PRIVACY: check sensitive apps BEFORE building prompt or touching history
         snapshot = self._context.snapshot()
-        prompt = self._personality.build_conversation_prompt(
-            user_message, snapshot
-        )
+        if self._personality.check_sensitive_app(snapshot):
+            log.debug("Sensitive app detected during conversation — clearing session")
+            self._conversation = None
+            self._ui_callback("I'll look away while you handle that.")
+            return
+
+        # Start or continue conversation session
+        if self._conversation is None or self._conversation.is_expired:
+            self._conversation = ConversationSession(
+                max_turns=self._conv_config.max_turns,
+                timeout_s=self._conv_config.timeout_s,
+            )
+            log.debug("New conversation session started")
+
+        # Record user turn (also resets timeout)
+        self._conversation.add_user_turn(user_message)
+
+        # Build messages array: [system, history..., context, user]
+        system_msg = self._personality.build_conversation_system_message()
+        context_msg = self._personality.build_context_injection(snapshot)
+
+        messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_msg},
+            # history[:-1]: the user turn was just appended by add_user_turn(),
+            # so we exclude it here and re-add it below with fresh context injected
+            *self._conversation.history[:-1],
+            {"role": "system", "content": context_msg},  # fresh context
+            {"role": "user", "content": user_message},    # current turn
+        ]
 
         try:
             if self._status_callback:
                 self._status_callback("replying...")
-            log.debug("Generating conversation reply to: %s", user_message)
+            log.debug(
+                "Conversation turn %d (%.30s...)",
+                self._conversation.turn_count + 1,
+                user_message,
+            )
             if self._actions and self._tool_specs:
-                response = await self._generate_with_tools(prompt)
+                response = await self._generate_with_tools(messages=messages)
             else:
-                response = await self._llm.generate(prompt, max_tokens=150)
+                response = await self._llm.generate_with_tools(
+                    messages=messages,
+                    tools=[],
+                    max_tokens=self._conv_config.max_response_tokens,
+                )
             self._push_status()
-            log.debug("Raw conversation response: %r", response.text[:200])
+
             filtered = self._personality.filter_conversation_response(
                 response.text
             )
             if filtered:
+                self._conversation.add_assistant_turn(filtered)
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
                 self._ui_callback(filtered)
                 self._last_comment_time = time.monotonic()
+            else:
+                # Record placeholder so history stays coherent
+                self._conversation.add_assistant_turn("[no response]")
+                log.debug("Conversation response filtered: %r", response.text[:80])
+                quip = self._personality.get_confused_quip()
+                self._ui_callback(quip)
         except Exception:
             log.exception("Failed to generate conversation response")
+            # Don't record failed exchange — remove the user turn we just added
+            if self._conversation.history and self._conversation.history[-1]["role"] == "user":
+                self._conversation.history.pop()
             quip = self._personality.get_confused_quip()
             self._ui_callback(quip)
 

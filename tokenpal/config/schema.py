@@ -136,6 +136,13 @@ class FinetuneConfig:
 
 
 @dataclass
+class ConversationConfig:
+    max_turns: int = 10           # 10 turn pairs = 20 messages
+    timeout_s: float = 120.0      # 2 minutes of silence ends session
+    max_response_tokens: int = 150  # per-turn response token budget
+
+
+@dataclass
 class TokenPalConfig:
     senses: SensesConfig = field(default_factory=SensesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -146,5 +153,6 @@ class TokenPalConfig:
     paths: PathsConfig = field(default_factory=PathsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
+    conversation: ConversationConfig = field(default_factory=ConversationConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
