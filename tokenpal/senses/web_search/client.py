@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 LOG_TRUNCATE_CHARS = 80
 
 _MAX_TEXT_CHARS = 500
+_MAX_HTML_BYTES = 512 * 1024
 _HTTP_TIMEOUT_S = 10.0
 _USER_AGENT = "TokenPal/1.0 (+https://github.com/smabe/TokenPal)"
 
@@ -98,9 +99,12 @@ def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
             headers={"User-Agent": _USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
+            body = resp.read(_MAX_HTML_BYTES).decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
         log.debug("DDG lite fetch failed: %s", e)
+        return None
+
+    if "result-link" not in body:
         return None
 
     link = _DDG_LITE_LINK_RE.search(body)
@@ -110,17 +114,16 @@ def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
 
     title = _strip_html(link.group(2))
     snippet = _strip_html(snip.group(1))
-    href = link.group(1)
-    # DDG lite wraps outbound URLs in a redirect — unwrap it.
-    if "uddg=" in href:
-        parsed = urllib.parse.urlparse(href)
-        q_params = urllib.parse.parse_qs(parsed.query)
-        uddg = q_params.get("uddg", [""])[0]
-        if uddg:
-            href = urllib.parse.unquote(uddg)
-
     if not title or not snippet:
         return None
+
+    # DDG Lite wraps outbound URLs in a redirect like /l/?uddg=<target>.
+    # parse_qs already URL-decodes the value.
+    href = link.group(1)
+    uddg = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [""])[0]
+    if uddg:
+        href = uddg
+
     return title, snippet, href
 
 
