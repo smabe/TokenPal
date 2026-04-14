@@ -1,7 +1,9 @@
 # Senses Expansion - Phase B
 
 ## Goal
-Ship the three Phase A non-goals: `calendar`, `filesystem_pulse`, `typing_cadence`. These three are NOT bundleable the way Phase A's psutil senses were - each has a genuine cross-platform or architectural decision that needs its own research + design pass. This plan scopes the decisions, not the bundling.
+Ship two of the Phase A non-goals: `typing_cadence` and `filesystem_pulse`. These are NOT bundleable the way Phase A's psutil senses were - each has a genuine cross-platform or architectural decision that needs its own research + design pass. This plan scopes the decisions, not the bundling.
+
+**Calendar deferred** — user not interested for now; no `.ics` integration in this phase. Revisit if/when meeting-aware commentary becomes a felt need.
 
 ## Non-goals
 - No Phase C slash command bundle (`/recap`, `/roast`, `/define`, `/wiki`, `/commit`) - separate plan once new senses have produced material

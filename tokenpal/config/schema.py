@@ -25,6 +25,7 @@ class SensesConfig:
     battery: bool = False
     network_state: bool = False
     process_heat: bool = False
+    typing_cadence: bool = False
 
 
 @dataclass

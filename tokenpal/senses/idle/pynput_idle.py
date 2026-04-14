@@ -7,6 +7,7 @@ import threading
 import time
 from typing import Any
 
+from tokenpal.senses import _keyboard_bus
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
 
@@ -16,6 +17,14 @@ log = logging.getLogger(__name__)
 _SHORT_IDLE = 120    # 2 min — no comment, normal pause
 _MEDIUM_IDLE = 300   # 5 min — dry acknowledgment on return
 _LONG_IDLE = 1800    # 30 min — dramatic return
+
+
+def _tier_for(away_seconds: float) -> str:
+    if away_seconds < _MEDIUM_IDLE:
+        return "short"
+    if away_seconds < _LONG_IDLE:
+        return "medium"
+    return "long"
 
 
 @register_sense
@@ -32,11 +41,10 @@ class PynputIdle(AbstractSense):
         self._was_idle: bool = False
         self._idle_start: float = 0.0
         self._mouse_listener: Any = None
-        self._kb_listener: Any = None
 
     async def setup(self) -> None:
         try:
-            from pynput import keyboard, mouse
+            from pynput import mouse
         except ImportError:
             log.warning("pynput not installed — disabling idle detection")
             self.disable()
@@ -47,13 +55,9 @@ class PynputIdle(AbstractSense):
             on_click=self._touch,
             on_scroll=self._touch,
         )
-        self._kb_listener = keyboard.Listener(
-            on_press=self._touch,
-        )
-
         self._mouse_listener.start()
-        self._kb_listener.start()
-        log.info("Idle sense: pynput listeners started")
+        _keyboard_bus.subscribe(self._touch)
+        log.info("Idle sense: listeners started")
 
     def _touch(self, *_args: Any) -> None:
         """Update last-input timestamp. Called from pynput listener threads."""
@@ -111,11 +115,7 @@ class PynputIdle(AbstractSense):
                 "event": "returned",
                 "away_seconds": round(away_seconds),
                 "away_minutes": round(away_min, 1),
-                "tier": (
-                    "short" if away_seconds < _MEDIUM_IDLE
-                    else "medium" if away_seconds < _LONG_IDLE
-                    else "long"
-                ),
+                "tier": _tier_for(away_seconds),
             },
             summary=summary,
             confidence=confidence,
@@ -124,6 +124,5 @@ class PynputIdle(AbstractSense):
     async def teardown(self) -> None:
         if self._mouse_listener is not None:
             self._mouse_listener.stop()
-        if self._kb_listener is not None:
-            self._kb_listener.stop()
+        _keyboard_bus.unsubscribe(self._touch)
         log.info("Idle sense: listeners stopped")
