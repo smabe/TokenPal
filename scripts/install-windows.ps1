@@ -265,11 +265,11 @@ try {
 } catch {}
 
 if (-not $ollamaRunning) {
-    Write-Host "  Starting Ollama..."
+    Write-Host "  Starting Ollama (AMD+Vulkan cold start can take ~45s)..."
     Start-Process -FilePath $ollamaExe -ArgumentList "serve" -WindowStyle Hidden
 
     $waited = 0
-    $maxWait = 30
+    $maxWait = 60
     while ($waited -lt $maxWait) {
         Start-Sleep -Seconds 2
         $waited += 2
@@ -278,13 +278,26 @@ if (-not $ollamaRunning) {
             $ollamaRunning = $true
             break
         } catch {}
-        Write-Host "  Waiting for Ollama... ($waited/$maxWait s)"
+        if ($waited % 10 -eq 0) {
+            Write-Host "  Waiting for Ollama... ($waited/$maxWait s)"
+        }
+    }
+
+    # Last-ditch check — some Ollama builds keep initializing for a while
+    # after they bind the port. Give it one more long-timeout probe.
+    if (-not $ollamaRunning) {
+        Write-Host "  Giving Ollama one more try with 10s timeout..."
+        try {
+            $null = Invoke-WebRequest -Uri "http://localhost:11434/" -TimeoutSec 10 -ErrorAction Stop
+            $ollamaRunning = $true
+        } catch {}
     }
 
     if (-not $ollamaRunning) {
         Write-Host "  WARNING: Ollama did not respond after ${maxWait}s." -ForegroundColor Red
-        Write-Host "  Start it manually: $ollamaExe serve" -ForegroundColor Red
-        Write-Host "  Then pull the model: ollama pull $Model" -ForegroundColor Red
+        Write-Host "  It may still be starting. Try: curl http://localhost:11434/" -ForegroundColor Yellow
+        Write-Host "  If still unreachable, start manually: $ollamaExe serve" -ForegroundColor Yellow
+        Write-Host "  Then pull the model: ollama pull $Model" -ForegroundColor Yellow
     }
 }
 
