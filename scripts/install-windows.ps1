@@ -399,8 +399,19 @@ if ($InstallServer) {
 cd /d $RepoDir
 $vulkanLine
 set OLLAMA_KEEP_ALIVE=24h
-start "" /B "$ollamaExe" serve
-timeout /t 5 /nobreak >nul
+
+rem Only launch ollama if it isn't already serving on 11434.
+rem Second 'ollama serve' would fail to bind the port and spam a
+rem harmless but confusing TCP error.
+netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
+if errorlevel 1 (
+    echo Starting Ollama...
+    start "" /B "$ollamaExe" serve
+    timeout /t 5 /nobreak >nul
+) else (
+    echo Ollama is already running.
+)
+
 call .venv\Scripts\activate.bat
 tokenpal-server --host 0.0.0.0 --port $Port
 pause
