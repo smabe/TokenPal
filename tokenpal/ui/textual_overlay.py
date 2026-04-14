@@ -219,13 +219,7 @@ class BuddyWidget(Static):
         self._is_talking = frame.name == "talking"
         if self._is_talking:
             self._blink_state = False
-        self.update(self._render_frame(frame))
-
-    def _render_frame(self, frame: BuddyFrame) -> Text:
-        text = Text.from_markup("\n".join(frame.lines))
-        text.no_wrap = True
-        text.overflow = "crop"
-        return text
+        self.update("\n".join(frame.lines))
 
     def _get_frame(self, name: str) -> BuddyFrame:
         if name in self._custom_frames:
@@ -238,7 +232,7 @@ class BuddyWidget(Static):
         self._blink_state = not self._blink_state
         name = "idle_alt" if self._blink_state else "idle"
         frame = self._get_frame(name)
-        self.update(self._render_frame(frame))
+        self.update("\n".join(frame.lines))
 
     def max_frame_width(self) -> int:
         return self._cached_max_width

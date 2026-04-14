@@ -40,6 +40,7 @@ Screen {
     color: #00ff88;
     padding: 1 0;
     overflow-x: hidden;
+    text-wrap: nowrap;
 }
 
 #user-input {
