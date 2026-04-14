@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import time
 from typing import Any
 
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -27,6 +28,7 @@ class GitSense(AbstractSense):
         self._last_branch: str = ""
         self._last_dirty: bool = False
         self._pending_reading: SenseReading | None = None
+        self._pending_expires: float = 0.0
 
     async def setup(self) -> None:
         if not shutil.which("git"):
@@ -70,9 +72,13 @@ class GitSense(AbstractSense):
         self._last_dirty = dirty
 
         if not changed_from:
-            # Keep returning the last reading so it survives in the context
-            # long enough for the commentary gate to open (cooldown can be ~100s)
-            return self._pending_reading
+            # Keep returning the reading long enough for the gate to open (~2 min)
+            # but clear changed_from so the urgent bypass only fires once
+            if self._pending_reading and time.monotonic() < self._pending_expires:
+                self._pending_reading.changed_from = ""
+                return self._pending_reading
+            self._pending_reading = None
+            return None
 
         parts = [f"On branch {branch}"]
         if new_commits:
@@ -92,6 +98,7 @@ class GitSense(AbstractSense):
             changed_from=changed_from,
         )
         self._pending_reading = reading
+        self._pending_expires = time.monotonic() + 120.0
         return reading
 
     async def teardown(self) -> None:
