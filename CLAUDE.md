@@ -43,13 +43,14 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Pacing: dynamic cooldown (30-90s based on activity), max 8 comments/5min, forced 2-min silence after 3 consecutive, timing jitter. High-signal sense events (git) bypass the gate entirely
 - Freeform thoughts: 15% default, 30% for rich voices (50+ example lines), 45s min gap
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom, Calculator)
-- See `plans/commentary-finetune-master.md` for full commentary system design
+- Cross-session callbacks: `MemoryStore.get_pattern_callbacks()` detects behavioral patterns (day-of-week skew, first-app-per-session, streaks, startup rituals) from SQLite history. Daily aggregation runs on startup. Callbacks injected into observation prompts as factual one-liners the LLM riffs on. Sensitive apps excluded, results cached per session
+- See `plans/shipped/commentary-finetune.md` for full commentary system design
 
 ## UI
 - Default overlay: Textual (`tokenpal/ui/textual_overlay.py`). Console and tkinter overlays as fallbacks
 - Layout: horizontal split — buddy panel (left) with header/speech/buddy/input/status, scrollable chat log (right)
 - Chat log shows all buddy comments (observations + conversation) and user messages, with timestamps and voice/user labels separated by `──────` dividers
-- Status bar: `mood | server | voice | app | weather | music | spoke Xs ago` — mood is color-coded
+- Status bar: `mood | server | model | voice | app | weather | music | spoke Xs ago` — mood is color-coded
 - Keyboard shortcuts: F1=/help, F2=toggle chat log, Ctrl+L=/clear, Ctrl+C=quit
 - Typing animation on speech bubbles via `set_interval(0.03)`
 - Thread safety: brain→UI via typed `Message` subclasses + `post_message()`, never `call_from_thread`
