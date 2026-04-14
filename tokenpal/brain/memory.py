@@ -10,6 +10,7 @@ import stat
 import threading
 import time
 import uuid
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,7 @@ class MemoryStore:
         self._session_id = uuid.uuid4().hex[:8]
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
+        self._callback_cache: list[str] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -89,6 +91,7 @@ class MemoryStore:
             self._conn.executescript(_SCHEMA)
 
         self._prune()
+        self.aggregate_daily_summaries()
         log.info("MemoryStore ready — session %s, db at %s", self._session_id, self._db_path)
 
     def teardown(self) -> None:
@@ -236,3 +239,274 @@ class MemoryStore:
             self._conn.commit()
             if result.rowcount > 0:
                 log.info("Pruned %d old observations", result.rowcount)
+
+    # ------------------------------------------------------------------
+    # Daily aggregation
+    # ------------------------------------------------------------------
+
+    def aggregate_daily_summaries(self) -> None:
+        """Populate daily_summaries for all dates that are missing.
+
+        Called on startup — backfills historical dates, then ensures
+        yesterday is summarized.  Skips today (incomplete data).
+        """
+        if not self._enabled or not self._conn:
+            return
+
+        with self._lock:
+            # Find all dates with observations (excluding today)
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            rows = self._conn.execute(
+                "SELECT DISTINCT date(timestamp, 'unixepoch', 'localtime') as d "
+                "FROM observations WHERE d != ? ORDER BY d",
+                (today_str,),
+            ).fetchall()
+            obs_dates = {r[0] for r in rows}
+
+            # Find dates already summarized
+            existing = self._conn.execute(
+                "SELECT date FROM daily_summaries"
+            ).fetchall()
+            existing_dates = {r[0] for r in existing}
+
+            missing = obs_dates - existing_dates
+            if not missing:
+                return
+
+            log.info("Backfilling %d daily summaries", len(missing))
+            for date_str in sorted(missing):
+                self._aggregate_one_day(date_str)
+            self._conn.commit()
+
+    def _aggregate_one_day(self, date_str: str) -> None:
+        """Summarize a single day's observations into daily_summaries.
+
+        Must be called while holding self._lock.  Caller is responsible
+        for committing the transaction.
+        """
+        assert self._conn is not None
+
+        app_rows = self._conn.execute(
+            "SELECT summary, COUNT(*) as cnt FROM observations "
+            "WHERE event_type = 'app_switch' "
+            "AND date(timestamp, 'unixepoch', 'localtime') = ? "
+            "GROUP BY summary ORDER BY cnt DESC",
+            (date_str,),
+        ).fetchall()
+        top_apps = json.dumps({name: cnt for name, cnt in app_rows[:10]})
+
+        session_rows = self._conn.execute(
+            "SELECT session_id, MIN(timestamp), MAX(timestamp) "
+            "FROM observations "
+            "WHERE date(timestamp, 'unixepoch', 'localtime') = ? "
+            "GROUP BY session_id",
+            (date_str,),
+        ).fetchall()
+        total_active_min = int(
+            sum((end - start) / 60 for _, start, end in session_rows if end > start)
+        )
+
+        idle_rows = self._conn.execute(
+            "SELECT COUNT(*) FROM observations "
+            "WHERE event_type = 'idle_return' "
+            "AND date(timestamp, 'unixepoch', 'localtime') = ?",
+            (date_str,),
+        ).fetchone()
+        idle_count = idle_rows[0] if idle_rows else 0
+
+        app_summary = ", ".join(f"{n}({c})" for n, c in app_rows[:5])
+        summary = (
+            f"{len(session_rows)} sessions, {total_active_min}m active, "
+            f"{idle_count} idle returns. Top: {app_summary}"
+        )
+
+        self._conn.execute(
+            "INSERT OR REPLACE INTO daily_summaries "
+            "(date, summary, top_apps, total_active_minutes, total_idle_minutes) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (date_str, summary, top_apps, total_active_min, idle_count),
+        )
+
+    # ------------------------------------------------------------------
+    # Pattern detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_sensitive(app: str, exclude: set[str]) -> bool:
+        """Check if an app name matches the sensitive app exclusion list."""
+        app_lower = app.lower()
+        return any(s in app_lower for s in exclude)
+
+    def get_pattern_callbacks(
+        self,
+        max_callbacks: int = 3,
+        sensitive_apps: list[str] | None = None,
+    ) -> list[str]:
+        """Detect behavioral patterns and return natural-language callbacks.
+
+        Each callback is a factual observation — the LLM adds the humor.
+        Results are cached for the session (patterns don't change mid-session).
+        """
+        if not self._enabled or not self._conn:
+            return []
+
+        if self._callback_cache is not None:
+            return self._callback_cache
+
+        exclude = set(sensitive_apps or [])
+        callbacks: list[str] = []
+
+        callbacks.extend(self._detect_day_of_week_patterns(exclude))
+        callbacks.extend(self._detect_time_of_day_patterns(exclude))
+        callbacks.extend(self._detect_streaks(exclude))
+        callbacks.extend(self._detect_rituals(exclude))
+
+        self._callback_cache = callbacks[:max_callbacks]
+        log.debug("Pattern callbacks: %s", self._callback_cache)
+        return self._callback_cache
+
+    def _detect_day_of_week_patterns(self, exclude: set[str]) -> list[str]:
+        """Find apps used disproportionately on a specific weekday.
+
+        Looks for >=2x skew toward a single day with >=3 data points.
+        """
+        if not self._conn:
+            return []
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT summary, "
+                "CAST(strftime('%w', timestamp, 'unixepoch', 'localtime') AS INTEGER) as dow, "
+                "COUNT(*) as cnt "
+                "FROM observations WHERE event_type = 'app_switch' "
+                "GROUP BY summary, dow"
+            ).fetchall()
+
+        app_dow: dict[str, dict[int, int]] = {}
+        for app, dow, cnt in rows:
+            if self._is_sensitive(app, exclude):
+                continue
+            app_dow.setdefault(app, {})[dow] = cnt
+
+        day_names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        callbacks: list[str] = []
+
+        for app, dow_counts in app_dow.items():
+            total = sum(dow_counts.values())
+            if total < 6:
+                continue
+            for dow, cnt in dow_counts.items():
+                expected = total / 7
+                if cnt >= 3 and cnt >= expected * 2:
+                    callbacks.append(
+                        f"You use {app} on {day_names[dow]}s more than any other day "
+                        f"({cnt} of your {total} visits)"
+                    )
+
+        return callbacks[:1]
+
+    def _detect_time_of_day_patterns(self, exclude: set[str]) -> list[str]:
+        """Find the app you consistently open first each session."""
+        if not self._conn:
+            return []
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT o.session_id, o.summary, o.timestamp FROM observations o "
+                "INNER JOIN ("
+                "  SELECT session_id, MIN(timestamp) as first_ts "
+                "  FROM observations WHERE event_type = 'app_switch' "
+                "  GROUP BY session_id"
+                ") f ON o.session_id = f.session_id AND o.timestamp = f.first_ts "
+                "WHERE o.event_type = 'app_switch'"
+            ).fetchall()
+
+        if len(rows) < 3:
+            return []
+
+        first_apps = Counter(
+            app for _, app, _ in rows
+            if not self._is_sensitive(app, exclude)
+        )
+        if not first_apps:
+            return []
+
+        top_app, top_count = first_apps.most_common(1)[0]
+        if top_count >= 3 and top_count / len(rows) >= 0.4:
+            return [
+                f"You open {top_app} first in {top_count} of your last "
+                f"{len(rows)} sessions"
+            ]
+        return []
+
+    def _detect_streaks(self, exclude: set[str]) -> list[str]:
+        """Find apps used on consecutive days."""
+        if not self._conn:
+            return []
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT summary, date(timestamp, 'unixepoch', 'localtime') as d "
+                "FROM observations WHERE event_type = 'app_switch' "
+                "ORDER BY summary, d"
+            ).fetchall()
+
+        app_dates: dict[str, list[datetime]] = {}
+        for app, d in rows:
+            if self._is_sensitive(app, exclude):
+                continue
+            app_dates.setdefault(app, []).append(
+                datetime.strptime(d, "%Y-%m-%d")
+            )
+
+        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        best_callback = ""
+        best_streak = 0
+
+        for app, dates in app_dates.items():
+            unique_dates = sorted(set(dates))
+            streak = 1
+            for i in range(len(unique_dates) - 1, 0, -1):
+                if (unique_dates[i] - unique_dates[i - 1]).days == 1:
+                    streak += 1
+                else:
+                    break
+
+            last_date = unique_dates[-1]
+            if streak >= 3 and (today - last_date).days <= 1 and streak > best_streak:
+                best_streak = streak
+                best_callback = f"{app} streak: {streak} consecutive days"
+
+        return [best_callback] if best_callback else []
+
+    def _detect_rituals(self, exclude: set[str]) -> list[str]:
+        """Find recurring app sequences in the first few minutes of sessions."""
+        if not self._conn:
+            return []
+
+        with self._lock:
+            # Use window function to get only the first 3 app switches per session
+            rows = self._conn.execute(
+                "SELECT session_id, summary FROM ("
+                "  SELECT session_id, summary, "
+                "    ROW_NUMBER() OVER (PARTITION BY session_id ORDER BY timestamp) as rn "
+                "  FROM observations WHERE event_type = 'app_switch'"
+                ") WHERE rn <= 3"
+            ).fetchall()
+
+        sessions: dict[str, list[str]] = {}
+        for sid, app in rows:
+            if self._is_sensitive(app, exclude):
+                continue
+            sessions.setdefault(sid, []).append(app)
+
+        sequences = [tuple(apps) for apps in sessions.values() if len(apps) >= 3]
+        if len(sequences) < 3:
+            return []
+
+        seq_counts = Counter(sequences)
+        top_seq, top_count = seq_counts.most_common(1)[0]
+        if top_count >= 3:
+            chain = " \u2192 ".join(top_seq)
+            return [f"Your usual startup sequence: {chain} ({top_count} sessions)"]
+        return []

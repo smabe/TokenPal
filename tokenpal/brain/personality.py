@@ -246,6 +246,8 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." — boring.
 
 {memory_block}
 
+{callbacks_block}
+
 What you see right now:
 {context}
 
@@ -309,6 +311,8 @@ Rules:
 {session_notes}
 
 {memory_block}
+
+{callbacks_block}
 
 What you see right now:
 {context}
@@ -562,10 +566,12 @@ class PersonalityEngine:
         return self._consecutive_snarky >= 3
 
     def build_prompt(
-        self, context_snapshot: str, memory_lines: list[str] | None = None
+        self,
+        context_snapshot: str,
+        memory_lines: list[str] | None = None,
+        callback_lines: list[str] | None = None,
     ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
-        # Mood line
         mood_line = self._mood_line()
 
         # Late-night tone shift (guardrail §5)
@@ -573,10 +579,8 @@ class PersonalityEngine:
         if now.hour >= 0 and now.hour < 5 and self._mood != Mood.CONCERNED:
             mood_line = "Your current mood: MILDLY SUPPORTIVE. It's late. Be less snarky, more solidarity."
 
-        # Build session notes from running gags
         session_notes = self._build_session_notes()
 
-        # Build memory block from persistent history
         if memory_lines:
             mem_block = "What you remember from before:\n" + "\n".join(
                 f"- {line}" for line in memory_lines
@@ -584,12 +588,19 @@ class PersonalityEngine:
         else:
             mem_block = ""
 
-        # Fine-tuned models carry the voice — use a simpler prompt
+        if callback_lines:
+            cb_block = "Patterns you've noticed about this user:\n" + "\n".join(
+                f"- {line}" for line in callback_lines
+            )
+        else:
+            cb_block = ""
+
         if self.is_finetuned:
             return _FINETUNED_OBSERVE_TEMPLATE.format(
                 mood_line=mood_line,
                 session_notes=session_notes,
                 memory_block=mem_block,
+                callbacks_block=cb_block,
                 context=context_snapshot,
                 recent_comments_block=self._recent_comments_block(),
             )
@@ -602,6 +613,7 @@ class PersonalityEngine:
             context=context_snapshot,
             session_notes=session_notes,
             memory_block=mem_block,
+            callbacks_block=cb_block,
             recent_comments_block=self._recent_comments_block(),
             voice_reminder=self._voice_reminder(),
         )

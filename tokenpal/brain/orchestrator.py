@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
-from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.brain.personality import _SENSITIVE_APPS, PersonalityEngine
 from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -500,9 +500,16 @@ class Brain:
         snapshot = self._apply_topic_focus(snapshot, topic)
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None
+        callback_lines = (
+            self._memory.get_pattern_callbacks(sensitive_apps=_SENSITIVE_APPS)
+            if self._memory
+            else None
+        )
         if memory_lines:
             log.debug("Memory: %s", " | ".join(memory_lines))
-        prompt = self._personality.build_prompt(snapshot, memory_lines=memory_lines)
+        prompt = self._personality.build_prompt(
+            snapshot, memory_lines=memory_lines, callback_lines=callback_lines,
+        )
 
         try:
             if self._status_callback:
