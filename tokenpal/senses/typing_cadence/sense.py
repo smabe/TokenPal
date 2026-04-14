@@ -26,11 +26,12 @@ log = logging.getLogger(__name__)
 
 Bucket = Literal["idle", "slow", "normal", "rapid", "furious"]
 
-_WINDOW_S = 15.0            # rolling window for WPM computation
+_WINDOW_S = 30.0            # rolling window for WPM computation (wider = less flapping)
 _SUSTAINED_BURST_S = 600.0  # 10 min of continuous rapid/furious → one-off reading
 _POST_BURST_SILENCE_S = 8.0 # stop detection: idle this long after a burst
 _FAST_WPM = 50.0            # threshold that defines a "fast" bucket
 _LOW_CONF_WPM = 50.0        # below here, bucket-change readings are low-confidence
+_HYSTERESIS_POLLS = 2       # require N consecutive polls in a new bucket before committing
 
 # WPM bucket thresholds. Standard: 1 word ≈ 5 keypresses.
 _BUCKETS: tuple[tuple[Bucket, float], ...] = (
@@ -72,6 +73,8 @@ class TypingCadence(AbstractSense):
         self._last_press: float = 0.0
 
         self._current_bucket: Bucket = "idle"
+        self._pending_bucket: Bucket = "idle"
+        self._pending_streak: int = 0
         self._fast_since: float = 0.0       # when current fast run began (0 = not fast)
         self._sustained_emitted: bool = False
         # post_burst_silence only fires once per burst — requires a burst to
@@ -105,8 +108,22 @@ class TypingCadence(AbstractSense):
 
         now = time.monotonic()
         wpm = self._current_wpm(now)
-        bucket = _bucket_for(wpm)
+        observed = _bucket_for(wpm)
         prev = self._current_bucket
+
+        # Hysteresis: require the observed bucket to persist before transitioning.
+        # Returning to the current bucket resets the pending streak immediately.
+        if observed == prev:
+            self._pending_bucket = prev
+            self._pending_streak = 0
+            bucket = prev
+        else:
+            if observed == self._pending_bucket:
+                self._pending_streak += 1
+            else:
+                self._pending_bucket = observed
+                self._pending_streak = 1
+            bucket = observed if self._pending_streak >= _HYSTERESIS_POLLS else prev
 
         # Sustained-burst reading: 10 minutes of rapid/furious without a break.
         if _is_fast(bucket):
