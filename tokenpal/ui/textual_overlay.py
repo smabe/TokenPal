@@ -64,6 +64,10 @@ class ClearLog(Message):
     pass
 
 
+class ToggleChatLog(Message):
+    pass
+
+
 class RunCallback(Message):
     def __init__(self, callback: Callable[[], None], delay_ms: int = 0) -> None:
         self.callback = callback
@@ -261,6 +265,7 @@ class TokenPalApp(App[None]):
     BINDINGS = [
         Binding("ctrl+c", "quit", "Quit", show=False),
         Binding("f1", "command_help", "Help", show=False),
+        Binding("f2", "toggle_chat_log", "Toggle chat log", show=False),
         Binding("ctrl+l", "command_clear", "Clear", show=False),
     ]
 
@@ -298,6 +303,10 @@ class TokenPalApp(App[None]):
     def action_command_clear(self) -> None:
         if self._overlay._command_callback:
             self._overlay._command_callback("/clear")
+
+    def action_toggle_chat_log(self) -> None:
+        chat_log = self.query_one("#chat-log", VerticalScroll)
+        chat_log.display = not chat_log.display
 
     # --- Input handling ---
 
@@ -363,6 +372,9 @@ class TokenPalApp(App[None]):
     def on_clear_log(self, _message: ClearLog) -> None:
         self.query_one("#chat-log-content", Static).update("")
 
+    def on_toggle_chat_log(self, _message: ToggleChatLog) -> None:
+        self.action_toggle_chat_log()
+
     def on_run_callback(self, message: RunCallback) -> None:
         if message.delay_ms <= 0:
             message.callback()
@@ -427,6 +439,9 @@ class TextualOverlay(AbstractOverlay):
 
     def clear_log(self) -> None:
         self._post(ClearLog())
+
+    def toggle_chat_log(self) -> None:
+        self._post(ToggleChatLog())
 
     def set_input_callback(self, callback: Callable[[str], None]) -> None:
         self._input_callback = callback

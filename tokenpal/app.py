@@ -235,8 +235,13 @@ def main() -> None:
     def _cmd_zip(args: str) -> CommandResult:
         return _handle_zip_command(args)
 
+    def _cmd_chatlog(_args: str) -> CommandResult:
+        overlay.schedule_callback(overlay.toggle_chat_log)
+        return CommandResult("")
+
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
+    dispatcher.register("chatlog", _cmd_chatlog)
     dispatcher.register("mood", _cmd_mood)
     dispatcher.register("status", _cmd_status)
     dispatcher.register("model", _cmd_model)
