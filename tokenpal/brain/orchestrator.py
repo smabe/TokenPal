@@ -787,6 +787,7 @@ class Brain:
         parts = [mood]
         if server_label:
             parts.append(server_label)
+        parts.append(self._llm.model_name)
         if voice:
             parts.append(voice)
         if app_label:
