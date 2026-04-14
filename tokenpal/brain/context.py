@@ -22,6 +22,7 @@ _SENSE_WEIGHTS: dict[str, float] = {
     "productivity": 0.1,
     "music": 0.2,
     "weather": 0.0,  # never triggers alone, enriches context only
+    "git": 0.8,      # commits and branch switches are high-signal events
 }
 _DEFAULT_WEIGHT = 0.5
 
