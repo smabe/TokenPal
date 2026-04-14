@@ -220,7 +220,12 @@ class Brain:
                     )
                     self._conversation = None
 
-                if self._should_comment():
+                # High-signal events bypass the normal gate
+                has_urgent = any(
+                    r.sense_name == "git" and r.changed_from
+                    for r in readings
+                )
+                if has_urgent or self._should_comment():
                     await self._generate_comment(snapshot)
                 elif self._should_freeform():
                     await self._generate_freeform_comment()
