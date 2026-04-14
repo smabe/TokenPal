@@ -26,12 +26,20 @@ class SensesConfig:
     network_state: bool = False
     process_heat: bool = False
     typing_cadence: bool = False
+    filesystem_pulse: bool = False
 
 
 @dataclass
 class NetworkStateConfig:
     # Map sha256[:16] SSID hash -> friendly label. Raw SSIDs never stored here.
     ssid_labels: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class FilesystemPulseConfig:
+    # Absolute paths to watch for activity bursts. Empty = use platform defaults
+    # (Downloads, Desktop, Documents). Managed via the /watch slash command.
+    roots: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -176,3 +184,4 @@ class TokenPalConfig:
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
     network_state: NetworkStateConfig = field(default_factory=NetworkStateConfig)
+    filesystem_pulse: FilesystemPulseConfig = field(default_factory=FilesystemPulseConfig)

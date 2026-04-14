@@ -98,10 +98,12 @@ Bundled:
 - Decide A/B/C (recommend B - inline into idle)
 - Implement, test, ship
 
-**Session 2 - filesystem_pulse:**
-- Research pass: watchdog vs. poll; default excludes; root-configuration UX
-- Plan a first-run wizard step or `/watch add <path>` slash command
-- Implement, test, ship
+**Session 2 - filesystem_pulse (V1 shipped):**
+- watchdog-based, recursive, per-root burst detection (5 events / 30s with 60s per-root cooldown)
+- Default roots: `~/Downloads`, `~/Desktop`, `~/Documents` via `Path.home()`
+- `/watch list|add|remove` slash command
+- Privacy: leaf dir names only, never full paths
+- V2 follow-ups (deferred): dir-switch transitions, dormancy readings ("haven't touched X in Y hrs"), alias map for sensitive paths, `.gitignore` respect
 
 **Session 3 - calendar:**
 - Research pass: `.ics` URL flow, add `[calendar] ics_url` config, wizard/slash-cmd to set it

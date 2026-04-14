@@ -16,6 +16,7 @@ battery = false              # plug/unplug transitions, low-battery warnings (no
 network_state = false        # online/offline, wifi changes, VPN up/down (SSID hashed, never emitted raw)
 process_heat = false         # names the top CPU hog when the machine is pinned over 80% for 20s
 typing_cadence = false       # WPM bursts and post-burst silence (counts keypresses only, never key values)
+filesystem_pulse = false     # activity bursts in watched folders (default: Downloads, Desktop, Documents)
 
 [llm]
 backend = "http"

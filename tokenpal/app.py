@@ -22,7 +22,12 @@ from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
-from tokenpal.config.senses_writer import set_sense_enabled, set_ssid_label
+from tokenpal.config.senses_writer import (
+    add_watch_root,
+    remove_watch_root,
+    set_sense_enabled,
+    set_ssid_label,
+)
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
@@ -88,6 +93,7 @@ def main() -> None:
         sense_configs["productivity"] = {"memory_store": memory}
     sense_configs["weather"] = dataclasses.asdict(config.weather)
     sense_configs["network_state"] = dataclasses.asdict(config.network_state)
+    sense_configs["filesystem_pulse"] = dataclasses.asdict(config.filesystem_pulse)
     senses = resolve_senses(
         sense_flags=sense_flags,
         sense_overrides=config.plugins.sense_overrides,
@@ -424,6 +430,44 @@ def main() -> None:
         threading.Thread(target=_run_wifi, daemon=True, name="wifi-cmd").start()
         return CommandResult(f"Labeling current wifi as '{label}'...")
 
+    def _cmd_watch(args: str) -> CommandResult:
+        from tokenpal.config.paths import default_watch_roots
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+        target = parts[1].strip() if len(parts) > 1 else ""
+
+        configured = [Path(r).expanduser() for r in config.filesystem_pulse.roots]
+        effective = configured if configured else default_watch_roots()
+
+        if subcmd in ("", "list"):
+            source = "config.toml" if configured else "defaults"
+            rows = [f"  {p}" for p in effective] or ["  (none)"]
+            return CommandResult(
+                f"Watch roots ({source}):\n" + "\n".join(rows)
+            )
+
+        if subcmd in ("add", "remove"):
+            if not target:
+                return CommandResult(f"Usage: /watch {subcmd} <path>")
+            abs_path = str(Path(target).expanduser().resolve())
+            if subcmd == "add" and not Path(abs_path).is_dir():
+                return CommandResult(f"/watch: not a directory: {abs_path}")
+            try:
+                path = add_watch_root(abs_path) if subcmd == "add" else remove_watch_root(abs_path)
+            except OSError as e:
+                return CommandResult(f"/watch: could not write config: {e}")
+            verb = "added" if subcmd == "add" else "removed"
+            hint = "" if config.senses.filesystem_pulse else (
+                " (also run /senses enable filesystem_pulse to turn the sense on)"
+            )
+            return CommandResult(
+                f"{verb} {abs_path} in {path.name}. "
+                f"Restart TokenPal to apply.{hint}"
+            )
+
+        return CommandResult("Usage: /watch [list|add <path>|remove <path>]")
+
     def _cmd_math(args: str) -> CommandResult:
         expr = args.strip()
         if not expr:
@@ -444,6 +488,7 @@ def main() -> None:
     dispatcher.register("math", _cmd_math)
     dispatcher.register("senses", _cmd_senses)
     dispatcher.register("wifi", _cmd_wifi)
+    dispatcher.register("watch", _cmd_watch)
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("chatlog", _cmd_chatlog)

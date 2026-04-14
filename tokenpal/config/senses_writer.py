@@ -35,3 +35,25 @@ def set_ssid_label(ssid_hash: str, label: str) -> Path:
         labels[ssid_hash] = label
 
     return update_config(mutate)
+
+
+def add_watch_root(path: str) -> Path:
+    """Append *path* to [filesystem_pulse] roots (no-op if already present)."""
+    def mutate(data: dict[str, Any]) -> None:
+        section = data.setdefault("filesystem_pulse", {})
+        roots = section.setdefault("roots", [])
+        if path not in roots:
+            roots.append(path)
+
+    return update_config(mutate)
+
+
+def remove_watch_root(path: str) -> Path:
+    """Remove *path* from [filesystem_pulse] roots (no-op if absent)."""
+    def mutate(data: dict[str, Any]) -> None:
+        section = data.setdefault("filesystem_pulse", {})
+        roots = section.setdefault("roots", [])
+        if path in roots:
+            roots.remove(path)
+
+    return update_config(mutate)

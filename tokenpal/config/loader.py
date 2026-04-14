@@ -12,6 +12,7 @@ from tokenpal.config.schema import (
     ActionsConfig,
     BrainConfig,
     ConversationConfig,
+    FilesystemPulseConfig,
     FinetuneConfig,
     LLMConfig,
     MemoryConfig,
@@ -50,6 +51,7 @@ _SECTION_MAP: dict[str, type] = {
     "network_state": NetworkStateConfig,
     "web_search": WebSearchConfig,
     "conversation": ConversationConfig,
+    "filesystem_pulse": FilesystemPulseConfig,
 }
 
 
