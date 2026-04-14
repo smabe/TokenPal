@@ -251,6 +251,8 @@ def _generate_ascii_art(
         f'- Each frame EXACTLY 10 lines tall, 20-24 characters wide '
         f'(not counting markup tags)\n'
         f'- Use Rich markup: [#ff6600]text[/], [bold #00ccff]text[/]\n'
+        f'- Colors MUST be hex codes like #ff6600. Do NOT use named '
+        f'colors (silver, gray, red, etc) — they crash the renderer\n'
         f'- Use 2-3 colors that match the character (hair, outfit, etc)\n'
         f'- Build the FULL body: head, face, torso, arms, legs\n'
         f'- Use half-block chars ▄▀ for curves, █░▓▒ for fills, '

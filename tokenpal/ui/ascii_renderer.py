@@ -54,10 +54,46 @@ BUDDY_SURPRISED = [
 # LLM-generated art sometimes uses [#namedcolor] which Textual rejects.
 _NAMED_COLOR_RE = re.compile(r"\[#(?![0-9a-fA-F]{6}\])([a-zA-Z]\w*)\]")
 
+# Rich accepts these CSS color names but Textual's Style.from_rich_style
+# rejects them with MissingStyle. Remap to hex so both renderers work.
+RICH_ONLY_COLOR_HEX: dict[str, str] = {
+    "silver": "#c0c0c0",
+    "gray": "#808080",
+    "grey": "#808080",
+    "darkgray": "#505050",
+    "darkgrey": "#505050",
+    "lightgray": "#d3d3d3",
+    "lightgrey": "#d3d3d3",
+    "gold": "#ffd700",
+    "orange": "#ffa500",
+    "pink": "#ffc0cb",
+    "purple": "#800080",
+    "brown": "#a52a2a",
+    "navy": "#000080",
+    "teal": "#008080",
+    "olive": "#808000",
+    "maroon": "#800000",
+    "lime": "#00ff00",
+    "aqua": "#00ffff",
+    "fuchsia": "#ff00ff",
+}
+
+_TAG_RE = re.compile(r"\[([^\[\]/][^\[\]]*)\]")
+
+
+def _remap_rich_only_names(line: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        tokens = [RICH_ONLY_COLOR_HEX.get(tok.lower(), tok) for tok in inner.split()]
+        return "[" + " ".join(tokens) + "]"
+
+    return _TAG_RE.sub(repl, line)
+
 
 def _fix_markup(lines: list[str]) -> list[str]:
     """Fix LLM-generated Rich markup for Textual compatibility."""
-    return [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in lines]
+    out = [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in lines]
+    return [_remap_rich_only_names(line) for line in out]
 
 
 FRAMES: dict[str, list[str]] = {
