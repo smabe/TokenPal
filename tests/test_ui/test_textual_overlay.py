@@ -79,7 +79,7 @@ async def test_speech_bubble_typing_completes(app: TokenPalApp) -> None:
         await asyncio.sleep(0.15)
         await pilot.pause()
 
-        assert "Hi" in speech.render().plain
+        assert "Hi" in speech._body.render().plain
 
 
 async def test_speech_bubble_hide_via_message(app: TokenPalApp) -> None:

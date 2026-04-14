@@ -8,9 +8,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
+from textual.events import Resize
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, Static
@@ -22,6 +24,8 @@ from tokenpal.ui.registry import register_overlay
 log = logging.getLogger(__name__)
 
 _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
+_BUDDY_PANEL_PADDING = 4
+_CHAT_LOG_MIN_SPACE = 30
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -113,16 +117,20 @@ class HeaderWidget(Static):
         self.update(f"{'─' * pad}{label}{'─' * pad}")
 
 
-class SpeechBubbleWidget(Static):
-    """Speech bubble with typing animation."""
+class SpeechBubbleWidget(VerticalScroll):
+    """Scrollable speech bubble with typing animation."""
 
     def __init__(self) -> None:
-        super().__init__(id="speech")
+        super().__init__(id="speech-scroll")
+        self._body: Static = Static(id="speech")
         self._full_text: str = ""
         self._bubble: SpeechBubble | None = None
         self._typing_index: int = 0
         self._typing_timer: Timer | None = None
         self._hide_timer: Timer | None = None
+
+    def compose(self) -> ComposeResult:
+        yield self._body
 
     def start_typing(self, bubble: SpeechBubble) -> None:
         self._cancel_timers()
@@ -152,7 +160,8 @@ class SpeechBubbleWidget(Static):
             style=self._bubble.style,
             max_width=self._bubble.max_width,
         )
-        self.update("\n".join(partial.render()))
+        self._body.update("\n".join(partial.render()))
+        self.scroll_end(animate=False)
 
     def _start_auto_hide(self) -> None:
         if self._bubble and self._bubble.persistent:
@@ -185,12 +194,14 @@ class BuddyWidget(Static):
         super().__init__(id="buddy", markup=True)
         self._custom_frames: dict[str, BuddyFrame] = {}
         self._blink_timer: Timer | None = None
-        self._blink_state: bool = False  # False=idle, True=idle_alt
+        self._blink_state: bool = False
         self._is_talking: bool = False
+        self._cached_max_width: int = self._compute_max_frame_width()
 
     def set_custom_frames(self, frames: dict[str, BuddyFrame]) -> None:
         """Load voice-specific frames and start idle blink if idle_alt exists."""
         self._custom_frames = frames
+        self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
         if "idle_alt" in frames and "idle" in frames:
             self._blink_timer = self.set_interval(4.0, self._toggle_blink)
@@ -200,6 +211,7 @@ class BuddyWidget(Static):
     def clear_custom_frames(self) -> None:
         """Revert to generic frames."""
         self._custom_frames = {}
+        self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
         self.show_frame(BuddyFrame.get("idle"))
 
@@ -207,7 +219,13 @@ class BuddyWidget(Static):
         self._is_talking = frame.name == "talking"
         if self._is_talking:
             self._blink_state = False
-        self.update("\n".join(frame.lines))
+        self.update(self._render_frame(frame))
+
+    def _render_frame(self, frame: BuddyFrame) -> Text:
+        text = Text.from_markup("\n".join(frame.lines))
+        text.no_wrap = True
+        text.overflow = "crop"
+        return text
 
     def _get_frame(self, name: str) -> BuddyFrame:
         if name in self._custom_frames:
@@ -220,7 +238,22 @@ class BuddyWidget(Static):
         self._blink_state = not self._blink_state
         name = "idle_alt" if self._blink_state else "idle"
         frame = self._get_frame(name)
-        self.update("\n".join(frame.lines))
+        self.update(self._render_frame(frame))
+
+    def max_frame_width(self) -> int:
+        return self._cached_max_width
+
+    def _compute_max_frame_width(self) -> int:
+        frames = self._custom_frames or {
+            "idle": BuddyFrame.get("idle"),
+            "talking": BuddyFrame.get("talking"),
+        }
+        widths = [
+            Text.from_markup(line).cell_len
+            for frame in frames.values()
+            for line in frame.lines
+        ]
+        return max(widths, default=20)
 
     def _stop_blink(self) -> None:
         if self._blink_timer:
@@ -273,6 +306,7 @@ class TokenPalApp(App[None]):
     def __init__(self, overlay: TextualOverlay) -> None:
         super().__init__()
         self._overlay = overlay
+        self._chat_log_user_hidden: bool = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -293,7 +327,21 @@ class TokenPalApp(App[None]):
             self._overlay._pending_voice_frames = None
         else:
             buddy.show_frame(BuddyFrame.get("idle"))
+        self._apply_buddy_panel_min_width()
         log.info("TextualOverlay ready")
+
+    def _apply_buddy_panel_min_width(self) -> None:
+        buddy = self.query_one(BuddyWidget)
+        panel = self.query_one("#buddy-panel", Vertical)
+        panel.styles.min_width = buddy.max_frame_width() + _BUDDY_PANEL_PADDING
+
+    def on_resize(self, _event: Resize) -> None:
+        if self._chat_log_user_hidden:
+            return
+        buddy = self.query_one(BuddyWidget)
+        threshold = buddy.max_frame_width() + _BUDDY_PANEL_PADDING + _CHAT_LOG_MIN_SPACE
+        chat_log = self.query_one("#chat-log", VerticalScroll)
+        chat_log.display = self.size.width >= threshold
 
     # --- Keyboard shortcuts ---
 
@@ -308,6 +356,7 @@ class TokenPalApp(App[None]):
     def action_toggle_chat_log(self) -> None:
         chat_log = self.query_one("#chat-log", VerticalScroll)
         chat_log.display = not chat_log.display
+        self._chat_log_user_hidden = not chat_log.display
 
     # --- Input handling ---
 
@@ -361,9 +410,11 @@ class TokenPalApp(App[None]):
 
     def on_load_voice_frames(self, message: LoadVoiceFrames) -> None:
         self.query_one(BuddyWidget).set_custom_frames(message.frames)
+        self._apply_buddy_panel_min_width()
 
     def on_clear_voice_frames(self, _message: ClearVoiceFrames) -> None:
         self.query_one(BuddyWidget).clear_custom_frames()
+        self._apply_buddy_panel_min_width()
 
     def on_update_status(self, message: UpdateStatus) -> None:
         self.query_one(StatusBarWidget).set_text(message.text)

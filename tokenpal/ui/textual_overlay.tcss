@@ -20,13 +20,18 @@ Screen {
     height: 1fr;
 }
 
-#speech {
+#speech-scroll {
     height: auto;
     max-height: 50%;
+    padding: 0 2;
+    scrollbar-size: 1 1;
+    display: none;
+}
+
+#speech {
+    height: auto;
     content-align: center middle;
     color: #dcdcdc;
-    padding: 0 2;
-    display: none;
 }
 
 #buddy {
@@ -34,6 +39,7 @@ Screen {
     content-align: center middle;
     color: #00ff88;
     padding: 1 0;
+    overflow-x: hidden;
 }
 
 #user-input {
