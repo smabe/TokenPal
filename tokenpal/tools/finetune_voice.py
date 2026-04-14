@@ -335,7 +335,7 @@ def export_gguf(
     log.info("Converting to GGUF (quantization: %s)...", quantization)
     result = subprocess.run(
         [
-            "python3", "-m", "llama_cpp.convert",
+            sys.executable, "-m", "llama_cpp.convert",
             str(merged_dir),
             "--outfile", str(output_path),
             "--outtype", quantization,
@@ -346,7 +346,7 @@ def export_gguf(
         # Fallback: try llama.cpp convert_hf_to_gguf.py if available
         result = subprocess.run(
             [
-                "python3", "convert_hf_to_gguf.py",
+                sys.executable, "convert_hf_to_gguf.py",
                 str(merged_dir),
                 "--outfile", str(output_path),
                 "--outtype", quantization,

@@ -9,6 +9,7 @@ import re
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -194,11 +195,10 @@ def main() -> None:
         prev_voice = personality.voice_name
         result = _handle_voice_command(
             args, personality, data_dir / "voices", overlay, brain,
-            llm, config,
+            llm, config, on_voice_loaded=_load_voice_art,
         )
         if personality.voice_name != prev_voice:
             brain.reset_conversation()
-            _load_voice_art()
         return result
 
     def _cmd_server(args: str) -> CommandResult:
@@ -468,6 +468,7 @@ def _handle_voice_command(
     brain: Brain | None = None,
     llm: AbstractLLMBackend | None = None,
     config: TokenPalConfig | None = None,
+    on_voice_loaded: Callable[[], None] | None = None,
 ) -> CommandResult:
     """Handle /voice subcommands."""
     from tokenpal.tools.voice_profile import list_profiles, load_profile
@@ -507,6 +508,8 @@ def _handle_voice_command(
             slug = slugify(subargs)
             profile = load_profile(slug, voices_dir)
             personality.set_voice(profile)
+            if on_voice_loaded:
+                on_voice_loaded()
             if profile.finetuned_model and llm:
                 llm.set_model(profile.finetuned_model)
             elif llm and config:
@@ -518,7 +521,8 @@ def _handle_voice_command(
 
     if subcmd == "train":
         return _start_voice_training(
-            subargs, personality, voices_dir, overlay, brain
+            subargs, personality, voices_dir, overlay, brain,
+            on_voice_loaded=on_voice_loaded,
         )
 
     if subcmd == "finetune":
@@ -538,6 +542,7 @@ def _handle_voice_command(
     if subcmd == "regenerate":
         return _start_voice_regenerate(
             subargs, personality, voices_dir, overlay,
+            on_voice_loaded=on_voice_loaded,
         )
 
     return CommandResult(
@@ -565,6 +570,7 @@ def _start_voice_training(
     voices_dir: Path,
     overlay: AbstractOverlay,
     brain: Brain | None = None,
+    on_voice_loaded: Callable[[], None] | None = None,
 ) -> CommandResult:
     """Kick off wiki voice training in a background thread."""
     parts = args.split(maxsplit=1)
@@ -593,6 +599,8 @@ def _start_voice_training(
                 return
 
             personality.set_voice(profile)
+            if on_voice_loaded:
+                overlay.schedule_callback(on_voice_loaded)
             _overlay_show(overlay, f"I'm {character} now! ({len(profile.lines)} lines)")
             log.info(
                 "Voice trained: %s from %s (%d lines)",
@@ -622,6 +630,7 @@ def _start_voice_regenerate(
     personality: PersonalityEngine,
     voices_dir: Path,
     overlay: AbstractOverlay,
+    on_voice_loaded: Callable[[], None] | None = None,
 ) -> CommandResult:
     """Regenerate persona for existing voice profiles."""
     from tokenpal.tools.voice_profile import list_profiles, load_profile, slugify
@@ -670,6 +679,8 @@ def _start_voice_regenerate(
             if current in slugs:
                 profile = load_profile(current, voices_dir)
                 personality.set_voice(profile)
+                if on_voice_loaded:
+                    overlay.schedule_callback(on_voice_loaded)
         except Exception:
             log.exception("Voice regeneration failed")
             _overlay_show(overlay, "Regeneration failed. Check logs.")

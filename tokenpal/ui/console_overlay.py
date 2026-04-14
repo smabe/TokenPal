@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import atexit
 import logging
-import select
 import shutil
 import sys
 import threading
 import time
-import tty
 from collections.abc import Callable
 from typing import Any
 
@@ -31,12 +29,21 @@ _SHOW_CURSOR = "\033[?25h"
 # Typing animation speed (seconds per character)
 _TYPING_SPEED = 0.03
 
-# Try to import termios (Unix only)
+# Try to import Unix-only terminal modules
 try:
+    import select
     import termios
+    import tty
     _HAS_TERMIOS = True
 except ImportError:
     _HAS_TERMIOS = False
+
+# Try to import msvcrt (Windows only)
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except ImportError:
+    _HAS_MSVCRT = False
 
 
 @register_overlay
@@ -212,33 +219,42 @@ class ConsoleOverlay(AbstractOverlay):
         self._typing_active = False
         self._render()
 
-    def _poll_input(self) -> None:
-        """Non-blocking stdin read. Processes one character per call."""
-        if not _HAS_TERMIOS or not sys.stdin.isatty():
-            return
-
-        ready, _, _ = select.select([sys.stdin], [], [], 0)
-        if not ready:
-            return
-
-        ch = sys.stdin.read(1)
-
-        if ch == "\r" or ch == "\n":
+    def _handle_char(self, ch: str) -> None:
+        """Process a single input character (shared across platforms)."""
+        if ch in ("\r", "\n"):
             self._on_submit()
-        elif ch in ("\x7f", "\x08"):  # Backspace
+        elif ch in ("\x7f", "\x08"):  # Backspace (DEL on Unix, BS on Windows)
             if self._input_buffer:
                 self._input_buffer = self._input_buffer[:-1]
                 self._render_dirty = True
-        elif ch == "\x1b":
-            # Escape sequence — drain all trailing bytes (variable length)
-            while True:
-                trail, _, _ = select.select([sys.stdin], [], [], 0.01)
-                if not trail:
-                    break
-                sys.stdin.read(1)
         elif ch.isprintable():
             self._input_buffer += ch
             self._render_dirty = True
+
+    def _poll_input(self) -> None:
+        """Non-blocking stdin read. Processes one character per call."""
+        if _HAS_TERMIOS and sys.stdin.isatty():
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if not ready:
+                return
+
+            ch = sys.stdin.read(1)
+
+            if ch == "\x1b":
+                # Escape sequence — drain all trailing bytes (variable length)
+                while True:
+                    trail, _, _ = select.select([sys.stdin], [], [], 0.01)
+                    if not trail:
+                        break
+                    sys.stdin.read(1)
+            else:
+                self._handle_char(ch)
+        elif _HAS_MSVCRT:
+            if not msvcrt.kbhit():
+                return
+            ch = msvcrt.getwch()
+            if ch.isprintable() or ch in ("\r", "\n", "\x08"):
+                self._handle_char(ch)
 
     def _on_submit(self) -> None:
         """Handle Enter key — dispatch command or send to brain."""

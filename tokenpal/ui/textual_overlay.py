@@ -263,10 +263,10 @@ class TokenPalApp(App[None]):
 
     CSS_PATH = str(_CSS_PATH)
     BINDINGS = [
-        Binding("ctrl+c", "quit", "Quit", show=False),
-        Binding("f1", "command_help", "Help", show=False),
-        Binding("f2", "toggle_chat_log", "Toggle chat log", show=False),
-        Binding("ctrl+l", "command_clear", "Clear", show=False),
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+        Binding("f1", "command_help", "Help", show=False, priority=True),
+        Binding("f2", "toggle_chat_log", "Toggle chat log", show=False, priority=True),
+        Binding("ctrl+l", "command_clear", "Clear", show=False, priority=True),
     ]
 
     def __init__(self, overlay: TextualOverlay) -> None:
