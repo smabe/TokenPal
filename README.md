@@ -90,7 +90,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 | | |
 |---|---|
-| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity, HN front-page ambient awareness, battery transitions, network state (wifi + VPN), process heat (top CPU hog) |
+| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity, HN front-page ambient awareness, battery transitions, network state (wifi + VPN), process heat (top CPU hog), typing cadence (WPM bursts + post-burst silence), filesystem pulse (activity bursts in watched dirs) |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps, safe math eval — via LLM tool calling + slash commands |
 | **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
@@ -116,6 +116,9 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /senses enable <name>    turn a sense on in config.toml (restart to apply)
 /senses disable <name>   turn a sense off in config.toml (restart to apply)
 /wifi label <name>       label current wifi (SSID hashed, never stored raw)
+/watch                   list directories watched by filesystem_pulse
+/watch add <path>        add a directory to watch (restart to apply)
+/watch remove <path>     stop watching a directory (restart to apply)
 /math 2 + 2 * 3          evaluate an arithmetic expression (bypasses the LLM)
 /gh                      recent commits (buddy comments in character)
 /gh prs                  open pull requests
@@ -144,7 +147,7 @@ For deeper character embodiment, [LoRA fine-tune](docs/remote-training-guide.md)
 
 ## Enabling opt-in senses
 
-Most senses are on by default. A few are off until you flip them — weather needs a location, git only fires for devs, battery/network/process_heat are quieter on-transition-only senses best enabled when you actually want them.
+Most senses are on by default. A few are off until you flip them — weather needs a location, git only fires for devs, battery/network/process_heat/typing_cadence/filesystem_pulse are quieter on-transition-only senses best enabled when you actually want them.
 
 From inside TokenPal:
 
@@ -153,6 +156,8 @@ From inside TokenPal:
 /senses enable battery
 /senses enable network_state
 /senses enable process_heat
+/senses enable typing_cadence
+/senses enable filesystem_pulse
 ```
 
 Each writes to `config.toml` and reminds you to restart — senses are resolved once at startup, not hot-swapped. Ctrl+C, re-run `tokenpal`, then `/senses` again to verify `(loaded)` next to each.
@@ -166,12 +171,24 @@ Each writes to `config.toml` and reminds you to restart — senses are resolved 
 
 TokenPal reads the current SSID, hashes it (sha256[:16]), and upserts the mapping under `[network_state] ssid_labels`. Raw SSID names never hit the config file, the log, or memory.db — only the hash and your chosen label.
 
+**Watch directories** let `filesystem_pulse` react to file activity. Defaults are `~/Downloads`, `~/Desktop`, `~/Documents` — no config required. Add project dirs to react to coding sessions:
+
+```
+/watch list              # see current roots (defaults or configured)
+/watch add ~/projects/tokenpal
+/watch remove ~/Documents
+```
+
+Privacy: the sense emits only the leaf directory name in comments (`tokenpal`, never the full path). Filenames are never seen or logged. Heavy dirs like `node_modules`, `.git`, `.venv`, and `__pycache__` are excluded automatically.
+
 **Smoke-testing the new senses:**
 - `battery` — unplug your laptop; triggers within ~30s
 - `process_heat` — `yes > /dev/null &` in another terminal for ~25s, then `kill %1`
 - `network_state` — toggle wifi off/on, or connect to a VPN
+- `typing_cadence` — type continuously for 30s+; watch for "User picked up the pace"
+- `filesystem_pulse` — save a file 5+ times in a watched dir, or drop a few files into `~/Downloads`
 
-All three emit only on transition — steady-state is silent.
+All emit only on transition — steady-state is silent.
 
 ## Configuration
 
@@ -205,10 +222,16 @@ git = false                            # opt-in: reacts to commits and branch sw
 battery = false                        # opt-in: plug/unplug + low-battery transitions
 network_state = false                  # opt-in: online/offline, wifi changes, VPN
 process_heat = false                   # opt-in: names the top CPU hog when pinned
+typing_cadence = false                 # opt-in: WPM bursts, post-burst silence (counts keypresses only)
+filesystem_pulse = false               # opt-in: activity bursts in watched dirs
 
 # [network_state]
 # ssid_labels = { "abcd1234abcd1234" = "home", "ffff0000ffff0000" = "coffee shop" }
 # Populate via /wifi label <name> from inside the app — raw SSIDs never stored.
+
+# [filesystem_pulse]
+# roots = ["/Users/you/projects/tokenpal"]
+# Populate via /watch add <path>. Empty = watch ~/Downloads, ~/Desktop, ~/Documents.
 
 [brain]
 comment_cooldown_s = 30.0
@@ -253,7 +276,7 @@ tokenpal/
 ├── brain/           # Orchestrator, context builder, personality, memory
 ├── config/          # TOML schema, loader, weather config helpers
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
-├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git, battery, network_state, process_heat
+├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git, battery, network_state, process_heat, typing_cadence, filesystem_pulse
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
 ├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
