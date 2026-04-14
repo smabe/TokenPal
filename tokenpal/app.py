@@ -353,6 +353,77 @@ def main() -> None:
         threading.Thread(target=_run_gh, daemon=True, name="gh-cmd").start()
         return CommandResult("")
 
+    def _cmd_senses(args: str) -> CommandResult:
+        from tokenpal.config.senses_writer import set_sense_enabled
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else "list"
+        target = parts[1].strip() if len(parts) > 1 else ""
+
+        flag_fields = [f.name for f in dataclasses.fields(config.senses)]
+
+        if subcmd == "list":
+            active = {s.sense_name for s in senses}
+            rows = []
+            for name in flag_fields:
+                enabled = getattr(config.senses, name)
+                mark = "on " if enabled else "off"
+                loaded = " (loaded)" if name in active else ""
+                rows.append(f"  {mark}  {name}{loaded}")
+            return CommandResult("Senses:\n" + "\n".join(rows))
+
+        if subcmd in ("enable", "disable"):
+            if not target:
+                return CommandResult(f"Usage: /senses {subcmd} <sense_name>")
+            if target not in flag_fields:
+                return CommandResult(
+                    f"Unknown sense '{target}'. Try /senses list."
+                )
+            try:
+                path = set_sense_enabled(target, subcmd == "enable")
+            except OSError as e:
+                return CommandResult(f"/senses: could not write config: {e}")
+            verb = "enabled" if subcmd == "enable" else "disabled"
+            return CommandResult(
+                f"{target} {verb} in {path.name}. "
+                "Restart TokenPal for the change to take effect."
+            )
+
+        return CommandResult("Usage: /senses [list|enable <name>|disable <name>]")
+
+    def _cmd_wifi(args: str) -> CommandResult:
+        from tokenpal.config.senses_writer import set_ssid_label
+        from tokenpal.senses.network_state.platform_impl import read_ssid
+        from tokenpal.senses.network_state.sense import hash_ssid
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+        label = parts[1].strip() if len(parts) > 1 else ""
+
+        if subcmd != "label" or not label:
+            return CommandResult("Usage: /wifi label <friendly name>")
+
+        ssid_raw = read_ssid()
+        if not ssid_raw:
+            return CommandResult(
+                "/wifi: couldn't read current SSID (not on wifi, or platform shim missing)."
+            )
+
+        ssid_hash = hash_ssid(ssid_raw)
+        try:
+            path = set_ssid_label(ssid_hash, label)
+        except OSError as e:
+            return CommandResult(f"/wifi: could not write config: {e}")
+
+        network_enabled = config.senses.network_state
+        hint = "" if network_enabled else (
+            " (also run /senses enable network_state to turn the sense on)"
+        )
+        return CommandResult(
+            f"Labeled current wifi as '{label}' in {path.name}. "
+            f"Restart TokenPal to apply.{hint}"
+        )
+
     def _cmd_math(args: str) -> CommandResult:
         expr = args.strip()
         if not expr:
@@ -371,6 +442,8 @@ def main() -> None:
     dispatcher.register("ask", _cmd_ask)
     dispatcher.register("gh", _cmd_gh)
     dispatcher.register("math", _cmd_math)
+    dispatcher.register("senses", _cmd_senses)
+    dispatcher.register("wifi", _cmd_wifi)
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("chatlog", _cmd_chatlog)

@@ -44,6 +44,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Slash Commands (additions)
 - `/math <expr>` — evaluate an arithmetic expression (+, -, *, /, //, %, **). Expression length capped, exponent capped. Bypasses the LLM entirely
+- `/senses [list|enable <name>|disable <name>]` — inspect + toggle sense flags in config.toml. Writes via `tokenpal/config/senses_writer.py`. Senses are resolved once at startup, so the command always reminds the user to restart
+- `/wifi label <friendly name>` — read the current SSID, hash it (sha256[:16]), and upsert `[network_state] ssid_labels` in config.toml. Restart required to apply. Raw SSID never persisted
 
 ## Brain
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
