@@ -53,6 +53,12 @@ def set_ssid_label(ssid_hash: str, label: str) -> Path:
 
     The TOML inline-table form `ssid_labels = { "hash" = "label", ... }` is
     what users see in config.default.toml, so we preserve that shape.
+
+    Round-trips output from this module. Does NOT preserve arbitrary hand-edits:
+    comments inside the inline table, multi-line table layouts, literal-string
+    keys/values (`'...'`), or `}` inside a label. If the user hand-crafts those,
+    this function may mangle them. Callers should only invoke it on tables that
+    were originally written by this module (or an equivalent flat form).
     """
     if not re.fullmatch(r"[0-9a-f]{16}", ssid_hash):
         raise ValueError(f"expected a 16-char hex hash, got {ssid_hash!r}")

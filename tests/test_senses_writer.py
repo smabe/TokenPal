@@ -95,6 +95,15 @@ def test_set_ssid_label_escapes_quotes(fake_config: Path) -> None:
     assert data["network_state"]["ssid_labels"]["a" * 16] == 'Bob\'s "wifi"'
 
 
+def test_set_ssid_label_quoted_label_survives_upsert(fake_config: Path) -> None:
+    """Quoted labels must still round-trip after a second upsert re-parses the file."""
+    set_ssid_label("a" * 16, 'Bob\'s "wifi"')
+    set_ssid_label("b" * 16, "coffee")
+    data = _toml(fake_config)
+    assert data["network_state"]["ssid_labels"]["a" * 16] == 'Bob\'s "wifi"'
+    assert data["network_state"]["ssid_labels"]["b" * 16] == "coffee"
+
+
 def test_set_ssid_label_appends_when_section_missing(fake_config: Path) -> None:
     fake_config.write_text("[memory]\nenabled = true\n")
     set_ssid_label("a" * 16, "home")

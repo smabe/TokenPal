@@ -22,6 +22,7 @@ from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
+from tokenpal.config.senses_writer import set_sense_enabled, set_ssid_label
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
@@ -354,8 +355,6 @@ def main() -> None:
         return CommandResult("")
 
     def _cmd_senses(args: str) -> CommandResult:
-        from tokenpal.config.senses_writer import set_sense_enabled
-
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else "list"
         target = parts[1].strip() if len(parts) > 1 else ""
@@ -392,10 +391,6 @@ def main() -> None:
         return CommandResult("Usage: /senses [list|enable <name>|disable <name>]")
 
     def _cmd_wifi(args: str) -> CommandResult:
-        from tokenpal.config.senses_writer import set_ssid_label
-        from tokenpal.senses.network_state.platform_impl import read_ssid
-        from tokenpal.senses.network_state.sense import hash_ssid
-
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
         label = parts[1].strip() if len(parts) > 1 else ""
@@ -403,26 +398,31 @@ def main() -> None:
         if subcmd != "label" or not label:
             return CommandResult("Usage: /wifi label <friendly name>")
 
-        ssid_raw = read_ssid()
-        if not ssid_raw:
-            return CommandResult(
-                "/wifi: couldn't read current SSID (not on wifi, or platform shim missing)."
-            )
+        # read_ssid() runs a platform subprocess (up to 2s timeout) — keep it
+        # off the UI thread so the input bar doesn't freeze if the shim hangs.
+        def _run_wifi() -> None:
+            from tokenpal.senses.network_state.sense import get_current_ssid_hash
 
-        ssid_hash = hash_ssid(ssid_raw)
-        try:
-            path = set_ssid_label(ssid_hash, label)
-        except OSError as e:
-            return CommandResult(f"/wifi: could not write config: {e}")
+            ssid_hash = get_current_ssid_hash()
+            if not ssid_hash:
+                msg = "/wifi: couldn't read current SSID (not on wifi, or platform shim missing)."
+            else:
+                try:
+                    path = set_ssid_label(ssid_hash, label)
+                except (OSError, ValueError) as e:
+                    msg = f"/wifi: could not write config: {e}"
+                else:
+                    hint = "" if config.senses.network_state else (
+                        " (also run /senses enable network_state to turn the sense on)"
+                    )
+                    msg = (
+                        f"Labeled current wifi as '{label}' in {path.name}. "
+                        f"Restart TokenPal to apply.{hint}"
+                    )
+            overlay.schedule_callback(lambda m=msg: overlay.log_buddy_message(m))
 
-        network_enabled = config.senses.network_state
-        hint = "" if network_enabled else (
-            " (also run /senses enable network_state to turn the sense on)"
-        )
-        return CommandResult(
-            f"Labeled current wifi as '{label}' in {path.name}. "
-            f"Restart TokenPal to apply.{hint}"
-        )
+        threading.Thread(target=_run_wifi, daemon=True, name="wifi-cmd").start()
+        return CommandResult(f"Labeling current wifi as '{label}'...")
 
     def _cmd_math(args: str) -> CommandResult:
         expr = args.strip()

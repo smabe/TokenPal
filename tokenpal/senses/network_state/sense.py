@@ -27,6 +27,18 @@ def hash_ssid(ssid: str) -> str:
     return hashlib.sha256(ssid.encode("utf-8")).hexdigest()[:16]
 
 
+def get_current_ssid_hash() -> str | None:
+    """Read the current wifi SSID and return its hash.
+
+    Public helper for callers (like /wifi label) that need the hash without
+    ever touching the raw SSID. Returns None when there is no wifi connection
+    or the platform shim is unavailable.
+    """
+    from tokenpal.senses.network_state.platform_impl import read_ssid
+    raw = read_ssid()
+    return hash_ssid(raw) if raw else None
+
+
 def _label_for(hashed: str, labels: dict[str, str]) -> str:
     alias = labels.get(hashed)
     if alias:
