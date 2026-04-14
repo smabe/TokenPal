@@ -14,7 +14,7 @@ from tokenpal.config.senses_writer import set_sense_enabled, set_ssid_label
 @pytest.fixture()
 def fake_config(tmp_path: Path):
     path = tmp_path / "config.toml"
-    with patch("tokenpal.config.senses_writer._config_path", return_value=path):
+    with patch("tokenpal.config.toml_writer.find_config_toml", return_value=path):
         yield path
 
 

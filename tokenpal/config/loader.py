@@ -11,6 +11,7 @@ from typing import Any
 from tokenpal.config.schema import (
     ActionsConfig,
     BrainConfig,
+    ConversationConfig,
     FinetuneConfig,
     LLMConfig,
     MemoryConfig,
@@ -23,6 +24,7 @@ from tokenpal.config.schema import (
     TokenPalConfig,
     UIConfig,
     WeatherConfig,
+    WebSearchConfig,
 )
 
 log = logging.getLogger(__name__)
@@ -46,6 +48,8 @@ _SECTION_MAP: dict[str, type] = {
     "server": ServerConfig,
     "weather": WeatherConfig,
     "network_state": NetworkStateConfig,
+    "web_search": WebSearchConfig,
+    "conversation": ConversationConfig,
 }
 
 

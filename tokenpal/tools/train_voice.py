@@ -18,7 +18,9 @@ import urllib.request
 import urllib.error
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
+from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
     FANDOM_NAMES,
@@ -603,44 +605,12 @@ def regenerate_persona(
     return profile
 
 
-def _find_config_toml() -> Path:
-    """Find config.toml — check CWD first, then fall back to project root."""
-    cwd = Path.cwd()
-    if (cwd / "config.toml").exists():
-        return cwd / "config.toml"
-    if (cwd / "config.default.toml").exists():
-        # We're in the project root, config.toml goes here
-        return cwd / "config.toml"
-    # Default: CWD
-    return cwd / "config.toml"
-
-
 def activate_voice(slug: str) -> None:
     """Set active_voice in config.toml, creating the file/section if needed."""
-    config_path = _find_config_toml()
-    new_line = f'active_voice = "{slug}"'
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("brain", {})["active_voice"] = slug
 
-    if config_path.exists():
-        content = config_path.read_text()
-
-        # Replace existing active_voice line
-        if re.search(r'^active_voice\s*=', content, re.MULTILINE):
-            content = re.sub(
-                r'^active_voice\s*=.*$',
-                new_line,
-                content,
-                flags=re.MULTILINE,
-            )
-        elif "[brain]" in content:
-            # Add under existing [brain] section
-            content = content.replace("[brain]", f"[brain]\n{new_line}", 1)
-        else:
-            # Append a new [brain] section
-            content = content.rstrip() + f"\n\n[brain]\n{new_line}\n"
-    else:
-        content = f"[brain]\n{new_line}\n"
-
-    config_path.write_text(content)
+    update_config(mutate)
 
 
 def _print_samples(lines: list[str], n: int = 5) -> None:
