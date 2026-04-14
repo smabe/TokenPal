@@ -5,6 +5,13 @@ set -euo pipefail
 # Sets up: Python, Ollama, model, venv, tokenpal[server], firewall, systemd
 # Run from inside the cloned TokenPal repo.
 
+# DEPRECATED: This script is superseded by install-linux.sh / install-macos.sh with --mode server.
+# It is kept for backward compatibility only.
+
+echo "NOTE: This script is maintained for backward compatibility."
+echo "For fresh installs, prefer: bash scripts/install-linux.sh --mode server (or install-macos.sh)"
+echo ""
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="${TOKENPAL_SERVER_DIR:-$HOME/.tokenpal}"

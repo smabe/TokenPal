@@ -2,6 +2,13 @@
 # Paste this into PowerShell on the GPU machine:
 #   powershell -Command "iwr https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.ps1 -OutFile bootstrap.ps1; .\bootstrap.ps1"
 
+# DEPRECATED: This script is superseded by install-windows.ps1.
+# It is kept for backward compatibility only.
+
+Write-Host "NOTE: This script is maintained for backward compatibility." -ForegroundColor Yellow
+Write-Host "For fresh installs, prefer: powershell scripts\install-windows.ps1" -ForegroundColor Yellow
+Write-Host ""
+
 $ErrorActionPreference = "Stop"
 $RepoUrl = "https://github.com/smabe/TokenPal.git"
 $InstallDir = "$env:USERPROFILE\tokenpal-server"

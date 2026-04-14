@@ -5,6 +5,13 @@ set -euo pipefail
 # Paste this into a terminal on the GPU machine:
 #   curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/scripts/bootstrap.sh | bash
 
+# DEPRECATED: This script is superseded by install-linux.sh / install-macos.sh.
+# It is kept for backward compatibility only.
+
+echo "NOTE: This script is maintained for backward compatibility."
+echo "For fresh installs, prefer: bash scripts/install-linux.sh (or install-macos.sh)"
+echo ""
+
 REPO_URL="https://github.com/smabe/TokenPal.git"
 INSTALL_DIR="$HOME/tokenpal-server"
 PORT="${TOKENPAL_PORT:-8585}"

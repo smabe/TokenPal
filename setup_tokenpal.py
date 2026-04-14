@@ -303,6 +303,12 @@ def print_summary(plat: str, venv_dir: Path) -> None:
     print(f"\n{BOLD}{'─' * 50}{RESET}")
     print(f"{BOLD}{GREEN}TokenPal is ready!{RESET}\n")
 
+    print(f"  {BOLD}Tip:{RESET} For fresh machine setup (installs Python, Ollama, everything):")
+    print("    macOS:   bash scripts/install-macos.sh")
+    print("    Windows: powershell scripts/install-windows.ps1")
+    print("    Linux:   bash scripts/install-linux.sh")
+    print()
+
     # Activation command
     if sys.prefix == sys.base_prefix:
         if plat == "windows":

@@ -18,7 +18,7 @@ from tokenpal.actions.registry import discover_actions, resolve_actions
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.brain.personality import PersonalityEngine
-from tokenpal.cli import parse_args, print_version, run_check
+from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
@@ -46,6 +46,9 @@ def main() -> None:
     data_dir = Path(config.paths.data_dir).expanduser().resolve()
 
     setup_logging(verbose=args.verbose, log_dir=data_dir / "logs")
+
+    if args.validate:
+        sys.exit(run_validate(config_path=args.config))
 
     if args.check:
         sys.exit(run_check(config_path=args.config))

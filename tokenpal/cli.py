@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import platform
+import shutil
+import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
@@ -39,6 +42,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="verify Ollama, model, senses, and actions, then exit",
     )
     parser.add_argument(
+        "--validate", action="store_true",
+        help="comprehensive preflight check (superset of --check), then exit",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="show debug logs in terminal",
     )
@@ -67,16 +74,9 @@ def run_check(config_path: Path | None = None) -> int:
     return asyncio.run(_check(config_path))
 
 
-async def _check(config_path: Path | None) -> int:
-    print(f"\n{_BOLD}TokenPal Health Check{_RESET}")
-    print("-" * 40)
+async def _check_ollama(config: object) -> int:
+    """Check Ollama connectivity and model availability. Returns problem count."""
     problems = 0
-
-    # Config
-    config = load_config(config_path=config_path)
-    print(f"  {_CHECK} Config loaded")
-
-    # Ollama connectivity
     api_url = config.llm.api_url
     model_name = config.llm.model_name
     try:
@@ -97,8 +97,11 @@ async def _check(config_path: Path | None) -> int:
         print(f"  {_FAIL} Cannot reach Ollama at {api_url}")
         print("      Start it with: ollama serve")
         problems += 1
+    return problems
 
-    # Senses
+
+def _check_senses(config: object) -> int:
+    """Discover and check senses. Returns problem count."""
     from tokenpal.senses.registry import discover_senses, resolve_senses
 
     discover_senses(extra_packages=config.plugins.extra_packages)
@@ -106,19 +109,25 @@ async def _check(config_path: Path | None) -> int:
         f.name: getattr(config.senses, f.name)
         for f in dataclasses.fields(config.senses)
     }
-    senses = resolve_senses(sense_flags=sense_flags, sense_overrides=config.plugins.sense_overrides)
+    senses = resolve_senses(
+        sense_flags=sense_flags,
+        sense_overrides=config.plugins.sense_overrides,
+    )
     names = [s.sense_name for s in senses]
     print(f"  {_CHECK} {len(senses)} senses: {', '.join(names)}")
 
-    # Warn about enabled senses that couldn't load on this platform
     resolved_names = set(names)
     enabled_names = {name for name, on in sense_flags.items() if on}
     skipped = enabled_names - resolved_names
+    problems = 0
     for name in sorted(skipped):
         print(f"  {_WARN} '{name}' enabled but no implementation for this platform")
         problems += 1
+    return problems
 
-    # Actions
+
+def _check_actions(config: object) -> None:
+    """Discover and check actions."""
     from tokenpal.actions.registry import discover_actions, resolve_actions
 
     discover_actions()
@@ -134,11 +143,97 @@ async def _check(config_path: Path | None) -> int:
     else:
         print(f"  {_WARN} No actions enabled")
 
-    # Summary
+
+def _print_summary(problems: int) -> None:
+    """Print pass/fail summary."""
     print()
     if problems == 0:
         print(f"{_GREEN}{_BOLD}All checks passed.{_RESET}")
     else:
         print(f"{_YELLOW}{_BOLD}{problems} issue(s) found.{_RESET}")
     print()
+
+
+async def _check(config_path: Path | None) -> int:
+    print(f"\n{_BOLD}TokenPal Health Check{_RESET}")
+    print("-" * 40)
+    problems = 0
+
+    config = load_config(config_path=config_path)
+    print(f"  {_CHECK} Config loaded")
+
+    problems += await _check_ollama(config)
+    problems += _check_senses(config)
+    _check_actions(config)
+
+    _print_summary(problems)
+    return 1 if problems else 0
+
+
+def run_validate(config_path: Path | None = None) -> int:
+    """Run comprehensive preflight validation. Returns 0 if all good, 1 if problems."""
+    return asyncio.run(_validate(config_path))
+
+
+async def _validate(config_path: Path | None) -> int:
+    print(f"\n{_BOLD}TokenPal Preflight Validation{_RESET}")
+    print("=" * 40)
+    problems = 0
+
+    # 1. Python version
+    major, minor = sys.version_info[:2]
+    if (major, minor) >= (3, 12):
+        print(f"  {_CHECK} Python {major}.{minor}")
+    else:
+        print(f"  {_FAIL} Python {major}.{minor} — 3.12+ required")
+        problems += 1
+
+    # 2. Platform-specific dependencies
+    plat = platform.system()
+    if plat == "Darwin":
+        for mod, pkg_hint in [("Quartz", "pip install tokenpal[macos]"),
+                              ("Cocoa", "pip install tokenpal[macos]")]:
+            try:
+                __import__(mod)
+                print(f"  {_CHECK} {mod} available")
+            except ImportError:
+                print(f"  {_WARN} {mod} not found — {pkg_hint}")
+                problems += 1
+    elif plat == "Windows":
+        try:
+            __import__("win32gui")
+            print(f"  {_CHECK} win32gui available")
+        except ImportError:
+            print(f"  {_WARN} win32gui not found — pip install tokenpal[windows]")
+            problems += 1
+    elif plat == "Linux":
+        print(f"  {_WARN} Linux: app_awareness and music senses are unavailable")
+
+    # 3. git binary
+    if shutil.which("git"):
+        print(f"  {_CHECK} git found in PATH")
+    else:
+        print(f"  {_WARN} git not found — git sense will not work")
+        problems += 1
+
+    # 4. Ollama + model
+    config = load_config(config_path=config_path)
+    problems += await _check_ollama(config)
+
+    # 5. Config
+    print(f"  {_CHECK} Config loaded")
+
+    # 6. Senses + actions
+    problems += _check_senses(config)
+    _check_actions(config)
+
+    # 7. macOS Accessibility reminder
+    if plat == "Darwin":
+        print()
+        print(
+            f"  {_WARN} macOS: ensure Accessibility permission is granted in"
+            f" System Settings > Privacy & Security > Accessibility"
+        )
+
+    _print_summary(problems)
     return 1 if problems else 0

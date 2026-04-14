@@ -2,6 +2,13 @@
 # Sets up: Python, Ollama, model, venv, tokenpal[server], firewall, startup
 # Run from inside the cloned TokenPal repo.
 
+# DEPRECATED: This script is superseded by install-windows.ps1 with -Mode Server.
+# It is kept for backward compatibility only.
+
+Write-Host "NOTE: This script is maintained for backward compatibility." -ForegroundColor Yellow
+Write-Host "For fresh installs, prefer: powershell scripts\install-windows.ps1 -Mode Server" -ForegroundColor Yellow
+Write-Host ""
+
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoDir = Split-Path -Parent $ScriptDir
