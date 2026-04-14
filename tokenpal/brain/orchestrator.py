@@ -335,11 +335,6 @@ class Brain:
             self._consecutive_comments = 0
             return False
 
-        # Random silence — flat 30% chance to stay quiet
-        if random.random() < 0.3:
-            log.debug("Gate: random silence (30%%)")
-            return False
-
         # Guardrail: cap at N comments per 5-minute window
         self._comment_timestamps = [
             t for t in self._comment_timestamps if now - t < _WINDOW_SECONDS
