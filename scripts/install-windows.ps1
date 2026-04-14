@@ -1,4 +1,4 @@
-# TokenPal — Unified Windows Installer
+﻿# TokenPal — Unified Windows Installer
 # Handles everything from a bare machine to a working TokenPal installation.
 #
 # Usage (standalone, paste into PowerShell):
