@@ -26,6 +26,7 @@ class GitSense(AbstractSense):
         self._last_head: str = ""
         self._last_branch: str = ""
         self._last_dirty: bool = False
+        self._pending_reading: SenseReading | None = None
 
     async def setup(self) -> None:
         if not shutil.which("git"):
@@ -69,7 +70,11 @@ class GitSense(AbstractSense):
         self._last_dirty = dirty
 
         if not changed_from:
-            return None
+            # Keep returning the last reading so it survives in the context
+            # until the brain acknowledges it (prevents clear_reading on None)
+            reading = self._pending_reading
+            self._pending_reading = None
+            return reading
 
         parts = [f"On branch {branch}"]
         if new_commits:
@@ -78,7 +83,7 @@ class GitSense(AbstractSense):
             parts.append("uncommitted changes")
         summary = ", ".join(parts)
 
-        return self._reading(
+        reading = self._reading(
             data={
                 "head": head,
                 "branch": branch,
@@ -88,6 +93,8 @@ class GitSense(AbstractSense):
             summary=summary,
             changed_from=changed_from,
         )
+        self._pending_reading = reading
+        return reading
 
     async def teardown(self) -> None:
         pass
