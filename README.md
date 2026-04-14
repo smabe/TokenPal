@@ -100,9 +100,9 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 | | |
 |---|---|
-| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity (commits, branches, dirty state), HN front-page ambient awareness |
+| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity, HN front-page ambient awareness, battery transitions, network state (wifi + VPN), process heat (top CPU hog) |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
-| **Actions** | Timers, system info, open apps — via LLM tool calling |
+| **Actions** | Timers, system info, open apps, safe math eval — via LLM tool calling + slash commands |
 | **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
@@ -122,6 +122,11 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /server switch local     use local Ollama
 /server switch hostname  switch to remote server
 /zip 90210               set weather location (geocodes, writes config)
+/senses                  list senses with on/off + loaded status
+/senses enable <name>    turn a sense on in config.toml (restart to apply)
+/senses disable <name>   turn a sense off in config.toml (restart to apply)
+/wifi label <name>       label current wifi (SSID hashed, never stored raw)
+/math 2 + 2 * 3          evaluate an arithmetic expression (bypasses the LLM)
 /gh                      recent commits (buddy comments in character)
 /gh prs                  open pull requests
 /gh issues               open issues
@@ -146,6 +151,37 @@ persona_prompt = "You are a grumpy pirate who judges people's computer habits."
 ```
 
 For deeper character embodiment, [LoRA fine-tune](docs/remote-training-guide.md) a model on the voice's dialogue.
+
+## Enabling opt-in senses
+
+Most senses are on by default. A few are off until you flip them — weather needs a location, git only fires for devs, battery/network/process_heat are quieter on-transition-only senses best enabled when you actually want them.
+
+From inside TokenPal:
+
+```
+/senses                  # list all senses with on/off + loaded status
+/senses enable battery
+/senses enable network_state
+/senses enable process_heat
+```
+
+Each writes to `config.toml` and reminds you to restart — senses are resolved once at startup, not hot-swapped. Ctrl+C, re-run `tokenpal`, then `/senses` again to verify `(loaded)` next to each.
+
+**Wifi labels** make `network_state` readable. Connect to each network you care about and run:
+
+```
+/wifi label home
+/wifi label coffee shop
+```
+
+TokenPal reads the current SSID, hashes it (sha256[:16]), and upserts the mapping under `[network_state] ssid_labels`. Raw SSID names never hit the config file, the log, or memory.db — only the hash and your chosen label.
+
+**Smoke-testing the new senses:**
+- `battery` — unplug your laptop; triggers within ~30s
+- `process_heat` — `yes > /dev/null &` in another terminal for ~25s, then `kill %1`
+- `network_state` — toggle wifi off/on, or connect to a VPN
+
+All three emit only on transition — steady-state is silent.
 
 ## Configuration
 
@@ -176,6 +212,13 @@ music = true                           # detect Music.app/Spotify (macOS)
 productivity = true                    # work patterns from session data
 weather = false                        # opt-in: use /zip or first-run wizard
 git = false                            # opt-in: reacts to commits and branch switches
+battery = false                        # opt-in: plug/unplug + low-battery transitions
+network_state = false                  # opt-in: online/offline, wifi changes, VPN
+process_heat = false                   # opt-in: names the top CPU hog when pinned
+
+# [network_state]
+# ssid_labels = { "abcd1234abcd1234" = "home", "ffff0000ffff0000" = "coffee shop" }
+# Populate via /wifi label <name> from inside the app — raw SSIDs never stored.
 
 [brain]
 comment_cooldown_s = 30.0
@@ -216,11 +259,11 @@ Everything is pluggable via decorators (`@register_sense`, `@register_backend`, 
 
 ```
 tokenpal/
-├── actions/         # LLM-callable tools (timer, system_info, open_app)
+├── actions/         # LLM-callable tools (timer, system_info, open_app, do_math)
 ├── brain/           # Orchestrator, context builder, personality, memory
 ├── config/          # TOML schema, loader, weather config helpers
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
-├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git
+├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git, battery, network_state, process_heat
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
 ├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
