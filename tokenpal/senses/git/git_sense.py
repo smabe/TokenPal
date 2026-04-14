@@ -71,10 +71,8 @@ class GitSense(AbstractSense):
 
         if not changed_from:
             # Keep returning the last reading so it survives in the context
-            # until the brain acknowledges it (prevents clear_reading on None)
-            reading = self._pending_reading
-            self._pending_reading = None
-            return reading
+            # long enough for the commentary gate to open (cooldown can be ~100s)
+            return self._pending_reading
 
         parts = [f"On branch {branch}"]
         if new_commits:
