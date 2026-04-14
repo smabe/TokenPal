@@ -241,6 +241,34 @@ def main() -> None:
         overlay.schedule_callback(overlay.toggle_chat_log)
         return CommandResult("")
 
+    def _cmd_gh(args: str) -> CommandResult:
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else "log"
+
+        if subcmd not in ("log", "prs", "issues"):
+            return CommandResult("Usage: /gh [log|prs|issues]")
+
+        def _run_gh() -> None:
+            result = _handle_gh_command(subcmd, parts[1] if len(parts) > 1 else "")
+            if result.error:
+                overlay.schedule_callback(
+                    lambda: overlay.show_speech(SpeechBubble(text=result.error))
+                )
+                return
+            output = result.message
+            overlay.schedule_callback(lambda: overlay.log_buddy_message(output))
+            prompts = {
+                "log": "React to these commits — what's been going on in this project?",
+                "prs": "Comment on these PRs.",
+                "issues": "Comment on these issues.",
+            }
+            prompt = f"[The user ran /gh {subcmd}:\n{output}\n]\n{prompts[subcmd]}"
+            brain.submit_user_input(prompt)
+
+        threading.Thread(target=_run_gh, daemon=True, name="gh-cmd").start()
+        return CommandResult("")
+
+    dispatcher.register("gh", _cmd_gh)
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("chatlog", _cmd_chatlog)
@@ -342,6 +370,42 @@ _RECOMMENDED_MODELS: list[tuple[str, str]] = [
     ("phi4-mini", "Microsoft, 3.8B — compact, capable"),
     ("qwen3:8b", "Alibaba, 8B — multilingual"),
 ]
+
+
+def _handle_gh_command(subcmd: str, extra: str) -> CommandResult:
+    """Handle /gh — run git/GitHub commands off the main thread."""
+    import shutil
+    import subprocess
+
+    if subcmd == "log":
+        count = extra.strip() if extra else "5"
+        if not count.isdigit():
+            return CommandResult("", error="Usage: /gh log [count]")
+        try:
+            out = subprocess.run(
+                ["git", "log", f"-{count}", "--oneline", "--no-color"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if out.returncode != 0:
+                return CommandResult("", error=out.stderr.strip() or "git log failed")
+            return CommandResult(out.stdout.strip() or "", error="No commits found." if not out.stdout.strip() else None)
+        except Exception as e:
+            return CommandResult("", error=f"git log failed: {e}")
+
+    # prs / issues
+    if not shutil.which("gh"):
+        return CommandResult("", error="gh CLI not found — install from https://cli.github.com")
+    gh_cmd = "pr" if subcmd == "prs" else "issue"
+    try:
+        out = subprocess.run(
+            ["gh", gh_cmd, "list", "--limit", "5"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.returncode != 0:
+            return CommandResult("", error=out.stderr.strip() or f"gh {gh_cmd} list failed")
+        return CommandResult(out.stdout.strip() or "", error=f"No open {subcmd}." if not out.stdout.strip() else None)
+    except Exception as e:
+        return CommandResult("", error=f"gh failed: {e}")
 
 
 def _handle_zip_command(args: str) -> CommandResult:

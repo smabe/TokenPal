@@ -14,6 +14,7 @@ class CommandResult:
     """Result from a slash command."""
 
     message: str
+    error: str | None = None
 
 
 class CommandDispatcher:
