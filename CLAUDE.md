@@ -29,6 +29,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `weather` — Open-Meteo API (free, no key), poll 30min, TTL 1hr, weight 0.0. Opt-in via `/zip` command or first-run wizard. Geocoding + config write in `tokenpal/config/weather.py`
 - `music` — macOS: AppleScript for Music.app/Spotify. Checks `System Events` before querying (prevents auto-launch). Track names redacted from logs
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
+- `git` — cross-platform, polls every 15s via async subprocess. Detects new commits, branch switches, dirty state changes. Uses `asyncio.gather` for parallel git calls. High-signal events bypass the commentary gate for immediate reactions. Opt-in via `[senses] git = true`
 
 ## Brain
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
@@ -37,7 +38,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern, composite observations (`_detect_composites()`), public API: `active_readings()`, `prev_summary()`, `ttl_for()`
 - Topic roulette: `_pick_topic()` in orchestrator, no 3+ consecutive same-topic, focus hints prepended to context
 - Change detection: `changed_from` field on `SenseReading`, app_awareness populates "switched from X"
-- Pacing: dynamic cooldown (30-90s based on activity), max 8 comments/5min, forced 2-min silence after 3 consecutive, timing jitter
+- Pacing: dynamic cooldown (30-90s based on activity), max 8 comments/5min, forced 2-min silence after 3 consecutive, timing jitter. High-signal sense events (git) bypass the gate entirely
 - Freeform thoughts: 15% default, 30% for rich voices (50+ example lines), 45s min gap
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom, Calculator)
 - See `plans/commentary-finetune-master.md` for full commentary system design
@@ -45,15 +46,16 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 ## UI
 - Default overlay: Textual (`tokenpal/ui/textual_overlay.py`). Console and tkinter overlays as fallbacks
 - Layout: horizontal split — buddy panel (left) with header/speech/buddy/input/status, scrollable chat log (right)
-- Chat log shows all buddy comments (observations + conversation) and user messages
+- Chat log shows all buddy comments (observations + conversation) and user messages, with timestamps and voice/user labels separated by `──────` dividers
 - Status bar: `mood | server | voice | app | weather | music | spoke Xs ago` — mood is color-coded
-- Keyboard shortcuts: F1=/help, Ctrl+L=/clear, Ctrl+C=quit
+- Keyboard shortcuts: F1=/help, F2=toggle chat log, Ctrl+L=/clear, Ctrl+C=quit
 - Typing animation on speech bubbles via `set_interval(0.03)`
 - Thread safety: brain→UI via typed `Message` subclasses + `post_message()`, never `call_from_thread`
 - Voice-specific ASCII art: LLM-generated Rich-markup frames (idle, idle_alt, talking) with 4s blink animation
 
 ## Slash Commands
-- `/help`, `/clear`, `/mood`, `/status`
+- `/help`, `/clear`, `/mood`, `/status`, `/chatlog`
+- `/gh [log|prs|issues]` — GitHub integration. Runs git/gh CLI in a daemon thread, logs raw output to chat log, then feeds it to the brain so the buddy comments in character
 - `/model [name|list|pull|browse]` — model management
 - `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|import]` — voice management
 - `/server [status|switch]` — server connection

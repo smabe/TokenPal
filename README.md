@@ -83,10 +83,10 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 | | |
 |---|---|
-| **Senses** | App awareness (macOS), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns |
+| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity (commits, branches, dirty state) |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
-| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log, color-coded status bar, keyboard shortcuts (F1, Ctrl+L) |
+| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
@@ -105,6 +105,9 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /server switch local     use local Ollama
 /server switch hostname  switch to remote server
 /zip 90210               set weather location (geocodes, writes config)
+/gh                      recent commits (buddy comments in character)
+/gh prs                  open pull requests
+/gh issues               open issues
 /mood                    current mood
 /status                  model, senses, actions
 ```
@@ -154,6 +157,7 @@ time_awareness = true
 music = true                           # detect Music.app/Spotify (macOS)
 productivity = true                    # work patterns from session data
 weather = false                        # opt-in: use /zip or first-run wizard
+git = false                            # opt-in: reacts to commits and branch switches
 
 [brain]
 comment_cooldown_s = 30.0
@@ -198,7 +202,7 @@ tokenpal/
 ├── brain/           # Orchestrator, context builder, personality, memory
 ├── config/          # TOML schema, loader, weather config helpers
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
-├── senses/          # App awareness, hardware, idle, time, weather, music, productivity
+├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
 ├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
