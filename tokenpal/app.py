@@ -264,6 +264,8 @@ def main() -> None:
             return CommandResult(warning)
 
         def _run_ask() -> None:
+            from rich.markup import escape as _esc
+
             from tokenpal.brain.personality import contains_sensitive_term
             from tokenpal.senses.web_search.client import LOG_TRUNCATE_CHARS, search
 
@@ -277,7 +279,7 @@ def main() -> None:
                 log.exception("/ask search failed")
                 overlay.schedule_callback(
                     lambda: overlay.log_buddy_message(
-                        f"[/ask] search failed for '{query[:LOG_TRUNCATE_CHARS]}'"
+                        f"/ask → search failed for '{_esc(query[:LOG_TRUNCATE_CHARS])}'"
                     )
                 )
                 return
@@ -285,7 +287,7 @@ def main() -> None:
             if result is None:
                 overlay.schedule_callback(
                     lambda: overlay.log_buddy_message(
-                        f"[/ask] no result for '{query[:LOG_TRUNCATE_CHARS]}'"
+                        f"/ask → no result for '{_esc(query[:LOG_TRUNCATE_CHARS])}'"
                     )
                 )
                 return
@@ -300,12 +302,12 @@ def main() -> None:
                 )
                 overlay.schedule_callback(
                     lambda: overlay.log_buddy_message(
-                        "[/ask] result filtered (sensitive term)"
+                        "/ask → result filtered (sensitive term)"
                     )
                 )
                 return
 
-            raw = f"[/ask] {result.title[:200]}\n{result.text[:500]}"
+            raw = f"/ask → {_esc(result.title[:200])}\n{_esc(result.text[:500])}"
             overlay.schedule_callback(lambda r=raw: overlay.log_buddy_message(r))
 
             # Wrap untrusted text in delimiters — basic prompt-injection mitigation.
