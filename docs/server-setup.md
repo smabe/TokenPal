@@ -87,8 +87,6 @@ bash scripts/install-macos.sh --mode server
 
 They recommend a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
 
-The older `scripts/install-server.sh` and `scripts/install-server.ps1` still work but are deprecated in favor of the unified installers above.
-
 ## Verify
 
 From the server:

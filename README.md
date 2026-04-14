@@ -20,34 +20,24 @@ A witty ASCII buddy that lives in your terminal, watches what you're doing, and 
 
 ## Quick Start
 
-**Fresh machine?** Clone and run the installer for your platform:
+**Fresh machine?** One line — no git, no clone, nothing pre-installed required:
 
 ```bash
-# macOS
-git clone https://github.com/smabe/TokenPal.git && cd TokenPal
-bash scripts/install-macos.sh
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/install.sh | bash
 ```
 
 ```powershell
 # Windows (PowerShell)
-git clone https://github.com/smabe/TokenPal.git; cd TokenPal
-powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
+iwr -useb https://raw.githubusercontent.com/smabe/TokenPal/main/install.ps1 | iex
 ```
 
-```bash
-# Linux
-git clone https://github.com/smabe/TokenPal.git && cd TokenPal
-bash scripts/install-linux.sh
-```
+The installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**, then recommends a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
 
-Each installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**. Recommends a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
-
-**Already have Python 3.12+?** The lightweight path:
+To skip the prompt, pass a mode:
 
 ```bash
-python3 setup_tokenpal.py   # creates venv, installs deps, checks Ollama
-source .venv/bin/activate
-tokenpal                    # first run walks you through a quick setup wizard
+curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/install.sh | bash -s -- --mode server
 ```
 
 Verify everything: `tokenpal --check` (quick) or `tokenpal --validate` (full preflight)
@@ -273,14 +263,13 @@ tokenpal/
 ├── first_run.py     # First-run welcome wizard
 └── app.py           # Bootstrap and main loop
 
+install.sh              # One-liner bootstrap (macOS/Linux) — curl | bash
+install.ps1             # One-liner bootstrap (Windows) — iwr | iex
+
 scripts/
 ├── install-macos.sh    # macOS installer (Python, Ollama, deps, client/server/both)
 ├── install-windows.ps1 # Windows installer (Python, Ollama, deps, client/server/both)
 ├── install-linux.sh    # Linux installer (Python, Ollama, deps, client/server/both)
-├── bootstrap.sh        # Legacy one-line server setup (Linux/macOS)
-├── bootstrap.ps1       # Legacy one-line server setup (Windows)
-├── install-server.sh   # Legacy server installer (Linux/macOS)
-├── install-server.ps1  # Legacy server installer (Windows)
 └── start-server.bat    # Start Ollama + server (Windows)
 
 docs/

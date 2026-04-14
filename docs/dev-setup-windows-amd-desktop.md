@@ -342,6 +342,6 @@ This is your **power station** for TokenPal development:
 - **Vision model headroom:** Can load a chat LLM (8B, ~5 GB) AND a vision model (Florence-2, ~1 GB) simultaneously.
 - **Fast iteration:** Desktop CPU + GPU = fastest build/test cycles.
 - **No battery concerns:** Can run inference flat-out without worrying about power efficiency.
-- **TokenPal inference server:** Serves the whole LAN via `scripts/install-server.ps1`. Mac clients point at `http://apollyon:8585/v1`.
+- **TokenPal inference server:** Serves the whole LAN via `scripts/install-windows.ps1 -Mode Server`. Mac clients point at `http://apollyon:8585/v1`.
 
 The laptop NPU story is about efficiency; this machine is about capability.
