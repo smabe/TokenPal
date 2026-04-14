@@ -151,6 +151,8 @@ def main() -> None:
     # Load voice-specific buddy art into the overlay
     def _load_voice_art() -> None:
         idle, idle_alt, talking = personality.voice_frames
+        if hasattr(overlay, "_voice_name"):
+            overlay._voice_name = personality.voice_name
         if idle:
             frames = BuddyFrame.from_voice("custom", idle, idle_alt, talking)
             if hasattr(overlay, "load_voice_frames"):

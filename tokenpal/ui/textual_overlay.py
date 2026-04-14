@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -328,14 +329,18 @@ class TokenPalApp(App[None]):
     def _log_user(self, text: str) -> None:
         content = self.query_one("#chat-log-content", Static)
         current = content.render().plain
-        line = f"> {text}"
+        ts = datetime.now().strftime("%I:%M %p")
+        line = f"──────────────────────\n[{ts}]\nYou: {text}"
         content.update(f"{current}\n{line}" if current else line)
         self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
 
     def _log_buddy(self, text: str) -> None:
         content = self.query_one("#chat-log-content", Static)
         current = content.render().plain
-        content.update(f"{current}\n{text}" if current else text)
+        ts = datetime.now().strftime("%I:%M %p")
+        name = (self._overlay._voice_name or self._overlay._buddy_name).capitalize()
+        line = f"──────────────────────\n[{ts}]\n{name}: {text}"
+        content.update(f"{current}\n{line}" if current else line)
         self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
 
     # --- Message handlers (all run on app thread) ---
@@ -396,6 +401,7 @@ class TextualOverlay(AbstractOverlay):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._buddy_name = config.get("buddy_name", "TokenPal")
+        self._voice_name: str = ""
         self._app: TokenPalApp | None = None
         self._is_running = False
         self._input_callback: Callable[[str], None] | None = None
