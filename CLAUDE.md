@@ -33,6 +33,17 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
 - `git` — cross-platform, polls every 15s via async subprocess. Detects new commits, branch switches, dirty state changes. Uses `asyncio.gather` for parallel git calls. High-signal events bypass the commentary gate for immediate reactions. Opt-in via `[senses] git = true`
 - `world_awareness` — HN front-page poll (Algolia API, free/keyless). Poll 30min, TTL 2hr. Emits "Top HN: '...' — N points" only on change. Titles filtered via `contains_sensitive_term`. Opt-in via `[senses] world_awareness = true`. Silent degradation on network failure (no error quip)
+- `battery` — psutil.sensors_battery, transition-only (plugged/unplugged/low/critical/full). Auto-disables on desktops where no battery is detected. Opt-in via `[senses] battery = true`
+- `network_state` — online/offline, SSID change, VPN up/down. SSID never emitted raw: sha256[:16] hash used for change detection, friendly labels via `[network_state] ssid_labels`. VPN detection is a best-effort interface-prefix heuristic (`utun`/`tun`/`wg`). Opt-in via `[senses] network_state = true`
+- `process_heat` — names the top CPU hog when CPU is pinned >80% for 20s. Aggregates Electron-family renderers under parent name (Slack Helper → Slack). Sensitive-app names replaced with "something's working hard". Emits on trigger + on clear. Opt-in via `[senses] process_heat = true`
+
+## Actions / Tools Registry
+- `@register_action` is the tool-registry decorator. Each `AbstractAction` subclass declares `action_name`, `description`, `parameters` (JSON Schema), `safe: bool`, `requires_confirm: bool`
+- Flags `safe` and `requires_confirm` gate future autonomous LLM tool-calling (safe actions with requires_confirm=False can eventually fire without user prompting)
+- Built-ins: `timer`, `system_info`, `open_app`, `do_math`. `do_math` proves the registry end-to-end via the `/math` slash command — uses an ast walker restricted to `BinOp`/`UnaryOp`/numeric `Constant`, never `eval()`
+
+## Slash Commands (additions)
+- `/math <expr>` — evaluate an arithmetic expression (+, -, *, /, //, %, **). Expression length capped, exponent capped. Bypasses the LLM entirely
 
 ## Brain
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)

@@ -18,6 +18,8 @@ class SystemInfoAction(AbstractAction):
         "type": "object",
         "properties": {},
     }
+    safe = True
+    requires_confirm = False
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         cpu = psutil.cpu_percent(interval=0.1)

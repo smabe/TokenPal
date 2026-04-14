@@ -33,6 +33,8 @@ class TimerAction(AbstractAction):
         },
         "required": ["label", "seconds"],
     }
+    safe = True
+    requires_confirm = False
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)

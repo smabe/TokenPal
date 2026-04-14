@@ -29,6 +29,11 @@ class AbstractAction(abc.ABC):
     description: ClassVar[str]
     parameters: ClassVar[dict[str, Any]]
     platforms: ClassVar[tuple[str, ...]] = ("windows", "darwin", "linux")
+    # Gate flags for future autonomous tool-calling. `safe` = no side effects
+    # beyond reading state; `requires_confirm` = host must prompt the user
+    # before the LLM can invoke this unattended.
+    safe: ClassVar[bool] = False
+    requires_confirm: ClassVar[bool] = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

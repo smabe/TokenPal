@@ -61,6 +61,8 @@ class OpenAppAction(AbstractAction):
         },
         "required": ["app_name"],
     }
+    safe = False
+    requires_confirm = True
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         app_name = kwargs.get("app_name", "")

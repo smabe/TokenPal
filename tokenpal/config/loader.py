@@ -14,6 +14,7 @@ from tokenpal.config.schema import (
     FinetuneConfig,
     LLMConfig,
     MemoryConfig,
+    NetworkStateConfig,
     PathsConfig,
     PluginsConfig,
     RemoteTrainConfig,
@@ -44,6 +45,7 @@ _SECTION_MAP: dict[str, type] = {
     "finetune": FinetuneConfig,
     "server": ServerConfig,
     "weather": WeatherConfig,
+    "network_state": NetworkStateConfig,
 }
 
 

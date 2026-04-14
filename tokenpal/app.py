@@ -86,6 +86,7 @@ def main() -> None:
     if memory:
         sense_configs["productivity"] = {"memory_store": memory}
     sense_configs["weather"] = dataclasses.asdict(config.weather)
+    sense_configs["network_state"] = dataclasses.asdict(config.network_state)
     senses = resolve_senses(
         sense_flags=sense_flags,
         sense_overrides=config.plugins.sense_overrides,
@@ -352,8 +353,24 @@ def main() -> None:
         threading.Thread(target=_run_gh, daemon=True, name="gh-cmd").start()
         return CommandResult("")
 
+    def _cmd_math(args: str) -> CommandResult:
+        expr = args.strip()
+        if not expr:
+            return CommandResult("Usage: /math <expression>")
+        from tokenpal.actions.do_math import MathError, safe_eval
+        try:
+            result = safe_eval(expr)
+        except MathError as e:
+            return CommandResult(f"/math: {e}")
+        except ZeroDivisionError:
+            return CommandResult("/math: division by zero")
+        except OverflowError:
+            return CommandResult("/math: result too large")
+        return CommandResult(f"{expr} = {result}")
+
     dispatcher.register("ask", _cmd_ask)
     dispatcher.register("gh", _cmd_gh)
+    dispatcher.register("math", _cmd_math)
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)
     dispatcher.register("chatlog", _cmd_chatlog)

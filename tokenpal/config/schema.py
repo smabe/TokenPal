@@ -22,6 +22,15 @@ class SensesConfig:
     weather: bool = False
     git: bool = False
     world_awareness: bool = False
+    battery: bool = False
+    network_state: bool = False
+    process_heat: bool = False
+
+
+@dataclass
+class NetworkStateConfig:
+    # Map sha256[:16] SSID hash -> friendly label. Raw SSIDs never stored here.
+    ssid_labels: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -89,6 +98,7 @@ class ActionsConfig:
     timer: bool = True
     system_info: bool = True
     open_app: bool = True
+    do_math: bool = True
 
 
 @dataclass
@@ -164,3 +174,4 @@ class TokenPalConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    network_state: NetworkStateConfig = field(default_factory=NetworkStateConfig)

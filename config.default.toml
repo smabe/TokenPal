@@ -12,6 +12,9 @@ ocr = false                  # not yet implemented
 vision = false               # not yet implemented
 voice = false                # not yet implemented
 world_awareness = false      # HN front-page ambient context (opt-in, network call)
+battery = false              # plug/unplug transitions, low-battery warnings (no-op on desktops)
+network_state = false        # online/offline, wifi changes, VPN up/down (SSID hashed, never emitted raw)
+process_heat = false         # names the top CPU hog when the machine is pinned over 80% for 20s
 
 [llm]
 backend = "http"
@@ -53,6 +56,11 @@ timeout_s = 120             # seconds of silence before session expires
 backend = "duckduckgo"  # "duckduckgo" | "wikipedia" | "brave"
 brave_api_key = ""  # or set TOKENPAL_BRAVE_KEY env var
 
+# [network_state]
+# Map sha256[:16] SSID hashes to friendly labels. Raw SSIDs never stored anywhere.
+# To find a hash for your wifi: python -c "import hashlib; print(hashlib.sha256(b'YourSSID').hexdigest()[:16])"
+# ssid_labels = { "abcd1234abcd1234" = "home wifi", "ffff0000ffff0000" = "coffee shop" }
+
 [memory]
 enabled = true
 retention_days = 30
@@ -62,6 +70,7 @@ enabled = true
 timer = true
 system_info = true
 open_app = true
+do_math = true
 
 [paths]
 data_dir = "~/.tokenpal"
