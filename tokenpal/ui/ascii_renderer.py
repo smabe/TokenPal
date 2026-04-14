@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import textwrap
 from dataclasses import dataclass
 
@@ -49,6 +50,16 @@ BUDDY_SURPRISED = [
     r"      ▄▀▀▄ ▄▀▀▄       ",
 ]
 
+# Textual uses [color] for named colors but [#hex] for hex codes.
+# LLM-generated art sometimes uses [#namedcolor] which Textual rejects.
+_NAMED_COLOR_RE = re.compile(r"\[#(?![0-9a-fA-F]{6}\])([a-zA-Z]\w*)\]")
+
+
+def _fix_markup(lines: list[str]) -> list[str]:
+    """Fix LLM-generated Rich markup for Textual compatibility."""
+    return [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in lines]
+
+
 FRAMES: dict[str, list[str]] = {
     "idle": BUDDY_IDLE,
     "talking": BUDDY_TALKING,
@@ -77,14 +88,16 @@ class BuddyFrame:
         """Build a frame set from voice profile art. Returns name→frame dict."""
         frames: dict[str, BuddyFrame] = {}
         if idle:
-            frames["idle"] = BuddyFrame(lines=idle, name="idle", markup=True)
+            frames["idle"] = BuddyFrame(
+                lines=_fix_markup(idle), name="idle", markup=True,
+            )
         if idle_alt:
             frames["idle_alt"] = BuddyFrame(
-                lines=idle_alt, name="idle_alt", markup=True,
+                lines=_fix_markup(idle_alt), name="idle_alt", markup=True,
             )
         if talking:
             frames["talking"] = BuddyFrame(
-                lines=talking, name="talking", markup=True,
+                lines=_fix_markup(talking), name="talking", markup=True,
             )
         return frames
 
