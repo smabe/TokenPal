@@ -8,9 +8,11 @@ composing any LLM prompt.
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -67,6 +69,61 @@ def _truncate(text: str) -> str:
     return text[:_MAX_TEXT_CHARS].rstrip() + "…"
 
 
+# DDG Instant Answer only returns infobox facts. For natural-language queries,
+# scrape the first result snippet from lite.duckduckgo.com (a minimal-HTML
+# search results page designed to be easy to parse).
+_DDG_LITE_LINK_RE = re.compile(
+    r'<a\b[^>]*?\bhref=["\']([^"\']+)["\'][^>]*?\bclass=["\']result-link["\'][^>]*>(.*?)</a>',
+    re.IGNORECASE | re.DOTALL,
+)
+_DDG_LITE_SNIPPET_RE = re.compile(
+    r"""<td\b[^>]*?\bclass=["']result-snippet["'][^>]*>(.*?)</td>""",
+    re.IGNORECASE | re.DOTALL,
+)
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(s: str) -> str:
+    return html.unescape(_HTML_TAG_RE.sub("", s)).strip()
+
+
+def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
+    """Return (title, snippet, url) of the first DDG Lite result, or None."""
+    # DDG Lite requires POST with form-urlencoded body; GET returns the search form.
+    data = urllib.parse.urlencode({"q": query}).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            "https://lite.duckduckgo.com/lite/",
+            data=data,
+            headers={"User-Agent": _USER_AGENT},
+        )
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception as e:  # noqa: BLE001
+        log.debug("DDG lite fetch failed: %s", e)
+        return None
+
+    link = _DDG_LITE_LINK_RE.search(body)
+    snip = _DDG_LITE_SNIPPET_RE.search(body)
+    if not link or not snip:
+        return None
+
+    title = _strip_html(link.group(2))
+    snippet = _strip_html(snip.group(1))
+    href = link.group(1)
+    # DDG lite wraps outbound URLs in a redirect — unwrap it.
+    if "uddg=" in href:
+        parsed = urllib.parse.urlparse(href)
+        q_params = urllib.parse.parse_qs(parsed.query)
+        uddg = q_params.get("uddg", [""])[0]
+        if uddg:
+            href = urllib.parse.unquote(uddg)
+
+    if not title or not snippet:
+        return None
+    return title, snippet, href
+
+
 class DuckDuckGoBackend(SearchBackend):
     """DuckDuckGo Instant Answer API. Free, keyless."""
 
@@ -96,7 +153,10 @@ class DuckDuckGoBackend(SearchBackend):
                         source_url = (first.get("FirstURL") or "").strip()
 
         if not text:
-            return None
+            hit = _ddg_lite_first_result(query)
+            if hit is None:
+                return None
+            title, text, source_url = hit
 
         return SearchResult(
             query=query,
