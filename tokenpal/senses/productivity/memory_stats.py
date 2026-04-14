@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any
 
+from tokenpal.brain.personality import SENSITIVE_APPS
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
 
@@ -23,15 +24,7 @@ _APP_CATEGORIES: dict[str, list[str]] = {
     "creative": ["figma", "photoshop", "illustrator", "blender", "logic", "garageband"],
 }
 
-# Sensitive apps — never name these in summaries
-_SENSITIVE_APPS: set[str] = {
-    "1password", "bitwarden", "lastpass", "keychain", "dashlane",
-    "keeper", "nordpass",
-    "chase", "wells fargo", "bank of america", "capital one", "venmo",
-    "paypal", "schwab", "fidelity", "robinhood", "coinbase",
-    "myfitnesspal", "health", "fitbit", "headspace", "calm",
-    "messages", "signal", "whatsapp", "telegram",
-}
+_SENSITIVE_APPS: set[str] = set(SENSITIVE_APPS)
 
 
 def _categorize(app_name: str) -> str:

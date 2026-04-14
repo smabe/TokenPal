@@ -179,7 +179,7 @@ _APP_EASTER_EGGS: dict[str, str] = {
 # Sensitive apps — never comment when these are active (guardrail §4).
 # ---------------------------------------------------------------------------
 
-_SENSITIVE_APPS: list[str] = [
+SENSITIVE_APPS: list[str] = [
     "1password", "bitwarden", "lastpass", "keychain", "dashlane",
     "keeper", "nordpass",
     "chase", "wells fargo", "bank of america", "capital one", "venmo",
@@ -187,6 +187,16 @@ _SENSITIVE_APPS: list[str] = [
     "myfitnesspal", "health", "fitbit", "headspace", "calm",
     "messages", "signal", "whatsapp", "telegram",
 ]
+
+_SENSITIVE_APPS_LOWER: tuple[str, ...] = tuple(app.lower() for app in SENSITIVE_APPS)
+
+
+def contains_sensitive_term(text: str | None) -> bool:
+    """True if text contains a sensitive-app term (case-insensitive substring)."""
+    if not text:
+        return False
+    lower = text.lower()
+    return any(term in lower for term in _SENSITIVE_APPS_LOWER)
 
 # ---------------------------------------------------------------------------
 # Mood system
@@ -475,8 +485,7 @@ class PersonalityEngine:
 
     def check_sensitive_app(self, context_snapshot: str) -> bool:
         """Return True if a sensitive app is detected — should go silent."""
-        ctx_lower = context_snapshot.lower()
-        return any(app in ctx_lower for app in _SENSITIVE_APPS)
+        return contains_sensitive_term(context_snapshot)
 
     def check_easter_egg(self, context_snapshot: str) -> str | None:
         """Return a canned easter-egg line, or None if no egg triggers."""

@@ -32,6 +32,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `music` — macOS: AppleScript for Music.app/Spotify. Checks `System Events` before querying (prevents auto-launch). Track names redacted from logs
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
 - `git` — cross-platform, polls every 15s via async subprocess. Detects new commits, branch switches, dirty state changes. Uses `asyncio.gather` for parallel git calls. High-signal events bypass the commentary gate for immediate reactions. Opt-in via `[senses] git = true`
+- `world_awareness` — HN front-page poll (Algolia API, free/keyless). Poll 30min, TTL 2hr. Emits "Top HN: '...' — N points" only on change. Titles filtered via `contains_sensitive_term`. Opt-in via `[senses] world_awareness = true`. Silent degradation on network failure (no error quip)
 
 ## Brain
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
@@ -63,6 +64,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|import]` — voice management
 - `/server [status|switch]` — server connection
 - `/zip <zipcode>` — set weather location (geocodes via Open-Meteo, writes to config.toml)
+- `/ask <question>` — web search via DuckDuckGo Instant Answer + Wikipedia REST fallback (free, keyless; Brave API stub). Opt-in via `[web_search] enabled = true`. First-use consent marker at `~/.tokenpal/.ask_consent`. Results filtered through `contains_sensitive_term`, wrapped in `<search_result>` delimiters, fed to brain via `submit_user_input()` — conversation-session follow-up auto-opens. Never auto-invoked. Search backend abstraction in `tokenpal/senses/web_search/client.py` (BackendName Literal, `_clear_conversation()` zeros history refs on session timeout)
 
 ## LLM Notes
 - Default model: `gemma4` via Ollama. Supports tool calling.
@@ -97,7 +99,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - During active conversations, user messages are held in memory (not saved to disk) until the session times out (~2 min of silence). Conversation buffer is cleared on sensitive app detection. User input truncated to 30 chars in log output
 - Log files and memory.db at 0o600 (owner-only)
 - Music track names redacted from DEBUG logs
-- Weather is the ONLY network request (Open-Meteo, opt-in). No ip-api.com. Lat/lon rounded to 1 decimal
+- Network senses/commands — all opt-in, all keyless by default: `weather` (Open-Meteo), `world_awareness` (HN Algolia), `/ask` (DuckDuckGo + Wikipedia; Brave via `TOKENPAL_BRAVE_KEY` env var stubbed). All untrusted external text wrapped in delimiters + filtered via `contains_sensitive_term` before any prompt composition. `/ask` shows an explicit first-use consent warning; queries never persisted to disk
+- Lat/lon rounded to 1 decimal. No ip-api.com. No clipboard monitoring. No mic/audio sensing
 
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent`

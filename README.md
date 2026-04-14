@@ -100,7 +100,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 | | |
 |---|---|
-| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity (commits, branches, dirty state) |
+| **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity (commits, branches, dirty state), HN front-page ambient awareness |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps — via LLM tool calling |
 | **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
@@ -125,6 +125,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /gh                      recent commits (buddy comments in character)
 /gh prs                  open pull requests
 /gh issues               open issues
+/ask <question>          web search (DuckDuckGo + Wikipedia), buddy riffs on result
 /mood                    current mood
 /status                  model, senses, actions
 ```

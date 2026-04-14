@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
-from tokenpal.brain.personality import _SENSITIVE_APPS, PersonalityEngine
+from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -218,7 +218,7 @@ class Brain:
                         time.monotonic() - self._conversation.last_activity,
                         self._conversation.turn_count,
                     )
-                    self._conversation = None
+                    self._clear_conversation()
 
                 # High-signal events bypass the normal gate
                 has_urgent = any(
@@ -289,9 +289,15 @@ class Brain:
             self._clear_conversation()
 
     def _clear_conversation(self) -> None:
+        """Drop references to message contents before clearing the buffer.
+        (Python strings are immutable — this releases refs, not secure zeroing.)"""
         if self._conversation is not None:
             log.debug("Conversation session cleared (%d turns)", self._conversation.turn_count)
-            self._conversation = None
+            for msg in self._conversation.history:
+                if "content" in msg:
+                    msg["content"] = ""
+            self._conversation.history.clear()
+        self._conversation = None
 
     def _should_comment(self) -> bool:
         if self._paused:
@@ -501,7 +507,7 @@ class Brain:
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None
         callback_lines = (
-            self._memory.get_pattern_callbacks(sensitive_apps=_SENSITIVE_APPS)
+            self._memory.get_pattern_callbacks(sensitive_apps=SENSITIVE_APPS)
             if self._memory
             else None
         )
@@ -653,7 +659,7 @@ class Brain:
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
             log.debug("Sensitive app detected during conversation — clearing session")
-            self._conversation = None
+            self._clear_conversation()
             self._ui_callback("I'll look away while you handle that.")
             return
 

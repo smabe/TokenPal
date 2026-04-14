@@ -244,6 +244,90 @@ def main() -> None:
         overlay.schedule_callback(overlay.toggle_chat_log)
         return CommandResult("")
 
+    def _cmd_ask(args: str) -> CommandResult:
+        query = args.strip()
+        if not query:
+            return CommandResult("Usage: /ask <question>")
+
+        marker = data_dir / ".ask_consent"
+        if not marker.exists():
+            try:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.touch()
+            except OSError:
+                pass
+            warning = (
+                "/ask sends your query to DuckDuckGo. "
+                "No cookies, no IP beyond TCP. Query text leaves the machine. "
+                "Run /ask again to confirm and proceed."
+            )
+            return CommandResult(warning)
+
+        if not config.web_search.enabled:
+            return CommandResult(
+                "/ask is disabled. Set [web_search] enabled = true in config.toml"
+            )
+
+        def _run_ask() -> None:
+            from tokenpal.brain.personality import contains_sensitive_term
+            from tokenpal.senses.web_search.client import LOG_TRUNCATE_CHARS, search
+
+            try:
+                result = search(
+                    query,
+                    backend=config.web_search.backend,
+                    brave_api_key=config.web_search.brave_api_key,
+                )
+            except Exception:
+                log.exception("/ask search failed")
+                overlay.schedule_callback(
+                    lambda: overlay.log_buddy_message(
+                        f"[/ask] search failed for '{query[:LOG_TRUNCATE_CHARS]}'"
+                    )
+                )
+                return
+
+            if result is None:
+                overlay.schedule_callback(
+                    lambda: overlay.log_buddy_message(
+                        f"[/ask] no result for '{query[:LOG_TRUNCATE_CHARS]}'"
+                    )
+                )
+                return
+
+            if (
+                contains_sensitive_term(result.text)
+                or contains_sensitive_term(result.title)
+            ):
+                log.debug(
+                    "/ask result filtered (sensitive term) for query: %s",
+                    query[:LOG_TRUNCATE_CHARS],
+                )
+                overlay.schedule_callback(
+                    lambda: overlay.log_buddy_message(
+                        "[/ask] result filtered (sensitive term)"
+                    )
+                )
+                return
+
+            raw = f"[/ask] {result.title[:200]}\n{result.text[:500]}"
+            overlay.schedule_callback(lambda r=raw: overlay.log_buddy_message(r))
+
+            # Wrap untrusted text in delimiters — basic prompt-injection mitigation.
+            backend_name = result.backend.replace('"', "")
+            prompt = (
+                f"[User ran /ask: {query}]\n"
+                f"<search_result backend=\"{backend_name}\">\n"
+                f"{result.text}\n"
+                f"</search_result>\n"
+                "React in character — riff on the result, "
+                "ask a follow-up if you want."
+            )
+            brain.submit_user_input(prompt)
+
+        threading.Thread(target=_run_ask, daemon=True, name="ask-cmd").start()
+        return CommandResult(f"Searching: {query[:80]}...")
+
     def _cmd_gh(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else "log"
@@ -271,6 +355,7 @@ def main() -> None:
         threading.Thread(target=_run_gh, daemon=True, name="gh-cmd").start()
         return CommandResult("")
 
+    dispatcher.register("ask", _cmd_ask)
     dispatcher.register("gh", _cmd_gh)
     dispatcher.register("help", _cmd_help)
     dispatcher.register("clear", _cmd_clear)

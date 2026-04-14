@@ -18,10 +18,10 @@ class SensesConfig:
     ocr: bool = False
     vision: bool = False
     voice: bool = False
-    web_search: bool = False
     productivity: bool = False
     weather: bool = False
     git: bool = False
+    world_awareness: bool = False
 
 
 @dataclass
@@ -30,6 +30,13 @@ class WeatherConfig:
     longitude: float = 0.0
     temperature_unit: str = "fahrenheit"
     location_label: str = ""
+
+
+@dataclass
+class WebSearchConfig:
+    enabled: bool = False
+    backend: Literal["duckduckgo", "wikipedia", "brave"] = "duckduckgo"
+    brave_api_key: str = ""
 
 
 @dataclass
@@ -157,3 +164,4 @@ class TokenPalConfig:
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
