@@ -20,16 +20,23 @@ A witty ASCII buddy that lives in your terminal, watches what you're doing, and 
 
 ## Quick Start
 
-**Fresh machine?** One command installs Python, Ollama, model, and all dependencies:
+**Fresh machine?** Clone and run the installer for your platform:
 
 ```bash
 # macOS
+git clone https://github.com/smabe/TokenPal.git && cd TokenPal
 bash scripts/install-macos.sh
+```
 
+```powershell
 # Windows (PowerShell)
+git clone https://github.com/smabe/TokenPal.git; cd TokenPal
 powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
+```
 
+```bash
 # Linux
+git clone https://github.com/smabe/TokenPal.git && cd TokenPal
 bash scripts/install-linux.sh
 ```
 
