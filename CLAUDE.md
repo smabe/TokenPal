@@ -12,9 +12,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
 
 ## Key Commands
-- `python3 setup_tokenpal.py` — one-command setup (venv, deps, Ollama, config). `--client` for remote GPU, `--local` for full local
+- Platform installers: `bash scripts/install-macos.sh`, `powershell scripts/install-windows.ps1`, `bash scripts/install-linux.sh` — standalone fresh-machine setup with interactive client/server/both prompt and VRAM-based model recommendation
+- `python3 setup_tokenpal.py` — lightweight setup for when Python is already installed. `--client` for remote GPU, `--local` for full local
 - `tokenpal` — run the buddy (first-run wizard on fresh install)
-- `tokenpal --check` — verify Ollama, model, senses; warns on enabled-but-unimplemented senses
+- `tokenpal --check` — quick verify: Ollama, model, senses, actions
+- `tokenpal --validate` — full preflight: Python version, platform deps, git, Ollama, model, config, senses, macOS permissions
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --skip-welcome` — bypass first-run wizard
 - `pytest` — run tests (asyncio_mode=auto)

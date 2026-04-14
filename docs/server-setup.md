@@ -69,9 +69,25 @@ ollama pull gemma4
 tokenpal-server --host 0.0.0.0
 ```
 
-### Using the installer scripts
+### Using the platform installers (recommended)
 
-Alternatively, `scripts/install-server.sh` (Linux/macOS) and `scripts/install-server.ps1` (Windows) automate the full setup including venv, firewall, HF token, and auto-start configuration.
+The unified platform installers handle everything — Python, Ollama, model pull, firewall, auto-start:
+
+```powershell
+# Windows
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 -Mode Server
+```
+```bash
+# Linux
+bash scripts/install-linux.sh --mode server
+
+# macOS
+bash scripts/install-macos.sh --mode server
+```
+
+They recommend a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
+
+The older `scripts/install-server.sh` and `scripts/install-server.ps1` still work but are deprecated in favor of the unified installers above.
 
 ## Verify
 
@@ -226,7 +242,7 @@ For gated models (e.g., Gemma), set HF_TOKEN on the server:
 | Ollama using CPU on AMD GPU | OLLAMA_VULKAN not set | Set `OLLAMA_VULKAN=1` as persistent User env var (see AMD GPU section above) |
 | Ollama using system RAM with Vulkan | iGPU detected alongside discrete GPU | Set `GGML_VK_VISIBLE_DEVICES=0` to use only the discrete GPU |
 | Model reloads into system RAM after idle | `OLLAMA_KEEP_ALIVE` too short, model evicted from VRAM | Set `OLLAMA_KEEP_ALIVE=24h` (see Model Keep-Alive section) |
-| `start-server.bat` says "cannot find the file serve" | `start /B` treats first quoted arg as window title | Fixed in latest `install-server.ps1` — re-run the installer or `git pull` |
+| `start-server.bat` says "cannot find the file serve" | `start /B` treats first quoted arg as window title | Re-run the installer (`install-windows.ps1`) or `git pull` |
 | `ollama create` from SSH fails with "timed out" | Ollama CLI tries to start new instance | Use PowerShell: `powershell -Command "& 'path\to\ollama.exe' create ..."` |
 | `ollama create` panics on safetensors | Tokenizer format incompatibility | Convert to GGUF first (see workaround above) |
 | Voice training produces empty persona | Model returns empty content | Fixed: `reasoning_effort=none` added to voice asset generation |

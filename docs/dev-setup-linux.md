@@ -42,7 +42,12 @@ pip install --upgrade pip
 pip install -e ".[dev]"
 ```
 
-Or use the setup script:
+Or use the platform installer (handles everything from a bare machine):
+```bash
+bash scripts/install-linux.sh
+```
+
+Or the lightweight setup script (if Python is already installed):
 ```bash
 python3 setup_tokenpal.py
 ```

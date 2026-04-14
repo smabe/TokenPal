@@ -20,42 +20,52 @@ A witty ASCII buddy that lives in your terminal, watches what you're doing, and 
 
 ## Quick Start
 
+**Fresh machine?** One command installs Python, Ollama, model, and all dependencies:
+
+```bash
+# macOS
+bash scripts/install-macos.sh
+
+# Windows (PowerShell)
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1
+
+# Linux
+bash scripts/install-linux.sh
+```
+
+Each installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**. Recommends a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
+
+**Already have Python 3.12+?** The lightweight path:
+
 ```bash
 python3 setup_tokenpal.py   # creates venv, installs deps, checks Ollama
 source .venv/bin/activate
 tokenpal                    # first run walks you through a quick setup wizard
 ```
 
-**Prerequisites:** Python 3.12+, [Ollama](https://ollama.com/download), a model (`ollama pull gemma4` or `ollama pull gemma4:26b` with 16GB+ VRAM)
+Verify everything: `tokenpal --check` (quick) or `tokenpal --validate` (full preflight)
 
-Verify everything: `tokenpal --check`
-
-### Client-only install (remote GPU)
-
-If you're using a remote GPU server for inference, skip the Ollama install:
-
-```bash
-python3 setup_tokenpal.py --client   # prompts for server URL, skips Ollama
-```
+See [SETUP.md](SETUP.md) for the full decision tree.
 
 ## Remote GPU Server
 
 Got a GPU box on your network? One command turns it into an inference server for all your machines. Works with NVIDIA (CUDA) and AMD (Vulkan) GPUs.
 
-**On the GPU box:**
+**On the GPU box** — run the platform installer with server mode:
 
 ```powershell
 # Windows (PowerShell)
-git clone https://github.com/smabe/TokenPal.git && cd TokenPal
-.\scripts\install-server.ps1
+powershell -ExecutionPolicy Bypass -File scripts\install-windows.ps1 -Mode Server
 ```
 ```bash
-# Linux / macOS
-git clone https://github.com/smabe/TokenPal.git && cd TokenPal
-./scripts/install-server.sh
+# Linux
+bash scripts/install-linux.sh --mode server
+
+# macOS
+bash scripts/install-macos.sh --mode server
 ```
 
-Installs Python, Ollama, pulls gemma4, configures firewall, sets up auto-start. Prints the URL when done.
+Installs Python, Ollama, pulls the right model for your VRAM, configures firewall, sets up auto-start (systemd/launchd/Windows Startup). Prints the URL when done.
 
 **AMD GPU (RX 9070 XT / RDNA 4):** Set Vulkan env vars before first run:
 ```powershell
@@ -208,15 +218,18 @@ tokenpal/
 ├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
 ├── util/            # Shared utilities
 ├── commands.py      # Slash command dispatcher
-├── cli.py           # --check, --verbose, --config, --skip-welcome
+├── cli.py           # --check, --validate, --verbose, --config, --skip-welcome
 ├── first_run.py     # First-run welcome wizard
 └── app.py           # Bootstrap and main loop
 
 scripts/
-├── bootstrap.sh     # One-line server setup (Linux/macOS)
-├── bootstrap.ps1    # One-line server setup (Windows)
-├── install-server.sh   # Full server installer
-├── install-server.ps1  # Full server installer (Windows)
+├── install-macos.sh    # macOS installer (Python, Ollama, deps, client/server/both)
+├── install-windows.ps1 # Windows installer (Python, Ollama, deps, client/server/both)
+├── install-linux.sh    # Linux installer (Python, Ollama, deps, client/server/both)
+├── bootstrap.sh        # Legacy one-line server setup (Linux/macOS)
+├── bootstrap.ps1       # Legacy one-line server setup (Windows)
+├── install-server.sh   # Legacy server installer (Linux/macOS)
+├── install-server.ps1  # Legacy server installer (Windows)
 └── start-server.bat    # Start Ollama + server (Windows)
 
 docs/
@@ -224,7 +237,8 @@ docs/
 ├── remote-training-guide.md     # LoRA fine-tuning guide
 ├── dynamic-mood-transitions.md  # V2 mood system design (parked)
 ├── dev-setup-macos.md           # macOS dev environment
-├── dev-setup-windows-*.md       # Windows dev environments
+├── dev-setup-linux.md           # Linux dev environment
+├── dev-setup-windows-*.md       # Windows dev environments (Intel, AMD laptop, AMD desktop)
 └── fine-tuning-plan.md          # Fine-tuning architecture notes
 ```
 
@@ -234,7 +248,8 @@ docs/
 
 ```
 tokenpal                  # run the buddy (first-run wizard on fresh install)
-tokenpal --check          # verify Ollama, model, senses, actions
+tokenpal --check          # quick: verify Ollama, model, senses, actions
+tokenpal --validate       # full: Python, platform deps, git, Ollama, config, permissions
 tokenpal --verbose        # debug logs in terminal
 tokenpal --config PATH    # specific config file
 tokenpal --skip-welcome   # bypass first-run wizard
