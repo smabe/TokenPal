@@ -21,6 +21,7 @@ class SensesConfig:
     web_search: bool = False
     productivity: bool = False
     weather: bool = False
+    git: bool = False
 
 
 @dataclass
