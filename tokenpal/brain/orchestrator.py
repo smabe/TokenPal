@@ -258,11 +258,12 @@ class Brain:
             self._sense_last_polled[s.sense_name] = now
             if isinstance(r, SenseReading):
                 readings.append(r)
-            elif r is None:
-                # Sense returned nothing — clear stale reading
-                self._context.clear_reading(s.sense_name)
             elif isinstance(r, Exception):
                 log.debug("Sense poll error: %s", r)
+            # r is None: transition-only senses return None between events;
+            # reading_ttl_s already bounds how long the cached reading stays
+            # active, so don't clear here (would wipe the reading before the
+            # gate's cooldown clears).
         return readings
 
     @property
