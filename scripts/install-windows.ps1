@@ -41,13 +41,14 @@ if (-not $Mode) {
     if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
         Write-Host ""
         Write-Host "  How would you like to install TokenPal?"
+        Write-Host "    [B] Both         — full installation (recommended)"
         Write-Host "    [C] Client only  — run the buddy on this PC"
         Write-Host "    [S] Server only  — serve LLM inference for other machines"
-        Write-Host "    [B] Both         — full installation"
         Write-Host ""
         do {
-            $choice = Read-Host "  Choose [C/S/B]"
+            $choice = Read-Host "  Choose [B/C/S] (default: B)"
             $choice = $choice.Trim().ToUpper()
+            if (-not $choice) { $choice = "B" }
         } while ($choice -notin @("C", "S", "B"))
         switch ($choice) {
             "C" { $Mode = "Client" }
@@ -55,15 +56,23 @@ if (-not $Mode) {
             "B" { $Mode = "Both" }
         }
     } else {
-        Write-Host "  Non-interactive session detected, defaulting to Client"
-        $Mode = "Client"
+        Write-Host "  Non-interactive session detected, defaulting to Both"
+        Write-Host "  (Override with -Mode Client or -Mode Server)"
+        $Mode = "Both"
     }
 }
 
 $InstallClient = $Mode -in @("Client", "Both")
 $InstallServer = $Mode -in @("Server", "Both")
 
-Write-Host "  Mode: $Mode" -ForegroundColor White
+Write-Host ""
+Write-Host "  >>> Installing in $Mode mode <<<" -ForegroundColor Green
+if ($InstallServer) {
+    Write-Host "      - tokenpal-server (fastapi + uvicorn)" -ForegroundColor Gray
+}
+if ($InstallClient) {
+    Write-Host "      - tokenpal (buddy + UI)" -ForegroundColor Gray
+}
 
 # ── Phase 1: Python 3.12+ ──────────────────────────────────────────────────
 
