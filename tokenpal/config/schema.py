@@ -34,7 +34,6 @@ class WeatherConfig:
 
 @dataclass
 class WebSearchConfig:
-    enabled: bool = False
     backend: Literal["duckduckgo", "wikipedia", "brave"] = "duckduckgo"
     brave_api_key: str = ""
 

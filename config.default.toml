@@ -48,7 +48,8 @@ timeout_s = 120             # seconds of silence before session expires
 # max_response_tokens = 300
 
 [web_search]
-enabled = false   # /ask slash command — opt-in, sends query to external search
+# /ask is gated by a first-use consent marker (~/.tokenpal/.ask_consent)
+# written when you first run the command — no config toggle needed.
 backend = "duckduckgo"  # "duckduckgo" | "wikipedia" | "brave"
 brave_api_key = ""  # or set TOKENPAL_BRAVE_KEY env var
 

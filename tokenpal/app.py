@@ -263,11 +263,6 @@ def main() -> None:
             )
             return CommandResult(warning)
 
-        if not config.web_search.enabled:
-            return CommandResult(
-                "/ask is disabled. Set [web_search] enabled = true in config.toml"
-            )
-
         def _run_ask() -> None:
             from tokenpal.brain.personality import contains_sensitive_term
             from tokenpal.senses.web_search.client import LOG_TRUNCATE_CHARS, search
