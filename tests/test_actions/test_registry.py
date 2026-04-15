@@ -49,7 +49,13 @@ def test_resolve_actions_respects_enabled_flags():
 
 
 def test_resolve_actions_all_disabled():
+    # With default tools all disabled and no opt-in allowlist, we expect zero
+    # instances — even after phase 2b registered 13 opt-in network tools.
+    from tokenpal.config.schema import DEFAULT_TOOLS
+
     actions = resolve_actions(
-        enabled={"timer": False, "system_info": False, "open_app": False, "do_math": False}
+        enabled={"timer": False, "system_info": False, "open_app": False, "do_math": False},
+        optin_allowlist=set(),
+        default_tools=set(DEFAULT_TOOLS),
     )
     assert actions == []
