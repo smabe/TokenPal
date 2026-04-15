@@ -81,16 +81,15 @@ Installs Python, Ollama, pulls the right model for your VRAM, configures firewal
 # Reopen terminal after setting these
 ```
 
-**On your client** — switch from inside TokenPal:
+**On your client**, switch from inside TokenPal:
 ```
 /server switch gpu-box
 ```
 
-Or make it permanent in `config.toml`:
-```toml
-[llm]
-api_url = "http://gpu-box:8585/v1"
-```
+The choice persists across restarts. TokenPal also remembers the last model
+used on each server (`/model <name>` writes to `[llm.per_server_models]`),
+so switching from your laptop to a beefier GPU host automatically loads the
+model you picked there. No need to hand-edit config between machines.
 
 Auto-falls back to local Ollama if the server goes down. Works with [Tailscale](https://tailscale.com) out of the box.
 
@@ -117,12 +116,12 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 
 ```
 /model list              show available models
-/model gemma4            switch model
+/model gemma4            switch model (remembered per-server in config.toml)
 /voice train wiki char   train a voice from a Fandom wiki
 /voice switch bmo        hot-swap voice (no restart)
 /server status           show server connection
-/server switch local     use local Ollama
-/server switch hostname  switch to remote server
+/server switch local     use local Ollama (restores that host's remembered model)
+/server switch hostname  switch to remote server (restores that host's remembered model)
 /zip 90210               set weather location (geocodes, writes config)
 /senses                  list senses with on/off + loaded status
 /senses enable <name>    turn a sense on in config.toml (restart to apply)
@@ -227,8 +226,18 @@ Config auto-discovered: `~/.tokenpal/config.toml` > project root > cwd.
 ```toml
 [llm]
 api_url = "http://localhost:11434/v1"  # or remote server
-model_name = "gemma4"
+model_name = "gemma4"                  # fallback when a server has no remembered model
+max_tokens = 60                        # default output cap for observations
 disable_reasoning = true               # fast responses
+
+# Populated automatically by /model <name> on each server. Hand-edit
+# only if you want to pre-seed a machine. Keys are canonical api_urls.
+[llm.per_server_models]
+# "http://localhost:11434/v1" = "gemma4"
+# "http://gpu-box:8585/v1"   = "gemma4:26b-a4b-it-q8_0"
+
+[llm.per_server_max_tokens]
+# "http://gpu-box:8585/v1" = 256
 
 [senses]
 # These are on by default:

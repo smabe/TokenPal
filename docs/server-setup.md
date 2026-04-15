@@ -115,6 +115,28 @@ api_url = "http://YOUR-SERVER:8585/v1"
 
 That's it. TokenPal will use the remote server for inference. If the server is unreachable, it falls back to local Ollama automatically (when `mode = "auto"`).
 
+### Per-server model memory
+
+`/model <name>` persists the selection into `[llm.per_server_models]`, keyed
+by the active `api_url`. `/server switch` consults that table and restores
+the remembered model on the destination host, so machines with different
+pulled models (e.g. `gemma4` on a laptop, `gemma4:26b-a4b-it-q8_0` on a
+5090) don't clobber each other. The global `model_name` stays as the
+fallback for a server you've never used `/model` on.
+
+Optional: `[llm.per_server_max_tokens]` lets you raise the default output
+cap on a beefier host (the global default is `60`, tuned for short
+observations).
+
+```toml
+[llm.per_server_models]
+"http://localhost:11434/v1"  = "gemma4"
+"http://gpu-box:8585/v1"     = "gemma4:26b-a4b-it-q8_0"
+
+[llm.per_server_max_tokens]
+"http://gpu-box:8585/v1" = 256
+```
+
 The status bar shows which server is active: `apollyon | gemma4:26b | finn | happy`.
 
 ## Voice Training
@@ -172,10 +194,10 @@ Default bind is `127.0.0.1` (localhost only). Set `host = "0.0.0.0"` to expose o
 | Command | Description |
 |---------|-------------|
 | `/server status` | Show connection state and current server |
-| `/server switch local` | Use local Ollama (localhost:11434) |
-| `/server switch remote` | Use the configured server |
-| `/server switch HOSTNAME` | Switch to a specific server |
-| `/model MODEL` | Switch to a different model on the server |
+| `/server switch local` | Use local Ollama and restore its remembered model |
+| `/server switch remote` | Use the configured server and restore its remembered model |
+| `/server switch HOSTNAME` | Switch to a specific server and restore its remembered model |
+| `/model MODEL` | Switch models on the active server (persisted to `[llm.per_server_models]`) |
 | `/model list` | Show models available on the server |
 | `/voice list` | Show locally available voice profiles |
 | `/voice train WIKI CHARACTER` | Train a new voice from a Fandom wiki |
