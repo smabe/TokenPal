@@ -223,6 +223,11 @@ ok "Installed tokenpal[$EXTRAS]"
 
 info "[6/9] Setting up Ollama..."
 
+if [[ "$MODE" == "client" ]]; then
+    ok "Client mode — skipping local Ollama install (inference happens on remote server)"
+    info "If you want a local fallback, install later with: curl -fsSL https://ollama.com/install.sh | sh"
+else
+
 if ! command -v ollama &>/dev/null; then
     echo "  Installing Ollama..."
     curl -fsSL https://ollama.com/install.sh | sh
@@ -334,6 +339,8 @@ elif curl -sf http://localhost:11434/ >/dev/null 2>&1; then
 else
     warn "Ollama not reachable — pull $MODEL manually: ollama pull $MODEL"
 fi
+
+fi  # end client-mode skip for Phase 6
 
 # ── Phase 7: Server-specific setup ─────────────────────────────────────────
 

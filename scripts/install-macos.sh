@@ -279,6 +279,11 @@ ok "Dependencies installed"
 echo ""
 echo "[8/$total_phases] Setting up Ollama and model..."
 
+if [[ "$MODE" == "client" ]]; then
+    ok "Client mode — skipping local Ollama install (inference happens on remote server)"
+    info "If you want a local fallback, install later with: brew install ollama"
+else
+
 if ! command -v ollama &>/dev/null; then
     info "Ollama not found. Installing via Homebrew..."
     brew install ollama
@@ -363,6 +368,8 @@ else
         warn "Model pull failed. Retry later with: ollama pull $MODEL"
     fi
 fi
+
+fi  # end client-mode skip for Phase 8
 
 # ── Phase 9: Server setup (server or both mode only) ───────────────────────
 

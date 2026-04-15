@@ -228,6 +228,11 @@ if ($amdGpu) {
 Write-Host ""
 Write-Host "[6/9] Setting up Ollama..." -ForegroundColor Yellow
 
+if (-not $InstallServer -and $InstallClient) {
+    Write-Host "  Client mode: skipping local Ollama install (inference happens on remote server)" -ForegroundColor Green
+    Write-Host "  If you want a local fallback, install later with: winget install Ollama.Ollama" -ForegroundColor DarkGray
+} else {
+
 $ollamaExe = $null
 $ollamaInPath = Get-Command ollama -ErrorAction SilentlyContinue
 $ollamaLocalApp = "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe"
@@ -374,6 +379,8 @@ if ($ollamaRunning) {
         }
     }
 }
+
+}  # end client-mode skip for Phase 6
 
 # ── Phase 7: Server Setup (server/both mode only) ──────────────────────────
 
