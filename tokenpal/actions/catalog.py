@@ -48,6 +48,15 @@ DEFAULT_SECTION = CatalogSection(
 LOCAL_SECTION = CatalogSection(
     title="Local",
     description="Power-user tools that read local state (no network).",
+    entries=(
+        CatalogEntry("read_file", "Read a git-tracked file, capped at 200KB."),
+        CatalogEntry("grep_codebase", "Search the current repo with ripgrep."),
+        CatalogEntry("git_log", "Show recent commits."),
+        CatalogEntry("git_diff", "Show the current diff, capped at 50KB."),
+        CatalogEntry("git_status", "Show working-tree status."),
+        CatalogEntry("list_processes", "List top processes by CPU then RSS."),
+        CatalogEntry("memory_query", "Query local session history metrics."),
+    ),
 )
 UTILITIES_SECTION = CatalogSection(
     title="Utilities",
