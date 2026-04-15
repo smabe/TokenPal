@@ -1009,24 +1009,14 @@ def _handle_model_command(
                     capture_output=True, text=True, timeout=600,
                 )
                 if result.returncode == 0:
-                    overlay.schedule_callback(
-                        lambda: overlay.show_speech(
-                            SpeechBubble(text=f"Got {model}! /model {model} to use it.")
-                        )
+                    _overlay_finalize(
+                        overlay, f"Got {model}! /model {model} to use it."
                     )
                 else:
                     err = (result.stderr or "unknown error").strip()[:60]
-                    overlay.schedule_callback(
-                        lambda: overlay.show_speech(
-                            SpeechBubble(text=f"Pull failed: {err}")
-                        )
-                    )
+                    _overlay_finalize(overlay, f"Pull failed: {err}")
             except Exception:
-                overlay.schedule_callback(
-                    lambda: overlay.show_speech(
-                        SpeechBubble(text="Pull failed. Check logs.")
-                    )
-                )
+                _overlay_finalize(overlay, "Pull failed. Check logs.")
             finally:
                 overlay.schedule_callback(
                     lambda: overlay.update_status("")
@@ -1346,12 +1336,12 @@ def _start_voice_finetune(
             if llm:
                 llm.set_model(model_name)
 
-            _overlay_show(overlay, f"{profile.character} fine-tuned! Model: {model_name}")
+            _overlay_finalize(overlay, f"{profile.character} fine-tuned! Model: {model_name}")
             log.info("Fine-tuning complete: %s → %s", slug, model_name)
 
         except Exception:
             log.exception("Fine-tuning failed")
-            _overlay_show(overlay, "Fine-tuning failed. Check logs.")
+            _overlay_finalize(overlay, "Fine-tuning failed. Check logs.")
         finally:
             if brain:
                 brain.paused = False
@@ -1392,12 +1382,12 @@ def _start_finetune_setup(
             loop.close()
 
             if ok:
-                _overlay_show(overlay, "Remote training environment ready!")
+                _overlay_finalize(overlay, "Remote training environment ready!")
             else:
-                _overlay_show(overlay, "Setup failed. Check tokenpal.log for details.")
+                _overlay_finalize(overlay, "Setup failed. Check tokenpal.log for details.")
         except Exception:
             log.exception("Finetune setup failed")
-            _overlay_show(overlay, "Setup failed. Check logs.")
+            _overlay_finalize(overlay, "Setup failed. Check logs.")
         finally:
             _overlay_status(overlay, "")
 
