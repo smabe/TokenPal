@@ -9,17 +9,19 @@ import random
 import re
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 
 from tokenpal.actions.base import AbstractAction
+from tokenpal.brain.agent import AgentRunner, AgentSession
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
-from tokenpal.config.schema import ConversationConfig
+from tokenpal.config.schema import AgentConfig, ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 
@@ -115,9 +117,15 @@ class Brain:
         context_max_tokens: int = 2048,
         sense_intervals: dict[str, float] | None = None,
         conversation: ConversationConfig | None = None,
+        agent_config: AgentConfig | None = None,
+        agent_log_callback: Callable[[str], None] | None = None,
+        agent_confirm_callback: Callable[
+            [str, dict[str, Any]], Awaitable[bool]
+        ] | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._senses = senses
         self._llm = llm
@@ -159,6 +167,12 @@ class Brain:
         # Conversation session state
         self._conversation: ConversationSession | None = None
         self._conv_config = conversation or ConversationConfig()
+
+        # Agent mode state
+        self._agent_config = agent_config or AgentConfig()
+        self._agent_log_callback = agent_log_callback
+        self._agent_confirm_callback = agent_confirm_callback
+        self._agent_running: bool = False
 
         # Proactive scheduler (phase 3). Shared across all focus actions.
         # Pauses during active conversation and sensitive-app detection.
@@ -221,6 +235,15 @@ class Brain:
                     try:
                         user_msg = self._user_input_queue.get_nowait()
                         await self._handle_user_input(user_msg)
+                    except asyncio.QueueEmpty:
+                        break
+
+                # Process any pending agent goals (one at a time — agent runs
+                # are long-lived and suppress observations while in flight).
+                while not self._agent_goal_queue.empty():
+                    try:
+                        goal = self._agent_goal_queue.get_nowait()
+                        await self._handle_agent_goal(goal)
                     except asyncio.QueueEmpty:
                         break
 
@@ -313,8 +336,10 @@ class Brain:
                     action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
 
     def _proactive_paused(self) -> bool:
-        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps."""
+        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps / agent runs."""
         if self._paused:
+            return True
+        if self._agent_running:
             return True
         if self._in_conversation:
             return True
@@ -361,6 +386,8 @@ class Brain:
         if self._paused:
             return False
         if self._in_conversation:
+            return False
+        if self._agent_running:
             return False
 
         now = time.monotonic()
@@ -430,6 +457,8 @@ class Brain:
         if self._paused:
             return False
         if self._in_conversation:
+            return False
+        if self._agent_running:
             return False
         if not self._personality.has_rich_voice:
             return False
@@ -706,6 +735,87 @@ class Brain:
         except RuntimeError:
             log.warning("Brain event loop closed — input dropped")
 
+    def submit_agent_goal(self, goal: str) -> None:
+        """Thread-safe: enqueue a /agent goal from the main thread."""
+        if self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(
+                self._agent_goal_queue.put_nowait, goal
+            )
+        except RuntimeError:
+            log.warning("Brain event loop closed — agent goal dropped")
+
+    @property
+    def agent_running(self) -> bool:
+        return self._agent_running
+
+    async def _handle_agent_goal(self, goal: str) -> AgentSession:
+        """Run one agent session from start to finish. Suppresses
+        observations + freeform for the duration and swaps to the agent
+        model if configured."""
+        if self._agent_log_callback is None or self._agent_confirm_callback is None:
+            self._ui_callback(
+                "/agent isn't wired up — the overlay can't show confirm modals yet."
+            )
+            return AgentSession(goal=goal, stopped_reason="unavailable")
+
+        snapshot = self._context.snapshot()
+        if self._personality.check_sensitive_app(snapshot):
+            self._ui_callback("Not now — sensitive window is open.")
+            return AgentSession(goal=goal, stopped_reason="sensitive")
+
+        runner = AgentRunner(
+            llm=self._llm,
+            actions=self._actions,
+            log_callback=self._agent_log_callback,
+            confirm_callback=self._agent_confirm_callback,
+            is_sensitive=self._sensitive_check,
+            max_steps=self._agent_config.max_steps,
+            token_budget=self._agent_config.token_budget,
+            per_step_timeout_s=self._agent_config.per_step_timeout_s,
+        )
+
+        previous_model = self._llm.model_name
+        swapped = False
+        target_model = self._agent_config.model.strip()
+        if target_model and target_model != previous_model:
+            try:
+                self._llm.set_model(target_model)
+                swapped = True
+                log.info("Agent model swapped: %s -> %s", previous_model, target_model)
+            except NotImplementedError:
+                log.debug("Backend does not support model swap — staying on %s", previous_model)
+
+        self._agent_running = True
+        if self._status_callback:
+            self._status_callback("agent running...")
+        self._agent_log_callback(f"> agent: {goal}")
+        try:
+            session = await runner.run(goal)
+        except Exception:
+            log.exception("Agent run crashed")
+            session = AgentSession(goal=goal, stopped_reason="crashed")
+        finally:
+            self._agent_running = False
+            if swapped:
+                try:
+                    self._llm.set_model(previous_model)
+                except NotImplementedError:
+                    pass
+            self._push_status()
+
+        summary = _format_agent_summary(session)
+        final = session.final_text.strip() or summary
+        self._agent_log_callback(f"= {summary}")
+        self._ui_callback(final)
+        self._last_comment_time = time.monotonic()
+        return session
+
+    def _sensitive_check(self) -> bool:
+        """Runner-facing predicate — re-check on every agent step."""
+        return self._personality.check_sensitive_app(self._context.snapshot())
+
     async def _handle_user_input(self, user_message: str) -> None:
         """Respond to direct user input using multi-turn conversation context."""
         # PRIVACY: check sensitive apps BEFORE building prompt or touching history
@@ -883,3 +993,21 @@ class Brain:
                 log.exception("Error tearing down action '%s'", action.action_name)
         await self._llm.teardown()
         log.info("Brain stopped")
+
+
+def _format_agent_summary(session: AgentSession) -> str:
+    duration_s = time.monotonic() - session.started_at
+    reason_map = {
+        "complete": "done",
+        "step_cap": "hit step cap",
+        "token_budget": "hit token budget",
+        "sensitive": "stopped — sensitive window",
+        "denied": "stopped — user denied a tool",
+        "timeout": "stopped — step timed out",
+        "crashed": "stopped — crashed",
+    }
+    reason = reason_map.get(session.stopped_reason, session.stopped_reason or "unknown")
+    return (
+        f"{reason} in {duration_s:.1f}s "
+        f"({len(session.steps)} step(s), {session.tokens_used} tokens)"
+    )

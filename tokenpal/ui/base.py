@@ -68,6 +68,16 @@ class AbstractOverlay(abc.ABC):
         """
         return False
 
+    def open_confirm_modal(
+        self,
+        title: str,
+        body: str,
+        on_result: Callable[[bool], None],
+    ) -> bool:
+        """Open a yes/no confirmation modal. Returns True if supported,
+        False otherwise (caller must choose a safe default — usually deny)."""
+        return False
+
     @abc.abstractmethod
     def run_loop(self) -> None:
         """Start the platform event loop. Blocks on main thread."""

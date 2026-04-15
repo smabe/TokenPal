@@ -52,6 +52,14 @@ max_turns = 10              # turn pairs kept in history (bump for larger models
 timeout_s = 120             # seconds of silence before session expires
 # max_response_tokens = 300
 
+[agent]
+# /agent multi-step tool-calling loop. Empty model = reuse [llm] model_name.
+# Plan recommends qwen2.5:32b on 40GB+ VRAM; DO NOT use deepseek-r1 for execution.
+# model = "qwen2.5:32b"
+max_steps = 8
+per_step_timeout_s = 45.0
+token_budget = 12000
+
 [web_search]
 # /ask is gated by a first-use consent marker (~/.tokenpal/.ask_consent)
 # written when you first run the command — no config toggle needed.

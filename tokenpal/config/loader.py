@@ -10,6 +10,7 @@ from typing import Any
 
 from tokenpal.config.schema import (
     ActionsConfig,
+    AgentConfig,
     BrainConfig,
     ConversationConfig,
     FilesystemPulseConfig,
@@ -53,6 +54,7 @@ _SECTION_MAP: dict[str, type] = {
     "network_state": NetworkStateConfig,
     "web_search": WebSearchConfig,
     "conversation": ConversationConfig,
+    "agent": AgentConfig,
     "filesystem_pulse": FilesystemPulseConfig,
 }
 

@@ -143,6 +143,32 @@ def main() -> None:
     # Set up the overlay (must happen on main thread)
     overlay.setup()
 
+    # Agent confirm modal bridge — brain coroutine awaits a future; the
+    # modal callback resolves it. Must be created on the brain's event loop
+    # (inside the async world), so we build a factory here and thread it in.
+    def _agent_log(text: str) -> None:
+        overlay.schedule_callback(lambda t=text: overlay.log_buddy_message(t))
+
+    async def _agent_confirm(tool_name: str, args: dict[str, Any]) -> bool:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[bool] = loop.create_future()
+
+        def _resolve(result: bool) -> None:
+            if not fut.done():
+                loop.call_soon_threadsafe(fut.set_result, result)
+
+        body = f"Tool wants to run:\n\n  {tool_name}({args})\n\nAllow this call?"
+        opened = overlay.open_confirm_modal(
+            title="Agent confirmation",
+            body=body,
+            on_result=_resolve,
+        )
+        if not opened:
+            # Overlay can't show modals (console/headless) — safe default: deny.
+            log.warning("Overlay has no modal support; auto-denying %s", tool_name)
+            return False
+        return await fut
+
     # Build the brain
     brain = Brain(
         senses=senses,
@@ -162,6 +188,9 @@ def main() -> None:
         context_max_tokens=config.brain.context_max_tokens,
         sense_intervals=config.brain.sense_intervals,
         conversation=config.conversation,
+        agent_config=config.agent,
+        agent_log_callback=_agent_log,
+        agent_confirm_callback=_agent_confirm,
     )
 
     # Load voice-specific buddy art into the overlay
@@ -469,6 +498,19 @@ def main() -> None:
 
         return overlay.open_selection_modal("Tools", groups, on_save)
 
+    def _cmd_agent(args: str) -> CommandResult:
+        goal = args.strip()
+        if not goal:
+            return CommandResult("Usage: /agent <goal>")
+        if "agent_mode" not in config.tools.enabled_tools:
+            return CommandResult(
+                "/agent is off. Enable 'agent_mode' in /tools and restart."
+            )
+        if brain.agent_running:
+            return CommandResult("/agent: already running. Wait for the current goal to finish.")
+        brain.submit_agent_goal(goal)
+        return CommandResult(f"Agent started: {goal[:60]}")
+
     def _cmd_tools(args: str) -> CommandResult:
         from tokenpal.actions.catalog import SECTIONS, default_tool_names
 
@@ -689,6 +731,7 @@ def main() -> None:
     dispatcher.register("zip", _cmd_zip)
     dispatcher.register("tools", _cmd_tools)
     dispatcher.register("consent", _cmd_consent)
+    dispatcher.register("agent", _cmd_agent)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

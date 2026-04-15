@@ -20,6 +20,7 @@ from textual.widgets import Input, Static
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
+from tokenpal.ui.confirm_modal import ConfirmModal
 from tokenpal.ui.registry import register_overlay
 from tokenpal.ui.selection_modal import SelectionGroup, SelectionModal
 
@@ -109,6 +110,19 @@ class OpenSelectionModal(Message):
         self.title = title
         self.groups = groups
         self.on_save = on_save
+        super().__init__()
+
+
+class OpenConfirmModal(Message):
+    def __init__(
+        self,
+        title: str,
+        body: str,
+        on_result: Callable[[bool], None],
+    ) -> None:
+        self.title = title
+        self.body = body
+        self.on_result = on_result
         super().__init__()
 
 
@@ -584,6 +598,10 @@ class TokenPalApp(App[None]):
         modal = SelectionModal(message.title, message.groups)
         self.push_screen(modal, message.on_save)
 
+    def on_open_confirm_modal(self, message: OpenConfirmModal) -> None:
+        modal = ConfirmModal(message.title, message.body)
+        self.push_screen(modal, message.on_result)
+
 
 # --- Overlay ---
 
@@ -668,6 +686,17 @@ class TextualOverlay(AbstractOverlay):
         if not (self._app and self._is_running):
             return False
         self._post(OpenSelectionModal(title, list(groups), on_save))
+        return True
+
+    def open_confirm_modal(
+        self,
+        title: str,
+        body: str,
+        on_result: Callable[[bool], None],
+    ) -> bool:
+        if not (self._app and self._is_running):
+            return False
+        self._post(OpenConfirmModal(title, body, on_result))
         return True
 
     def teardown(self) -> None:

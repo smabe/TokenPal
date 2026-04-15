@@ -175,6 +175,18 @@ class FinetuneConfig:
 
 
 @dataclass
+class AgentConfig:
+    # Empty string = fall back to LLMConfig.model_name. Plan recommends
+    # `qwen2.5:32b` for tool-call reliability on a 40GB-class GPU.
+    model: str = ""
+    max_steps: int = 8
+    per_step_timeout_s: float = 45.0
+    # Soft cap — Ollama sometimes returns usage.total_tokens = 0, so the loop
+    # warns and keeps going up to max_steps when the cap trips on bad data.
+    token_budget: int = 12000
+
+
+@dataclass
 class ConversationConfig:
     max_turns: int = 10           # 10 turn pairs = 20 messages
     timeout_s: float = 120.0      # 2 minutes of silence ends session
@@ -194,6 +206,7 @@ class TokenPalConfig:
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
+    agent: AgentConfig = field(default_factory=AgentConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)

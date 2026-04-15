@@ -173,7 +173,16 @@ FOCUS_SECTION = CatalogSection(
 )
 AGENT_SECTION = CatalogSection(
     title="Agent",
-    description="Multi-step agent mode. Chains tools toward a goal.",
+    description=(
+        "Multi-step agent mode. Runs /agent <goal> as a tool-calling loop "
+        "with step cap, token budget, and per-tool confirm gate."
+    ),
+    entries=(
+        CatalogEntry(
+            "agent_mode",
+            "Enable /agent <goal> — chains tools toward a goal with confirm prompts.",
+        ),
+    ),
 )
 RESEARCH_SECTION = CatalogSection(
     title="Research",
