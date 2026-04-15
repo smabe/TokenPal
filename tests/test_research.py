@@ -261,9 +261,10 @@ async def test_runner_search_timeout_survives_gather(
 
 
 @pytest.mark.asyncio
-async def test_fetch_url_wrapped_excerpt_is_stripped(
+async def test_fetch_replaces_snippet_with_article_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Runner injects raw extracted text — no <tool_result> unwrapping."""
     llm = _ScriptedLLM([
         _ok('[{"query": "q1"}]', tokens=10),
         _ok("Answer [1].", tokens=30),
@@ -271,16 +272,12 @@ async def test_fetch_url_wrapped_excerpt_is_stripped(
     monkeypatch.setattr(
         "tokenpal.brain.research.search",
         lambda q, backend="duckduckgo", **_: _hit(
-            "https://example.com", "Title", "initial snippet", "duckduckgo"
+            "https://example.com", "Title", "short snippet", "duckduckgo"
         ),
     )
 
     async def fake_fetch(_url: str) -> str:
-        return (
-            "<tool_result tool=\"fetch_url\" url=\"https://example.com\">\n"
-            "FULL ARTICLE BODY ABOUT THE TOPIC\n"
-            "</tool_result>"
-        )
+        return "FULL ARTICLE BODY ABOUT THE TOPIC"
 
     logs, log_cb = _logs()
     runner = ResearchRunner(llm=llm, fetch_url=fake_fetch, log_callback=log_cb)
@@ -289,8 +286,7 @@ async def test_fetch_url_wrapped_excerpt_is_stripped(
     assert session.sources, "expected at least one source"
     excerpt = session.sources[0].excerpt
     assert "FULL ARTICLE BODY" in excerpt
-    assert "<tool_result" not in excerpt
-    assert "</tool_result>" not in excerpt
+    assert "short snippet" not in excerpt
 
 
 # ---------------------------------------------------------------------------

@@ -351,10 +351,10 @@ class Brain:
                     action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
 
     def _proactive_paused(self) -> bool:
-        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps / agent or research runs."""
+        """Pause proactive nudges during conversation, sensitive apps, or long tasks."""
         if self._paused:
             return True
-        if self._agent_running or self._research_running:
+        if self._any_long_task():
             return True
         if self._in_conversation:
             return True
@@ -397,12 +397,15 @@ class Brain:
             self._conversation.history.clear()
         self._conversation = None
 
+    def _any_long_task(self) -> bool:
+        return self._agent_running or self._research_running
+
     def _should_comment(self) -> bool:
         if self._paused:
             return False
         if self._in_conversation:
             return False
-        if self._agent_running or self._research_running:
+        if self._any_long_task():
             return False
 
         now = time.monotonic()
@@ -473,7 +476,7 @@ class Brain:
             return False
         if self._in_conversation:
             return False
-        if self._agent_running or self._research_running:
+        if self._any_long_task():
             return False
         if not self._personality.has_rich_voice:
             return False
@@ -724,38 +727,22 @@ class Brain:
             log.warning("Action '%s' failed: %s", tc.name, e)
             return f"Error: {e}"
 
-    def submit_user_input(self, text: str) -> None:
-        """Thread-safe: enqueue user text from the main thread."""
+    def _post_threadsafe(self, queue: asyncio.Queue[str], item: str, label: str) -> None:
         if self._loop is None:
             return
         try:
-            self._loop.call_soon_threadsafe(
-                self._user_input_queue.put_nowait, text
-            )
+            self._loop.call_soon_threadsafe(queue.put_nowait, item)
         except RuntimeError:
-            log.warning("Brain event loop closed — input dropped")
+            log.warning("Brain event loop closed — %s dropped", label)
+
+    def submit_user_input(self, text: str) -> None:
+        self._post_threadsafe(self._user_input_queue, text, "user input")
 
     def submit_agent_goal(self, goal: str) -> None:
-        """Thread-safe: enqueue a /agent goal from the main thread."""
-        if self._loop is None:
-            return
-        try:
-            self._loop.call_soon_threadsafe(
-                self._agent_goal_queue.put_nowait, goal
-            )
-        except RuntimeError:
-            log.warning("Brain event loop closed — agent goal dropped")
+        self._post_threadsafe(self._agent_goal_queue, goal, "agent goal")
 
     def submit_research_question(self, question: str) -> None:
-        """Thread-safe: enqueue a /research question from the main thread."""
-        if self._loop is None:
-            return
-        try:
-            self._loop.call_soon_threadsafe(
-                self._research_queue.put_nowait, question
-            )
-        except RuntimeError:
-            log.warning("Brain event loop closed — research question dropped")
+        self._post_threadsafe(self._research_queue, question, "research question")
 
     @property
     def agent_running(self) -> bool:
@@ -844,17 +831,16 @@ class Brain:
                 question=question, stopped_reason=ResearchStopReason.UNAVAILABLE
             )
 
-        fetch_tool = self._actions.get("fetch_url")
+        from tokenpal.actions.research.fetch_url import fetch_and_extract
 
         async def _fetch(url: str) -> str | None:
-            if fetch_tool is None:
-                return None
             try:
-                r = await fetch_tool.execute(url=url)
+                return await fetch_and_extract(
+                    url, timeout_s=self._research_config.per_fetch_timeout_s
+                )
             except Exception:
-                log.exception("fetch_url tool raised during research")
+                log.exception("fetch_and_extract raised during research")
                 return None
-            return r.output if r.success else None
 
         previous_model = self._llm.model_name
         active_model = previous_model
@@ -1114,24 +1100,28 @@ _RESEARCH_REASON_LABELS: dict[ResearchStopReason, str] = {
 }
 
 
-def _format_research_summary(session: ResearchSession) -> str:
+def _format_session_summary(
+    session: Any,
+    labels: dict[Any, str],
+    counts: list[tuple[str, int]],
+) -> str:
     duration_s = time.monotonic() - session.started_at
-    reason = _RESEARCH_REASON_LABELS.get(
+    reason = labels.get(
         session.stopped_reason, str(session.stopped_reason) or "unknown"
     )
-    return (
-        f"{reason} in {duration_s:.1f}s "
-        f"({len(session.queries)} quer(ies), {len(session.sources)} source(s), "
-        f"{session.tokens_used} tokens)"
+    tail = ", ".join(f"{n} {name}" for name, n in counts)
+    return f"{reason} in {duration_s:.1f}s ({tail}, {session.tokens_used} tokens)"
+
+
+def _format_research_summary(session: ResearchSession) -> str:
+    return _format_session_summary(
+        session,
+        _RESEARCH_REASON_LABELS,
+        [("quer(ies)", len(session.queries)), ("source(s)", len(session.sources))],
     )
 
 
 def _format_agent_summary(session: AgentSession) -> str:
-    duration_s = time.monotonic() - session.started_at
-    reason = _STOP_REASON_LABELS.get(
-        session.stopped_reason, str(session.stopped_reason) or "unknown"
-    )
-    return (
-        f"{reason} in {duration_s:.1f}s "
-        f"({len(session.steps)} step(s), {session.tokens_used} tokens)"
+    return _format_session_summary(
+        session, _STOP_REASON_LABELS, [("step(s)", len(session.steps))]
     )

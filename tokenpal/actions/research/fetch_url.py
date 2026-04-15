@@ -5,9 +5,11 @@ benchmarks). Fallback: readability-lxml. Neither executes JavaScript.
 newspaper3k is abandoned upstream — if we ever need its style, the
 newspaper4k fork is the live continuation; do not revive newspaper3k.
 
-500KB raw-bytes cap before extraction, sensitive-term filter on the
-extracted text before returning. Result wrapped in <tool_result> delimiters
-so the brain treats it as untrusted.
+500KB raw-bytes cap before extraction, sensitive-term filter inside
+``fetch_and_extract`` so both the LLM-tool path and the research
+pipeline path share the same scrubbing. The action wraps the extracted
+text in ``<tool_result>`` delimiters for the brain; the raw text is
+what ResearchRunner consumes.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ from urllib.parse import urlparse
 import aiohttp
 
 from tokenpal.actions.base import AbstractAction, ActionResult
+from tokenpal.actions.network._http import _get_session
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
 from tokenpal.config.consent import Category, has_consent
@@ -28,12 +31,40 @@ log = logging.getLogger(__name__)
 
 _MAX_BYTES = 500 * 1024
 _DEFAULT_TIMEOUT_S = 8.0
-_USER_AGENT = (
+# Descriptive UA required by a handful of endpoints (Wikimedia, TheSportsDB).
+# Passed per-request so we don't override the shared session's global UA.
+_FETCH_UA = (
     "TokenPal/1.0 (+https://github.com/smabe/TokenPal; "
     "abraham.awadallah@gmail.com)"
 )
-# Cap on returned extracted text so one call can't blow the caller's context.
 _MAX_EXTRACT_CHARS = 8000
+
+
+async def fetch_and_extract(url: str, *, timeout_s: float = _DEFAULT_TIMEOUT_S) -> str | None:
+    """Fetch URL and return plain extracted article text. None on any failure,
+    including sensitive-term detection. Callers are responsible for consent."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+
+    try:
+        raw = await asyncio.wait_for(_fetch(url), timeout=timeout_s)
+    except TimeoutError:
+        return None
+    except aiohttp.ClientError as e:
+        log.debug("fetch_url: %s for %s", e, url)
+        return None
+
+    if not raw:
+        return None
+
+    text = _extract(raw, url)
+    if not text:
+        return None
+    if contains_sensitive_term(text):
+        log.debug("fetch_url: content filtered (sensitive) for %s", url)
+        return None
+    return text[:_MAX_EXTRACT_CHARS]
 
 
 @register_action
@@ -67,42 +98,23 @@ class FetchUrlAction(AbstractAction):
                 success=False,
             )
 
-        try:
-            raw = await asyncio.wait_for(_fetch(url), timeout=_DEFAULT_TIMEOUT_S)
-        except TimeoutError:
-            return ActionResult(output=f"fetch_url: timed out for {url}", success=False)
-        except aiohttp.ClientError as e:
-            return ActionResult(output=f"fetch_url: {e}", success=False)
-
-        if raw is None:
-            return ActionResult(output=f"fetch_url: empty body for {url}", success=False)
-
-        text = _extract(raw, url)
-        if not text:
+        text = await fetch_and_extract(url)
+        if text is None:
             return ActionResult(
-                output=f"fetch_url: no readable content at {url}",
+                output=f"fetch_url: nothing usable at {url}",
                 success=False,
             )
 
-        if contains_sensitive_term(text):
-            log.debug("fetch_url: content filtered (sensitive) for %s", url)
-            return ActionResult(
-                output=f"fetch_url: filtered content at {url}",
-                success=False,
-            )
-
-        trimmed = text[:_MAX_EXTRACT_CHARS]
-        body = f"<tool_result tool=\"fetch_url\" url=\"{url}\">\n{trimmed}\n</tool_result>"
+        body = f"<tool_result tool=\"fetch_url\" url=\"{url}\">\n{text}\n</tool_result>"
         return ActionResult(output=body, success=True)
 
 
 async def _fetch(url: str) -> str | None:
-    headers = {"User-Agent": _USER_AGENT}
-    async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(url, allow_redirects=True) as resp:
-            if resp.status >= 400:
-                return None
-            raw_bytes = await resp.content.read(_MAX_BYTES)
+    session = await _get_session()
+    async with session.get(url, allow_redirects=True, headers={"User-Agent": _FETCH_UA}) as resp:
+        if resp.status >= 400:
+            return None
+        raw_bytes = await resp.content.read(_MAX_BYTES)
     if not raw_bytes:
         return None
     try:
@@ -112,7 +124,6 @@ async def _fetch(url: str) -> str | None:
 
 
 def _extract(html: str, url: str) -> str:
-    """Try trafilatura first; fall back to readability-lxml. Returns plain text."""
     try:
         import trafilatura
 

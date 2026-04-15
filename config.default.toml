@@ -61,13 +61,9 @@ per_step_timeout_s = 45.0
 token_budget = 12000
 
 [research]
-# /research plan-search-read-synthesize pipeline. Per-call model overrides
-# (all empty = reuse [llm] model_name). Plan recommends deepseek-r1:32b for
-# planner + synthesizer (reasoning helps decomposition + citation fidelity);
-# reader stays on qwen2.5:32b since it doesn't benefit from reasoning.
-# planner_model = "deepseek-r1:32b"
-# synth_model = "deepseek-r1:32b"
-# reader_model = "qwen2.5:32b"
+# /research pipeline. Empty planner_model/synth_model/reader_model reuse
+# [llm] model_name; override to deepseek-r1:32b (planner + synth) and
+# qwen2.5:32b (reader) on 40GB+ VRAM.
 max_queries = 3
 max_fetches = 5
 token_budget = 6000

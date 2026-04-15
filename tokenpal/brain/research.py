@@ -1,20 +1,8 @@
 """Research mode for /research <question>.
 
-Plan → parallel search → fetch → synthesize. Deliberately thin — three LLM
-calls at most (planner + optional reader-selector + synthesizer) so the
-pipeline stays observable and each stage is independently testable.
-
-Design constraints (from the grand plan):
-- Planner: 2-3 few-shot examples to prevent over-decomposition of simple
-  factual queries. Emits 1-5 {query, intent} objects.
-- Search: asyncio.gather(..., return_exceptions=True), per-backend
-  asyncio.Semaphore (DDG ≈ 20/min, Wikipedia lax, Brave 1/s). Per-call
-  asyncio.wait_for so Wikipedia edge cases can't hang the run.
-- Synthesizer: sources numbered `[1] url\nexcerpt` placed BEFORE the
-  question in the user turn (recency bias favors citation fidelity).
-  Tail-anchored citation instruction repeated at the end of the user
-  message. Post-hoc regex strips dangling [N] markers outside the valid
-  range.
+Plan → parallel search → fetch → synthesize. Each stage is independently
+testable; the runner is framework-agnostic so tests inject mock search
+and fetch functions.
 """
 
 from __future__ import annotations
@@ -149,11 +137,9 @@ class ResearchRunner:
             return session
 
         capped = hits[: self._max_fetches]
-        for i, hit in enumerate(capped, start=1):
-            src = await self._read(i, hit)
-            if src is not None:
-                session.sources.append(src)
-                self._log(f"  [{src.number}] {src.url}")
+        session.sources = await self._read_all(capped)
+        for src in session.sources:
+            self._log(f"  [{src.number}] {src.url}")
 
         if not session.sources:
             session.stopped_reason = ResearchStopReason.NO_SOURCES
@@ -221,8 +207,22 @@ class ResearchRunner:
 
     # ---- Stage 3: read ----------------------------------------------------
 
+    async def _read_all(self, hits: list[SearchResult]) -> list[Source]:
+        """Fan fetches out in parallel with bounded concurrency so one slow
+        host can't stall the pipeline. Source numbers match hit order."""
+        sem = asyncio.Semaphore(3)
+
+        async def _one(i: int, hit: SearchResult) -> Source | None:
+            async with sem:
+                return await self._read(i, hit)
+
+        results = await asyncio.gather(
+            *(_one(i, h) for i, h in enumerate(hits, start=1))
+        )
+        return [s for s in results if s is not None]
+
     async def _read(self, number: int, hit: SearchResult) -> Source | None:
-        """Prefer the search snippet; optionally enrich with fetch_url."""
+        """Prefer the search snippet; optionally enrich with fetched article."""
         excerpt = (hit.text or "").strip()
         url = hit.source_url
 
@@ -234,14 +234,10 @@ class ResearchRunner:
             except TimeoutError:
                 fetched = None
             except Exception:
-                log.exception("fetch_url raised for %s", url)
+                log.exception("fetch raised for %s", url)
                 fetched = None
             if fetched:
-                # fetch_url returns a wrapped <tool_result> block; strip tags
-                # to get the raw text for citation context.
-                inner = _strip_tool_result_wrapper(str(fetched))
-                if inner:
-                    excerpt = inner[:2000]
+                excerpt = str(fetched)[:2000]
 
         if not excerpt:
             return None
@@ -271,44 +267,39 @@ class ResearchRunner:
         return response.text.strip(), response.tokens_used
 
 
+_JSON_ARRAY_RE = re.compile(r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]", re.DOTALL)
+
+
 def _parse_planner_output(text: str, cap: int) -> list[PlannedQuery]:
-    """Planner emits a JSON array. Strip code fences / chatter around it,
-    then json.loads. Falls back to a single query if the model emits just a
-    one-liner in natural language."""
+    """Planner emits a JSON array. Tries every bracketed span in the text
+    until one parses to a list — greedy `\\[.*\\]` would span prose like
+    ``Here's [a note]. Plan: [{...}]`` and capture invalid JSON."""
     if not text:
         return []
-    match = re.search(r"\[.*\]", text, re.DOTALL)
-    if match:
-        raw = match.group(0)
+    for match in _JSON_ARRAY_RE.finditer(text):
         try:
-            parsed = json.loads(raw)
+            parsed = json.loads(match.group(0))
         except json.JSONDecodeError:
-            parsed = None
-        if isinstance(parsed, list):
-            queries: list[PlannedQuery] = []
-            for item in parsed[:cap]:
-                if isinstance(item, dict):
-                    q = (item.get("query") or item.get("q") or "").strip()
-                    intent = (item.get("intent") or "").strip()
-                    if q:
-                        queries.append(PlannedQuery(query=q, intent=intent))
-                elif isinstance(item, str):
-                    s = item.strip()
-                    if s:
-                        queries.append(PlannedQuery(query=s))
-            if queries:
-                return queries
+            continue
+        if not isinstance(parsed, list):
+            continue
+        queries: list[PlannedQuery] = []
+        for item in parsed[:cap]:
+            if isinstance(item, dict):
+                q = (item.get("query") or item.get("q") or "").strip()
+                intent = (item.get("intent") or "").strip()
+                if q:
+                    queries.append(PlannedQuery(query=q, intent=intent))
+            elif isinstance(item, str):
+                s = item.strip()
+                if s:
+                    queries.append(PlannedQuery(query=s))
+        if queries:
+            return queries
     bare = text.strip().strip('"').strip()
     if bare:
         return [PlannedQuery(query=bare[:200])]
     return []
-
-
-def _strip_tool_result_wrapper(body: str) -> str:
-    inner = re.sub(
-        r"^<tool_result[^>]*>\s*|\s*</tool_result>\s*$", "", body.strip(), flags=re.DOTALL
-    )
-    return inner.strip()
 
 
 _DANGLING_MARKER_RE = re.compile(r"\[(\d+)\]")

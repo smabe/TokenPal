@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, ClassVar
+from typing import Any, ClassVar, get_args
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
@@ -76,8 +76,14 @@ class SearchWebAction(AbstractAction):
         return ActionResult(output=body, success=True)
 
 
+# Brave lives in BackendName but its backend is stub-only (NotImplementedError),
+# so search_web refuses to route to it. Keep the BackendName source of truth by
+# reading the Literal's members at runtime.
+_ALLOWED_BACKENDS: frozenset[str] = frozenset(get_args(BackendName)) - {"brave"}
+
+
 def _coerce_backend(raw: Any) -> BackendName:
     name = (raw or "duckduckgo").lower()
-    if name not in ("duckduckgo", "wikipedia"):
-        return "duckduckgo"
-    return name  # type: ignore[return-value]
+    if name in _ALLOWED_BACKENDS:
+        return name  # type: ignore[return-value]
+    return "duckduckgo"
