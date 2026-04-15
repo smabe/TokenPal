@@ -286,15 +286,24 @@ if [[ "$MODE" == "server" || "$MODE" == "both" ]]; then
         info "No discrete GPU VRAM detected — using system RAM (${vram_gb}GB) for model recommendation"
     fi
 
-    if (( vram_gb >= 16 )); then
+    # Tiers. For reasoning models (deepseek-r1, qwq), override via TOKENPAL_MODEL.
+    # Note: TokenPal strips think tags and sends reasoning_effort=none, so reasoning
+    # models are best for /ask and tool flows, not observation commentary.
+    if (( vram_gb >= 48 )); then
+        RECOMMENDED="llama3.3:70b"
+        echo "  Recommending llama3.3:70b (70B, best quality for ${vram_gb}GB)"
+    elif (( vram_gb >= 32 )); then
+        RECOMMENDED="qwen2.5:32b"
+        echo "  Recommending qwen2.5:32b (32B) for ${vram_gb}GB. gemma4:26b also fits with headroom."
+    elif (( vram_gb >= 16 )); then
         RECOMMENDED="gemma4:26b"
         echo "  Recommending gemma4:26b (26B, best quality for ${vram_gb}GB)"
-    elif (( vram_gb >= 8 )); then
+    elif (( vram_gb >= 6 )); then
         RECOMMENDED="gemma4"
         echo "  Recommending gemma4 (9B, solid default for ${vram_gb}GB)"
     else
-        RECOMMENDED="gemma4"
-        echo "  Recommending gemma4 (9B)"
+        RECOMMENDED="gemma2:2b"
+        echo "  Recommending gemma2:2b (2B, fits in ${vram_gb}GB)"
     fi
 
     # Let user confirm or override

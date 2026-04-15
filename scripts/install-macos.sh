@@ -314,15 +314,25 @@ fi
 if [[ "$MODE" == "server" || "$MODE" == "both" ]]; then
     total_bytes=$(sysctl -n hw.memorysize 2>/dev/null || echo 0)
     total_gb=$(( total_bytes / 1073741824 ))
-    if (( total_gb >= 16 )); then
+    # Tiers. For reasoning models (deepseek-r1, qwq), override via TOKENPAL_MODEL.
+    # TokenPal strips think tags, so reasoning models are best for /ask not observations.
+    # Apple Silicon shares unified memory with the OS, so leave room: the tier
+    # thresholds already assume ~8GB of headroom for macOS itself.
+    if (( total_gb >= 48 )); then
+        RECOMMENDED="llama3.3:70b"
+        info "Detected ${total_gb}GB unified memory, recommending llama3.3:70b (70B, best quality)"
+    elif (( total_gb >= 32 )); then
+        RECOMMENDED="qwen2.5:32b"
+        info "Detected ${total_gb}GB unified memory, recommending qwen2.5:32b (32B). gemma4:26b also fits."
+    elif (( total_gb >= 16 )); then
         RECOMMENDED="gemma4:26b"
-        info "Detected ${total_gb}GB unified memory — recommending gemma4:26b (26B, best quality)"
-    elif (( total_gb >= 8 )); then
+        info "Detected ${total_gb}GB unified memory, recommending gemma4:26b (26B, best quality)"
+    elif (( total_gb >= 6 )); then
         RECOMMENDED="gemma4"
-        info "Detected ${total_gb}GB unified memory — recommending gemma4 (9B, solid default)"
+        info "Detected ${total_gb}GB unified memory, recommending gemma4 (9B, solid default)"
     else
-        RECOMMENDED="gemma4"
-        info "Detected ${total_gb}GB unified memory — recommending gemma4 (9B)"
+        RECOMMENDED="gemma2:2b"
+        info "Detected ${total_gb}GB unified memory, recommending gemma2:2b (2B, fits tight memory)"
     fi
 
     # Let user confirm or override

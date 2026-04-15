@@ -325,15 +325,23 @@ if ($ollamaRunning) {
             $vramGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
         }
 
-        if ($vramGB -ge 16) {
+        # Tiers. For reasoning models (deepseek-r1, qwq), override via TOKENPAL_MODEL.
+        # TokenPal strips think tags, so reasoning models fit /ask better than observation quips.
+        if ($vramGB -ge 48) {
+            $Recommended = "llama3.3:70b"
+            Write-Host "  Detected ~${vramGB}GB, recommending llama3.3:70b (70B, best quality)" -ForegroundColor Cyan
+        } elseif ($vramGB -ge 32) {
+            $Recommended = "qwen2.5:32b"
+            Write-Host "  Detected ~${vramGB}GB, recommending qwen2.5:32b (32B). gemma4:26b also fits with headroom." -ForegroundColor Cyan
+        } elseif ($vramGB -ge 16) {
             $Recommended = "gemma4:26b"
-            Write-Host "  Detected ~${vramGB}GB — recommending gemma4:26b (26B, best quality)" -ForegroundColor Cyan
-        } elseif ($vramGB -ge 8) {
+            Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b (26B, best quality)" -ForegroundColor Cyan
+        } elseif ($vramGB -ge 6) {
             $Recommended = "gemma4"
-            Write-Host "  Detected ~${vramGB}GB — recommending gemma4 (9B, solid default)" -ForegroundColor Cyan
+            Write-Host "  Detected ~${vramGB}GB, recommending gemma4 (9B, solid default)" -ForegroundColor Cyan
         } else {
-            $Recommended = "gemma4"
-            Write-Host "  Detected ~${vramGB}GB — recommending gemma4 (9B)" -ForegroundColor Cyan
+            $Recommended = "gemma2:2b"
+            Write-Host "  Detected ~${vramGB}GB, recommending gemma2:2b (2B, fits small VRAM)" -ForegroundColor Cyan
         }
 
         # Let user confirm or override
