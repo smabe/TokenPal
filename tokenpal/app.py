@@ -21,13 +21,14 @@ from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.loader import load_config
-from tokenpal.config.schema import TokenPalConfig
+from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
 from tokenpal.config.senses_writer import (
     add_watch_root,
     remove_watch_root,
     set_sense_enabled,
     set_ssid_label,
 )
+from tokenpal.config.tools_writer import set_enabled_tools
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.senses.base import AbstractSense
@@ -128,7 +129,11 @@ def main() -> None:
             for f in dataclasses.fields(config.actions)
             if f.name != "enabled"
         }
-        actions = resolve_actions(enabled=action_flags)
+        actions = resolve_actions(
+            enabled=action_flags,
+            optin_allowlist=set(config.tools.enabled_tools),
+            default_tools=set(DEFAULT_TOOLS),
+        )
         if actions:
             log.info("Loaded %d actions: %s", len(actions), [a.action_name for a in actions])
 
@@ -360,12 +365,196 @@ def main() -> None:
         threading.Thread(target=_run_gh, daemon=True, name="gh-cmd").start()
         return CommandResult("")
 
+    def _open_senses_modal(flag_fields: list[str]) -> bool:
+        from tokenpal.ui.selection_modal import SelectionGroup, SelectionItem
+
+        items = tuple(
+            SelectionItem(
+                value=name,
+                label=name,
+                initial=getattr(config.senses, name),
+            )
+            for name in flag_fields
+        )
+        group = SelectionGroup(
+            title="Senses",
+            items=items,
+            help_text="Toggle senses. Restart required to apply.",
+        )
+
+        def on_save(result: dict[str, list[str]] | None) -> None:
+            if result is None:
+                overlay.log_buddy_message("/senses: cancelled.")
+                return
+            selected = set(result.get("Senses", []))
+            failures: list[str] = []
+            changes = 0
+            for name in flag_fields:
+                want = name in selected
+                if getattr(config.senses, name) == want:
+                    continue
+                try:
+                    set_sense_enabled(name, want)
+                    changes += 1
+                except OSError as e:
+                    failures.append(f"{name}: {e}")
+            if failures:
+                overlay.log_buddy_message(
+                    "/senses: some writes failed — " + "; ".join(failures)
+                )
+            elif changes == 0:
+                overlay.log_buddy_message("/senses: no changes.")
+            else:
+                overlay.log_buddy_message(
+                    f"/senses: saved {changes} change(s). Restart TokenPal to apply."
+                )
+
+        return overlay.open_selection_modal("Senses", [group], on_save)
+
+    def _open_tools_modal() -> bool:
+        from tokenpal.actions.catalog import SECTIONS, default_tool_names
+        from tokenpal.ui.selection_modal import SelectionGroup, SelectionItem
+
+        enabled = set(config.tools.enabled_tools)
+        defaults = default_tool_names()
+        groups: list[SelectionGroup] = []
+        for section in SECTIONS:
+            items: list[SelectionItem] = []
+            for entry in section.entries:
+                is_default = entry.name in defaults
+                items.append(
+                    SelectionItem(
+                        value=entry.name,
+                        label=f"{entry.name} — {entry.blurb}",
+                        initial=is_default or entry.name in enabled,
+                        locked=is_default,
+                    )
+                )
+            if not items:
+                items.append(
+                    SelectionItem(
+                        value=f"__placeholder_{section.title.lower()}",
+                        label="(nothing yet — lands in a later phase)",
+                        initial=False,
+                        locked=True,
+                    )
+                )
+            groups.append(
+                SelectionGroup(
+                    title=section.title,
+                    items=tuple(items),
+                    help_text=section.description,
+                )
+            )
+
+        def on_save(result: dict[str, list[str]] | None) -> None:
+            if result is None:
+                overlay.log_buddy_message("/tools: cancelled.")
+                return
+            selected: set[str] = set()
+            for values in result.values():
+                for v in values:
+                    if v.startswith("__placeholder_") or v in defaults:
+                        continue
+                    selected.add(v)
+            try:
+                path = set_enabled_tools(selected)
+            except OSError as e:
+                overlay.log_buddy_message(f"/tools: could not write config: {e}")
+                return
+            overlay.log_buddy_message(
+                f"/tools: saved {len(selected)} opt-in tool(s) to {path.name}. "
+                "Restart TokenPal to apply."
+            )
+
+        return overlay.open_selection_modal("Tools", groups, on_save)
+
+    def _cmd_tools(args: str) -> CommandResult:
+        from tokenpal.actions.catalog import SECTIONS, default_tool_names
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+
+        if subcmd == "":
+            if _open_tools_modal():
+                return CommandResult("")
+            subcmd = "list"
+
+        if subcmd == "list":
+            defaults = default_tool_names()
+            enabled = set(config.tools.enabled_tools)
+            rows: list[str] = []
+            for section in SECTIONS:
+                rows.append(f"  [{section.title}]")
+                if not section.entries:
+                    rows.append("    (none yet)")
+                for entry in section.entries:
+                    is_default = entry.name in defaults
+                    is_on = is_default or entry.name in enabled
+                    mark = "on " if is_on else "off"
+                    tag = " (default)" if is_default else ""
+                    rows.append(f"    {mark}  {entry.name}{tag}")
+            return CommandResult("Tools:\n" + "\n".join(rows))
+
+        return CommandResult("Usage: /tools [list] — omit args to open picker.")
+
+    def _cmd_consent(args: str) -> CommandResult:
+        from tokenpal.config.consent import ALL_CATEGORIES, load_consent, save_consent
+        from tokenpal.ui.selection_modal import SelectionGroup, SelectionItem
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+
+        if subcmd in ("", "edit"):
+            current = load_consent()
+            items = tuple(
+                SelectionItem(value=c, label=c, initial=current.get(c, False))
+                for c in ALL_CATEGORIES
+            )
+            group = SelectionGroup(
+                title="Consent",
+                items=items,
+                help_text="Per-category permissions. Stored at ~/.tokenpal/.consent.json.",
+            )
+
+            def on_save(result: dict[str, list[str]] | None) -> None:
+                if result is None:
+                    overlay.log_buddy_message("/consent: cancelled.")
+                    return
+                granted = set(result.get("Consent", []))
+                flags = {c: (c in granted) for c in ALL_CATEGORIES}
+                try:
+                    path = save_consent(flags)
+                except OSError as e:
+                    overlay.log_buddy_message(f"/consent: could not write: {e}")
+                    return
+                overlay.log_buddy_message(
+                    f"/consent: saved to {path.name}. {sum(flags.values())} granted."
+                )
+
+            if overlay.open_selection_modal("Consent", [group], on_save):
+                return CommandResult("")
+            subcmd = "list"
+
+        if subcmd == "list":
+            current = load_consent()
+            rows = [f"  {'yes' if current[c] else 'no '}  {c}" for c in ALL_CATEGORIES]
+            return CommandResult("Consent:\n" + "\n".join(rows))
+
+        return CommandResult("Usage: /consent [list|edit] — omit args to open picker.")
+
     def _cmd_senses(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
-        subcmd = parts[0].lower() if parts else "list"
+        subcmd = parts[0].lower() if parts else ""
         target = parts[1].strip() if len(parts) > 1 else ""
 
         flag_fields = [f.name for f in dataclasses.fields(config.senses)]
+
+        # No args → try the modal picker first, fall back to plain list.
+        if subcmd == "":
+            if _open_senses_modal(flag_fields):
+                return CommandResult("")
+            subcmd = "list"
 
         if subcmd == "list":
             active = {s.sense_name for s in senses}
@@ -498,6 +687,8 @@ def main() -> None:
     dispatcher.register("voice", _cmd_voice)
     dispatcher.register("server", _cmd_server)
     dispatcher.register("zip", _cmd_zip)
+    dispatcher.register("tools", _cmd_tools)
+    dispatcher.register("consent", _cmd_consent)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

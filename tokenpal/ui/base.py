@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import abc
-from typing import Any, Callable, ClassVar
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 
@@ -55,6 +56,17 @@ class AbstractOverlay(abc.ABC):
 
     def set_command_callback(self, callback: Callable[[str], None]) -> None:
         """Register handler for slash commands. Optional."""
+
+    def open_selection_modal(
+        self,
+        title: str,
+        groups: Any,
+        on_save: Callable[[dict[str, list[str]] | None], None],
+    ) -> bool:
+        """Open a multi-group SelectionList modal. Returns True if the overlay
+        supports modals, False otherwise (caller should fall back to text UI).
+        """
+        return False
 
     @abc.abstractmethod
     def run_loop(self) -> None:

@@ -21,6 +21,7 @@ from textual.widgets import Input, Static
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.registry import register_overlay
+from tokenpal.ui.selection_modal import SelectionGroup, SelectionModal
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +97,19 @@ class ClearVoiceFrames(Message):
 
 class RequestExit(Message):
     pass
+
+
+class OpenSelectionModal(Message):
+    def __init__(
+        self,
+        title: str,
+        groups: list[SelectionGroup],
+        on_save: Callable[[dict[str, list[str]] | None], None],
+    ) -> None:
+        self.title = title
+        self.groups = groups
+        self.on_save = on_save
+        super().__init__()
 
 
 # --- Widgets ---
@@ -566,6 +580,10 @@ class TokenPalApp(App[None]):
     def on_request_exit(self, _message: RequestExit) -> None:
         self.exit()
 
+    def on_open_selection_modal(self, message: OpenSelectionModal) -> None:
+        modal = SelectionModal(message.title, message.groups)
+        self.push_screen(modal, message.on_save)
+
 
 # --- Overlay ---
 
@@ -640,6 +658,17 @@ class TextualOverlay(AbstractOverlay):
         self, callback: Callable[[], None], delay_ms: int = 0
     ) -> None:
         self._post(RunCallback(callback, delay_ms))
+
+    def open_selection_modal(
+        self,
+        title: str,
+        groups: Any,
+        on_save: Callable[[dict[str, list[str]] | None], None],
+    ) -> bool:
+        if not (self._app and self._is_running):
+            return False
+        self._post(OpenSelectionModal(title, list(groups), on_save))
+        return True
 
     def teardown(self) -> None:
         self._is_running = False

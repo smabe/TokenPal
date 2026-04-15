@@ -136,7 +136,17 @@ def _check_actions(config: object) -> None:
         for f in dataclasses.fields(config.actions)
         if f.name != "enabled"
     }
-    actions = resolve_actions(enabled=action_flags) if config.actions.enabled else []
+    from tokenpal.config.schema import DEFAULT_TOOLS
+
+    actions = (
+        resolve_actions(
+            enabled=action_flags,
+            optin_allowlist=set(getattr(config.tools, "enabled_tools", []) or []),
+            default_tools=set(DEFAULT_TOOLS),
+        )
+        if config.actions.enabled
+        else []
+    )
     if actions:
         anames = [a.action_name for a in actions]
         print(f"  {_CHECK} {len(actions)} actions: {', '.join(anames)}")

@@ -74,6 +74,12 @@ system_info = true
 open_app = true
 do_math = true
 
+[tools]
+# Opt-in tool allowlist. Managed by the /tools picker — phase 1-5 tools
+# (read_file, git_log, weather_forecast_week, pomodoro, agent, research, ...)
+# are disabled until added here. Defaults above stay on regardless.
+enabled_tools = []
+
 [paths]
 data_dir = "~/.tokenpal"
 

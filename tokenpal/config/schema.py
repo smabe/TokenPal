@@ -110,6 +110,19 @@ class ActionsConfig:
     do_math: bool = True
 
 
+# Default tools shipped on day one. Kept ON unless explicitly disabled via
+# ActionsConfig. Opt-in tools (phase 1-5) use ToolsConfig.enabled_tools.
+DEFAULT_TOOLS: tuple[str, ...] = ("timer", "system_info", "open_app", "do_math")
+
+
+@dataclass
+class ToolsConfig:
+    # Flat allowlist of opt-in tool names. Default tools (see DEFAULT_TOOLS)
+    # are gated by ActionsConfig and are NOT listed here. The /tools picker
+    # upserts this list on save.
+    enabled_tools: list[str] = field(default_factory=list)
+
+
 @dataclass
 class PathsConfig:
     data_dir: str = "~/.tokenpal"
@@ -176,6 +189,7 @@ class TokenPalConfig:
     brain: BrainConfig = field(default_factory=BrainConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     actions: ActionsConfig = field(default_factory=ActionsConfig)
+    tools: ToolsConfig = field(default_factory=ToolsConfig)
     paths: PathsConfig = field(default_factory=PathsConfig)
     plugins: PluginsConfig = field(default_factory=PluginsConfig)
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
