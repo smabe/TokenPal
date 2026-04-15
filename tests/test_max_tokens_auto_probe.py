@@ -35,16 +35,16 @@ async def test_derives_from_small_context() -> None:
     b = _backend()
     await _apply_with_probe(b, 1024)
     assert b.context_length == 1024
-    assert b.derived_max_tokens == 128
-    assert b.max_tokens == 128
+    assert b.derived_max_tokens == 256
+    assert b.max_tokens == 256
 
 
 @pytest.mark.asyncio
-async def test_derives_capped_at_512() -> None:
+async def test_derives_capped_at_ceiling() -> None:
     b = _backend()
     await _apply_with_probe(b, 65536)
-    assert b.derived_max_tokens == 512
-    assert b.max_tokens == 512
+    assert b.derived_max_tokens == 1024
+    assert b.max_tokens == 1024
 
 
 @pytest.mark.asyncio
@@ -63,7 +63,7 @@ async def test_user_pin_wins_over_probe() -> None:
     assert b.max_tokens == 99
     await _apply_with_probe(b, 8192)
     # Probe populated derived field, but pinned max_tokens unchanged.
-    assert b.derived_max_tokens == 512
+    assert b.derived_max_tokens == 1024
     assert b.max_tokens == 99
 
 

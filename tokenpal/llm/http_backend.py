@@ -22,7 +22,7 @@ class HttpBackend(AbstractLLMBackend):
 
     _FALLBACK_URL = "http://localhost:11434/v1"
     _LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")
-    _MAX_TOKENS_HARD_CAP = 512
+    _MAX_TOKENS_HARD_CAP = 1024
     _PROBE_TIMEOUT_S = 5.0
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -134,7 +134,9 @@ class HttpBackend(AbstractLLMBackend):
         data = resp.json()
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        text = data["choices"][0]["message"].get("content") or ""
+        choice = data["choices"][0]
+        text = choice["message"].get("content") or ""
+        finish_reason = choice.get("finish_reason")
         tokens = data.get("usage", {}).get("total_tokens", 0)
 
         return LLMResponse(
@@ -142,6 +144,7 @@ class HttpBackend(AbstractLLMBackend):
             tokens_used=tokens,
             model_name=self._model_name,
             latency_ms=elapsed_ms,
+            finish_reason=finish_reason,
         )
 
     async def generate_with_tools(
@@ -173,8 +176,10 @@ class HttpBackend(AbstractLLMBackend):
         data = resp.json()
         elapsed_ms = (time.monotonic() - start) * 1000
 
-        message = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        message = choice["message"]
         text = message.get("content") or ""
+        finish_reason = choice.get("finish_reason")
         tokens = data.get("usage", {}).get("total_tokens", 0)
 
         tool_calls: list[ToolCall] = []
@@ -198,6 +203,7 @@ class HttpBackend(AbstractLLMBackend):
             model_name=self._model_name,
             latency_ms=elapsed_ms,
             tool_calls=tool_calls,
+            finish_reason=finish_reason,
         )
 
     @property
@@ -305,7 +311,7 @@ class HttpBackend(AbstractLLMBackend):
         if ctx is None:
             return
         self._context_length = ctx
-        derived = min(ctx // 8, self._MAX_TOKENS_HARD_CAP)
+        derived = min(ctx // 4, self._MAX_TOKENS_HARD_CAP)
         self._derived_max_tokens = derived
         if self._max_tokens_pinned:
             log.info(

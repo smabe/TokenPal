@@ -27,6 +27,7 @@ class LLMResponse:
     model_name: str
     latency_ms: float
     tool_calls: list[ToolCall] = field(default_factory=list)
+    finish_reason: str | None = None
 
     def to_assistant_message(self) -> dict[str, Any]:
         """OpenAI-format assistant message for round-tripping back to the LLM.

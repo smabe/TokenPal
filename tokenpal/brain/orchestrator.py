@@ -33,6 +33,25 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 log = logging.getLogger(__name__)
 
 
+_SENTENCE_ENDERS = (".", "!", "?", "…")
+# Whitespace plus closing quotes/brackets/markdown that may trail a sentence.
+_SENTENCE_TRAILERS = " \t\n\r\"')]}*`"
+
+
+def _ends_with_sentence(text: str) -> bool:
+    """True when `text` ends on terminal sentence punctuation, ignoring any
+    trailing whitespace or closing quote/bracket characters."""
+    stripped = text.rstrip(_SENTENCE_TRAILERS)
+    return bool(stripped) and stripped.endswith(_SENTENCE_ENDERS)
+
+
+def _trim_to_last_sentence(text: str) -> str:
+    """Return the longest prefix of `text` that ends on sentence-terminal
+    punctuation. Empty string if none found."""
+    best = max(text.rfind(ch) for ch in _SENTENCE_ENDERS)
+    return text[: best + 1] if best >= 0 else ""
+
+
 # ---------------------------------------------------------------------------
 # Conversation session — tracks multi-turn history for user conversations
 # ---------------------------------------------------------------------------
@@ -129,6 +148,8 @@ class Brain:
 
     # Max tool call rounds per comment to prevent infinite loops
     _MAX_TOOL_ROUNDS = 3
+    # Max follow-up calls to finish a conversation reply that hit max_tokens
+    _MAX_CONTINUATIONS = 2
     # Freeform (unprompted) thought settings
     _FREEFORM_MIN_GAP_S = 90.0
     _FREEFORM_CHANCE = 0.15
@@ -707,6 +728,7 @@ class Brain:
         self,
         prompt: str | None = None,
         messages: list[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Multi-turn tool-calling loop. Sends prompt (or pre-built messages)
         with tool defs, executes tool calls, feeds results back, and repeats
@@ -719,6 +741,7 @@ class Brain:
             response = await self._llm.generate_with_tools(
                 messages=messages,
                 tools=self._tool_specs,
+                max_tokens=max_tokens,
             )
 
             if not response.tool_calls:
@@ -737,7 +760,50 @@ class Brain:
                 })
 
         log.warning("Hit tool round limit (%d), forcing text response", self._MAX_TOOL_ROUNDS)
-        return await self._llm.generate_with_tools(messages=messages, tools=[])
+        return await self._llm.generate_with_tools(
+            messages=messages, tools=[], max_tokens=max_tokens,
+        )
+
+    async def _reply_with_continuation(
+        self, messages: list[dict[str, Any]], max_tokens: int
+    ) -> str:
+        """Generate a conversation reply, auto-continuing when the LLM hits
+        max_tokens mid-thought. Concatenates segments and, as a final safety
+        net, trims any still-ragged tail back to the last sentence boundary."""
+        work = list(messages)
+        pieces: list[str] = []
+        use_tools = bool(self._actions and self._tool_specs)
+        for attempt in range(self._MAX_CONTINUATIONS + 1):
+            if use_tools:
+                response = await self._generate_with_tools(
+                    messages=work, max_tokens=max_tokens,
+                )
+            else:
+                response = await self._llm.generate_with_tools(
+                    messages=work, tools=[], max_tokens=max_tokens,
+                )
+            piece = response.text or ""
+            pieces.append(piece)
+            if response.finish_reason != "length" or not piece:
+                break
+            if attempt == self._MAX_CONTINUATIONS:
+                log.info(
+                    "Conversation reply still truncated after %d continuations",
+                    self._MAX_CONTINUATIONS,
+                )
+                break
+            log.info(
+                "Conversation reply hit max_tokens, continuing (round %d)",
+                attempt + 1,
+            )
+            work = [*work, {"role": "assistant", "content": piece}]
+
+        full = "".join(pieces)
+        if full and not _ends_with_sentence(full):
+            trimmed = _trim_to_last_sentence(full)
+            if trimmed:
+                full = trimmed + "…"
+        return full
 
     async def _execute_tool_call(self, tc: ToolCall) -> str:
         """Execute a single tool call and return the result text."""
@@ -1056,25 +1122,18 @@ class Brain:
                 user_message,
             )
             effective_max_tokens = self._effective_conv_max_tokens()
-            if self._actions and self._tool_specs:
-                response = await self._generate_with_tools(messages=messages)
-            else:
-                response = await self._llm.generate_with_tools(
-                    messages=messages,
-                    tools=[],
-                    max_tokens=effective_max_tokens,
-                )
+            reply_text = await self._reply_with_continuation(
+                messages, effective_max_tokens,
+            )
             self._push_status()
 
-            filtered = self._personality.filter_conversation_response(
-                response.text
-            )
+            filtered = self._personality.filter_conversation_response(reply_text)
             if filtered:
-                char_cap = effective_max_tokens * 4
+                char_cap = effective_max_tokens * 4 * (self._MAX_CONTINUATIONS + 1)
                 if len(filtered) > char_cap:
                     log.info(
                         "Conversation response %d chars > cap %d — truncating "
-                        "(likely LLM drift or undersized max_tokens)",
+                        "(likely LLM drift)",
                         len(filtered), char_cap,
                     )
                     filtered = filtered[: char_cap - 3] + "..."
@@ -1086,7 +1145,7 @@ class Brain:
             else:
                 # Record placeholder so history stays coherent
                 self._conversation.add_assistant_turn("[no response]")
-                log.debug("Conversation response filtered: %r", response.text[:80])
+                log.debug("Conversation response filtered: %r", reply_text[:80])
                 quip = self._personality.get_confused_quip()
                 self._ui_callback(quip)
         except Exception:

@@ -355,12 +355,14 @@ class TestBrainConversation:
         assert len(brain._conversation.history) == 0
 
     async def test_long_response_truncated_at_effective_cap(self):
-        """Orchestrator caps conversation output at effective_max_tokens * 4 chars."""
-        # 2000 chars of clean English — no periods so filter_conversation_response
+        """Orchestrator caps conversation output at
+        effective_max_tokens * 4 * (MAX_CONTINUATIONS + 1) chars — the
+        continuation loop gets the full budget before the safety clip kicks in."""
+        # 4000 chars of clean English — no periods so filter_conversation_response
         # returns it unchanged.
-        long_text = ("A" * 99 + " ") * 20
+        long_text = ("A" * 99 + " ") * 40
         llm = _MockLLM([long_text])
-        # Pin conversation budget to 100 tokens → cap = 400 chars.
+        # Pin conversation budget to 100 tokens → cap = 100 * 4 * 3 = 1200 chars.
         config = ConversationConfig(max_response_tokens=100)
         brain = _make_brain(llm=llm, conversation=config)
 
@@ -368,8 +370,9 @@ class TestBrainConversation:
 
         assert brain._conversation is not None
         assistant_turn = brain._conversation.history[-1]["content"]
+        expected_cap = 100 * 4 * (brain._MAX_CONTINUATIONS + 1)
         assert assistant_turn.endswith("...")
-        assert len(assistant_turn) == 400
+        assert len(assistant_turn) == expected_cap
 
     async def test_effective_conv_max_tokens_uses_pin_when_set(self):
         config = ConversationConfig(max_response_tokens=250)
