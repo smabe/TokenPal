@@ -629,3 +629,37 @@ fi
 echo "  Logs:    ~/.tokenpal/logs/tokenpal.log"
 echo "  Health:  tokenpal --check"
 echo ""
+
+# ── Offer to launch ────────────────────────────────────────────────────────
+if [[ -t 0 ]]; then
+    launch_choice=""
+    case "$MODE" in
+        client)
+            printf "Launch TokenPal now? [y/N]: "
+            read -r ans || ans=""
+            [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]] && launch_choice="client"
+            ;;
+        server)
+            printf "Launch tokenpal-server now? [y/N]: "
+            read -r ans || ans=""
+            [[ "${ans,,}" == "y" || "${ans,,}" == "yes" ]] && launch_choice="server"
+            ;;
+        both)
+            printf "Launch now? [c]lient / [s]erver / [n]one: "
+            read -r ans || ans=""
+            case "${ans,,}" in
+                c|client) launch_choice="client" ;;
+                s|server) launch_choice="server" ;;
+            esac
+            ;;
+    esac
+
+    source "$VENV_DIR/bin/activate"
+    if [[ "$launch_choice" == "client" ]]; then
+        info "Launching tokenpal..."
+        exec "$VENV_DIR/bin/tokenpal"
+    elif [[ "$launch_choice" == "server" ]]; then
+        info "Launching tokenpal-server (Ctrl-C to stop)..."
+        exec "$VENV_DIR/bin/tokenpal-server" --host 0.0.0.0
+    fi
+fi

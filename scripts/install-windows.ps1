@@ -624,3 +624,33 @@ if ($InstallServer) {
 Write-Host "  Config:  $RepoDir\config.toml"
 Write-Host "  Logs:    ~\.tokenpal\logs\tokenpal.log"
 Write-Host ""
+
+# ── Offer to launch ────────────────────────────────────────────────────────
+if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
+    $launchChoice = ""
+    if ($InstallClient -and -not $InstallServer) {
+        $ans = Read-Host "Launch TokenPal now? [y/N]"
+        if ($ans -match '^(y|yes)$') { $launchChoice = "client" }
+    } elseif ($InstallServer -and -not $InstallClient) {
+        $ans = Read-Host "Launch tokenpal-server now? [y/N]"
+        if ($ans -match '^(y|yes)$') { $launchChoice = "server" }
+    } elseif ($InstallClient -and $InstallServer) {
+        $ans = Read-Host "Launch now? [c]lient / [s]erver / [n]one"
+        switch -Regex ($ans) {
+            '^(c|client)$' { $launchChoice = "client" }
+            '^(s|server)$' { $launchChoice = "server" }
+        }
+    }
+
+    $clientExe = "$VenvDir\Scripts\tokenpal.exe"
+    $serverExe = "$VenvDir\Scripts\tokenpal-server.exe"
+    if ($launchChoice -eq "client" -and (Test-Path $clientExe)) {
+        Write-Host "Launching tokenpal..." -ForegroundColor Cyan
+        & $clientExe
+        exit $LASTEXITCODE
+    } elseif ($launchChoice -eq "server" -and (Test-Path $serverExe)) {
+        Write-Host "Launching tokenpal-server (Ctrl-C to stop)..." -ForegroundColor Cyan
+        & $serverExe --host 0.0.0.0
+        exit $LASTEXITCODE
+    }
+}
