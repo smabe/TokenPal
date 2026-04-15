@@ -28,6 +28,8 @@ _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 _BUDDY_PANEL_PADDING = 4
 _CHAT_LOG_MIN_SPACE = 30
 _MAX_BUBBLE_QUEUE = 3
+_SPEECH_SCROLL_PADDING = 4
+_MIN_BORDERED_REGION_WIDTH = 36
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -513,13 +515,17 @@ class TokenPalApp(App[None]):
         region_w = region.size.width
         if region_h <= 0 or region_w <= 0:
             return bubble
-        bordered = dataclasses.replace(
-            bubble, max_width=min(bubble.max_width, region_w), borderless=False
-        )
-        if len(bordered.render()) <= region_h:
-            return bordered
+        bordered_max = max(1, min(bubble.max_width, region_w - _SPEECH_SCROLL_PADDING))
+        if region_w >= _MIN_BORDERED_REGION_WIDTH:
+            bordered = dataclasses.replace(
+                bubble, max_width=bordered_max, borderless=False
+            )
+            if len(bordered.render()) <= region_h:
+                return bordered
         borderless = dataclasses.replace(
-            bubble, max_width=max(1, region_w), borderless=True
+            bubble,
+            max_width=max(1, region_w - _SPEECH_SCROLL_PADDING),
+            borderless=True,
         )
         if len(borderless.render()) <= region_h:
             return borderless
