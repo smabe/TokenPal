@@ -22,6 +22,8 @@ class HttpBackend(AbstractLLMBackend):
 
     _FALLBACK_URL = "http://localhost:11434/v1"
     _LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]", "0.0.0.0")
+    _MAX_TOKENS_HARD_CAP = 512
+    _PROBE_TIMEOUT_S = 5.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
@@ -31,7 +33,8 @@ class HttpBackend(AbstractLLMBackend):
         self._temperature = config.get("temperature", 0.8)
         self._disable_reasoning = config.get("disable_reasoning", True)
         self._server_mode = config.get("server_mode", "auto")
-        self._max_tokens: int = int(config.get("max_tokens", 256))
+        self._initial_max_tokens: int = int(config.get("max_tokens", 256))
+        self._max_tokens: int = self._initial_max_tokens
         # Resolve per-server overrides (populated by /model and /server switch)
         from tokenpal.config.toml_writer import canon_server_url
 
@@ -39,9 +42,14 @@ class HttpBackend(AbstractLLMBackend):
         per_model: dict[str, str] = config.get("per_server_models") or {}
         if key in per_model:
             self._model_name = per_model[key]
-        per_tokens: dict[str, int] = config.get("per_server_max_tokens") or {}
-        if key in per_tokens:
-            self._max_tokens = int(per_tokens[key])
+        self._per_server_max_tokens: dict[str, int] = (
+            config.get("per_server_max_tokens") or {}
+        )
+        self._max_tokens_pinned: bool = key in self._per_server_max_tokens
+        if self._max_tokens_pinned:
+            self._max_tokens = int(self._per_server_max_tokens[key])
+        self._derived_max_tokens: int | None = None
+        self._context_length: int | None = None
         self._client: httpx.AsyncClient | None = None
         self._reachable: bool = False
         self._model_available: bool = False
@@ -81,6 +89,7 @@ class HttpBackend(AbstractLLMBackend):
 
         if await self._try_connect(self._api_url):
             log.info("Connected to LLM API at %s", self._api_url)
+            await self._apply_auto_max_tokens()
             return
 
         is_local = any(h in self._api_url for h in self._LOCAL_HOSTS)
@@ -94,6 +103,7 @@ class HttpBackend(AbstractLLMBackend):
                     "Using local Ollama fallback at %s (remote unreachable)",
                     self._FALLBACK_URL,
                 )
+                await self._apply_auto_max_tokens()
                 return
 
         log.warning(
@@ -213,25 +223,108 @@ class HttpBackend(AbstractLLMBackend):
     def set_model(self, model_name: str) -> None:
         """Swap the active model. Next generation call uses the new model."""
         self._model_name = model_name
+        # Capability is model-specific; drop cached probe so refresh_capability re-probes.
+        self._derived_max_tokens = None
+        self._context_length = None
+        if not self._max_tokens_pinned:
+            self._max_tokens = self._initial_max_tokens
         log.info("Model swapped to: %s", model_name)
 
     def set_max_tokens(self, n: int) -> None:
         """Swap the default max_tokens cap. Affects calls that don't pass one explicitly."""
         self._max_tokens = int(n)
-        log.info("Default max_tokens set to: %d", self._max_tokens)
+        self._max_tokens_pinned = True
+        log.info("Default max_tokens set to: %d (pinned)", self._max_tokens)
 
     @property
     def max_tokens(self) -> int:
         return self._max_tokens
 
+    @property
+    def derived_max_tokens(self) -> int | None:
+        """The auto-derived cap from the last capability probe, if any."""
+        return self._derived_max_tokens
+
+    @property
+    def context_length(self) -> int | None:
+        """Model context length reported by the last capability probe, if any."""
+        return self._context_length
+
     def set_api_url(self, url: str) -> None:
         """Switch the API endpoint at runtime. Used by /server switch."""
+        from tokenpal.config.toml_writer import canon_server_url
+
         self._api_url = url.rstrip("/")
         self._primary_url = self._api_url
         self._reachable = False
         self._model_available = False
         self._using_fallback = False
+        self._derived_max_tokens = None
+        self._context_length = None
+        # Re-evaluate pin status against the new server's entry in config.
+        key = canon_server_url(self._api_url)
+        if key in self._per_server_max_tokens:
+            self._max_tokens = int(self._per_server_max_tokens[key])
+            self._max_tokens_pinned = True
+        else:
+            self._max_tokens_pinned = False
+            self._max_tokens = self._initial_max_tokens
         log.info("API URL switched to: %s", self._api_url)
+
+    async def _probe_context_length(self) -> int | None:
+        """Probe Ollama's native /api/show for the active model's context_length.
+
+        Returns None on any error (non-Ollama backend, network failure, missing field).
+        """
+        assert self._client is not None
+        native_root = self._api_url
+        if native_root.endswith("/v1"):
+            native_root = native_root[:-3]
+        try:
+            resp = await self._client.post(
+                f"{native_root}/api/show",
+                json={"name": self._model_name},
+                timeout=self._PROBE_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            model_info = resp.json().get("model_info") or {}
+            lengths = [
+                int(v) for k, v in model_info.items()
+                if k.endswith(".context_length") and isinstance(v, (int, float))
+            ]
+            if not lengths:
+                return None
+            return max(lengths)
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            log.debug("Capability probe failed for %s: %s", self._model_name, e)
+            return None
+
+    async def _apply_auto_max_tokens(self) -> None:
+        """Probe server capability and update max_tokens when not user-pinned."""
+        ctx = await self._probe_context_length()
+        if ctx is None:
+            return
+        self._context_length = ctx
+        derived = min(ctx // 8, self._MAX_TOKENS_HARD_CAP)
+        self._derived_max_tokens = derived
+        if self._max_tokens_pinned:
+            log.info(
+                "Auto-derived max_tokens=%d from context_length=%d (%s @ %s) "
+                "— not applied (user-pinned at %d)",
+                derived, ctx, self._model_name, self._api_url, self._max_tokens,
+            )
+            return
+        self._max_tokens = derived
+        log.info(
+            "Auto-derived max_tokens=%d from context_length=%d (%s @ %s)",
+            derived, ctx, self._model_name, self._api_url,
+        )
+
+    async def refresh_capability(self) -> None:
+        """Re-probe capability after a model swap without a full setup()."""
+        if self._client is None:
+            return
+        await self._apply_auto_max_tokens()
 
     async def teardown(self) -> None:
         if self._client:

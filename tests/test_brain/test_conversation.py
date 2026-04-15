@@ -195,12 +195,13 @@ class TestPersonalityConversation:
         assert result is not None
         assert len(result) > 70
 
-    def test_filter_conversation_truncates_at_500(self):
+    def test_filter_conversation_does_not_truncate(self):
+        """Char capping moved to orchestrator (uses effective max_tokens)."""
         engine = _make_engine()
         text = "A" * 600
         result = engine.filter_conversation_response(text)
         assert result is not None
-        assert len(result) <= 500
+        assert len(result) == 600
 
     def test_filter_conversation_strips_markdown(self):
         engine = _make_engine()
@@ -352,6 +353,40 @@ class TestBrainConversation:
         # Session should exist but history should be empty (user turn removed)
         assert brain._conversation is not None
         assert len(brain._conversation.history) == 0
+
+    async def test_long_response_truncated_at_effective_cap(self):
+        """Orchestrator caps conversation output at effective_max_tokens * 4 chars."""
+        # 2000 chars of clean English — no periods so filter_conversation_response
+        # returns it unchanged.
+        long_text = ("A" * 99 + " ") * 20
+        llm = _MockLLM([long_text])
+        # Pin conversation budget to 100 tokens → cap = 400 chars.
+        config = ConversationConfig(max_response_tokens=100)
+        brain = _make_brain(llm=llm, conversation=config)
+
+        await brain._handle_user_input("tell me a story")
+
+        assert brain._conversation is not None
+        assistant_turn = brain._conversation.history[-1]["content"]
+        assert assistant_turn.endswith("...")
+        assert len(assistant_turn) == 400
+
+    async def test_effective_conv_max_tokens_uses_pin_when_set(self):
+        config = ConversationConfig(max_response_tokens=250)
+        brain = _make_brain(conversation=config)
+        assert brain._effective_conv_max_tokens() == 250
+
+    async def test_effective_conv_max_tokens_falls_back_to_300(self):
+        # max_response_tokens = 0 (default) and mock LLM has no derived_max_tokens.
+        brain = _make_brain()
+        assert brain._effective_conv_max_tokens() == 300
+
+    async def test_effective_conv_max_tokens_uses_derived_when_unpinned(self):
+        class _LLMWithDerived(_MockLLM):
+            derived_max_tokens = 480
+
+        brain = _make_brain(llm=_LLMWithDerived(["Hi there buddy pal."]))
+        assert brain._effective_conv_max_tokens() == 480
 
     async def test_reset_conversation_clears_session(self):
         llm = _MockLLM(["Hello there buddy pal."])

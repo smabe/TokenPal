@@ -696,6 +696,13 @@ class Brain:
                 self._last_confused_quip = now
                 self._last_comment_time = now
 
+    def _effective_conv_max_tokens(self) -> int:
+        """Conversation response budget: user-pinned wins, else server-derived, else 300."""
+        if self._conv_config.max_response_tokens > 0:
+            return self._conv_config.max_response_tokens
+        derived = getattr(self._llm, "derived_max_tokens", None)
+        return int(derived) if derived else 300
+
     async def _generate_with_tools(
         self,
         prompt: str | None = None,
@@ -1048,13 +1055,14 @@ class Brain:
                 self._conversation.turn_count + 1,
                 user_message,
             )
+            effective_max_tokens = self._effective_conv_max_tokens()
             if self._actions and self._tool_specs:
                 response = await self._generate_with_tools(messages=messages)
             else:
                 response = await self._llm.generate_with_tools(
                     messages=messages,
                     tools=[],
-                    max_tokens=self._conv_config.max_response_tokens,
+                    max_tokens=effective_max_tokens,
                 )
             self._push_status()
 
@@ -1062,6 +1070,14 @@ class Brain:
                 response.text
             )
             if filtered:
+                char_cap = effective_max_tokens * 4
+                if len(filtered) > char_cap:
+                    log.info(
+                        "Conversation response %d chars > cap %d — truncating "
+                        "(likely LLM drift or undersized max_tokens)",
+                        len(filtered), char_cap,
+                    )
+                    filtered = filtered[: char_cap - 3] + "..."
                 self._conversation.add_assistant_turn(filtered)
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)

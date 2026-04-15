@@ -938,8 +938,4 @@ class PersonalityEngine:
         if not text or len(text) < 5:
             return None
 
-        # Relaxed cap for conversation — 500 chars
-        if len(text) > 500:
-            text = text[:497] + "..."
-
         return text

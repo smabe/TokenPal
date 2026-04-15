@@ -237,7 +237,7 @@ def main() -> None:
 
     def _cmd_model(args: str) -> CommandResult:
         prev_model = llm.model_name
-        result = _handle_model_command(args, llm, overlay)
+        result = _handle_model_command(args, llm, overlay, brain)
         if llm.model_name != prev_model:
             brain.reset_conversation()
         return result
@@ -969,6 +969,7 @@ def _handle_model_command(
     args: str,
     llm: AbstractLLMBackend,
     overlay: AbstractOverlay,
+    brain: Brain | None = None,
 ) -> CommandResult:
     """Handle /model subcommands."""
     import json
@@ -1049,6 +1050,15 @@ def _handle_model_command(
     # Bare name → switch model for the CURRENT server and remember it there.
     # Does NOT touch the global [llm] model_name fallback.
     llm.set_model(subcmd)
+    if (
+        hasattr(llm, "refresh_capability")
+        and brain is not None
+        and brain._loop is not None
+    ):
+        try:
+            asyncio.run_coroutine_threadsafe(llm.refresh_capability(), brain._loop)
+        except Exception:
+            log.exception("Failed to schedule capability refresh for %s", subcmd)
     try:
         from tokenpal.config.toml_writer import remember_server_model
 
