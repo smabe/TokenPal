@@ -227,7 +227,7 @@ Config auto-discovered: `~/.tokenpal/config.toml` > project root > cwd.
 [llm]
 api_url = "http://localhost:11434/v1"  # or remote server
 model_name = "gemma4"                  # fallback when a server has no remembered model
-max_tokens = 60                        # default output cap for observations
+max_tokens = 60                        # observation cap; auto-raised from server context_length on connect
 disable_reasoning = true               # fast responses
 
 # Populated automatically by /model <name> on each server. Hand-edit

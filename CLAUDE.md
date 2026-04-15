@@ -88,6 +88,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Qwen3 models use `<think>` tags → empty responses via OpenAI-compat API. Don't use.
 - Response filter: strips asterisks, emojis, leaked tags, prefixes, orphan punctuation. Cross-franchise name filter suppresses responses mentioning characters from wrong show
 - Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported.
+- `max_tokens` auto-derived on connect: `min(context_length // 4, 1024)` via `/api/show` probe. User pins in `[llm.per_server_max_tokens]` override. Conversation replies that hit the cap auto-continue up to `_MAX_CONTINUATIONS=2` times (re-call with partial text as assistant turn, concat), then trim to last sentence + `…`. Observation path is single-shot — no continuation.
 
 ## Voice Training
 - `/voice train`, `/voice regenerate` — structured persona cards with catchphrase priming and cross-franchise guardrails

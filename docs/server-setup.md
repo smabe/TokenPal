@@ -124,9 +124,16 @@ pulled models (e.g. `gemma4` on a laptop, `gemma4:26b-a4b-it-q8_0` on a
 5090) don't clobber each other. The global `model_name` stays as the
 fallback for a server you've never used `/model` on.
 
-Optional: `[llm.per_server_max_tokens]` lets you raise the default output
-cap on a beefier host (the global default is `60`, tuned for short
-observations).
+On first connect (and after any `/model` swap) TokenPal probes the server's
+`context_length` via `/api/show` and auto-derives `max_tokens` as
+`min(context_length // 4, 1024)` — so you usually don't need to touch this.
+Conversation replies that still hit the cap mid-thought are auto-continued
+(up to 2 follow-up calls) before a final sentence-boundary trim, so the
+buddy won't leave you hanging on "...so we".
+
+Optional: `[llm.per_server_max_tokens]` pins a specific cap for a host and
+overrides the auto-derived value (useful if you want tight short quips on a
+big model).
 
 ```toml
 [llm.per_server_models]
