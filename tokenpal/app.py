@@ -176,9 +176,7 @@ def main() -> None:
     brain = Brain(
         senses=senses,
         llm=llm,
-        ui_callback=lambda text: overlay.schedule_callback(
-            lambda: overlay.show_speech(SpeechBubble(text=text))
-        ),
+        ui_callback=lambda text: _overlay_show(overlay, text),
         personality=personality,
         status_callback=lambda text: overlay.schedule_callback(
             lambda t=text: overlay.update_status(t)
@@ -392,9 +390,7 @@ def main() -> None:
         def _run_gh() -> None:
             result = _handle_gh_command(subcmd, parts[1] if len(parts) > 1 else "")
             if result.error:
-                overlay.schedule_callback(
-                    lambda: overlay.show_speech(SpeechBubble(text=result.error))
-                )
+                _overlay_show(overlay, result.error)
                 return
             output = result.message
             overlay.schedule_callback(lambda: overlay.log_buddy_message(output))
@@ -806,9 +802,7 @@ def main() -> None:
     def _on_command(raw_input: str) -> None:
         result = dispatcher.dispatch(raw_input)
         if result.message:
-            overlay.schedule_callback(
-                lambda: overlay.show_speech(SpeechBubble(text=result.message))
-            )
+            _overlay_show(overlay, result.message)
 
     def _on_user_input(text: str) -> None:
         brain.submit_user_input(text)
