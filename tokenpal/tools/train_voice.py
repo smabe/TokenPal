@@ -248,7 +248,7 @@ def _generate_ascii_art(
         f'Create 3 frames of "{character}" for a terminal buddy app.\n\n'
         f'Character info:\n{persona[:300]}\n\n'
         f'REQUIREMENTS:\n'
-        f'- Each frame EXACTLY 10 lines tall, 20-24 characters wide '
+        f'- Each frame EXACTLY 8 lines tall, 20-24 characters wide '
         f'(not counting markup tags)\n'
         f'- Use Rich markup: [#ff6600]text[/], [bold #00ccff]text[/]\n'
         f'- Colors MUST be hex codes like #ff6600. Do NOT use named '
@@ -272,9 +272,9 @@ def _generate_ascii_art(
         f'[#ff6600]   ╚══╦══╝[/]\n'
         f'[#ffffff]    ▄▀ ▀▄[/]\n\n'
         f'Output EXACTLY this format, nothing else:\n'
-        f'IDLE:\n(10 lines of art)\n'
-        f'IDLE_ALT:\n(10 lines of art)\n'
-        f'TALKING:\n(10 lines of art)',
+        f'IDLE:\n(8 lines of art)\n'
+        f'IDLE_ALT:\n(8 lines of art)\n'
+        f'TALKING:\n(8 lines of art)',
         max_tokens=1200,
         temperature=0.8,
     )
@@ -304,12 +304,12 @@ def _parse_ascii_frames(text: str) -> tuple[list[str], list[str], list[str]]:
             current = idle_alt
         elif upper == "TALKING":
             current = talking
-        elif current is not None and len(current) < 10:
+        elif current is not None and len(current) < 8:
             current.append(line.rstrip())
 
-    # Pad short frames to 10 lines
+    # Pad short frames to 8 lines
     for frame in (idle, idle_alt, talking):
-        while len(frame) < 10:
+        while len(frame) < 8:
             frame.append("")
 
     # If idle_alt is empty/identical, copy idle with a minor tweak

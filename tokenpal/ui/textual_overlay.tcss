@@ -50,8 +50,8 @@ Screen {
     height: auto;
     content-align: center middle;
     color: #00ff88;
-    padding: 1 0;
-    overflow-x: hidden;
+    padding: 0;
+    overflow: hidden;
     text-wrap: nowrap;
 }
 
@@ -59,7 +59,8 @@ Screen {
     margin: 0 1;
     background: #1a1a2e;
     color: #dcdcdc;
-    border: tall #333333;
+    border: none;
+    height: 1;
 }
 
 #status-bar {

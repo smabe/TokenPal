@@ -27,6 +27,7 @@ _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 _BUDDY_PANEL_PADDING = 4
 _CHAT_LOG_MIN_SPACE = 30
 _MAX_BUBBLE_QUEUE = 3
+_COMPACT_HEIGHT_THRESHOLD = 28
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -338,12 +339,27 @@ class TokenPalApp(App[None]):
         panel.styles.min_width = buddy.max_frame_width() + _BUDDY_PANEL_PADDING
 
     def on_resize(self, _event: Resize) -> None:
+        self._apply_width_compaction()
+        self._apply_height_compaction()
+
+    def _apply_width_compaction(self) -> None:
         if self._chat_log_user_hidden:
             return
         buddy = self.query_one(BuddyWidget)
         threshold = buddy.max_frame_width() + _BUDDY_PANEL_PADDING + _CHAT_LOG_MIN_SPACE
         chat_log = self.query_one("#chat-log", VerticalScroll)
         chat_log.display = self.size.width >= threshold
+
+    def _apply_height_compaction(self) -> None:
+        rows = self.size.height
+        header = self.query_one("#header", HeaderWidget)
+        spacer = self.query_one("#spacer", Static)
+        if rows < _COMPACT_HEIGHT_THRESHOLD:
+            header.styles.height = 1
+            spacer.display = False
+        else:
+            header.styles.height = 3
+            spacer.display = True
 
     # --- Keyboard shortcuts ---
 
