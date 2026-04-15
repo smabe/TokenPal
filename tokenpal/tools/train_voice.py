@@ -17,6 +17,7 @@ import sys
 import urllib.request
 import urllib.error
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
     FANDOM_NAMES,
+    VoiceProfile,
     franchise_from_source,
     list_profiles,
     make_profile,
@@ -94,6 +96,77 @@ def _sample_block(lines: list[str], n: int = 10) -> str:
     return "\n".join(f"- {line}" for line in samples)
 
 
+_ENGLISH_ONLY_SUFFIX = (
+    "Write only in English. Plain text only — no markdown formatting, no analysis, "
+    "no meta-commentary, no translations, no section headers."
+)
+
+
+_META_MARKERS = (
+    "wikipedia",
+    "copiert",
+    "paste von",
+    "analyze the",
+    "user's request",
+    "i cannot provide",
+    "if the goal is",
+    "the preceding text",
+    "the user's prompt",
+    "**analyze",
+    "codiert",
+    "nachweislich",
+)
+
+
+def _is_clean_english(
+    text: str, *, max_nonascii_ratio: float = 0.10,
+) -> bool:
+    """Reject drift (non-English, chain-of-thought, markdown meta-commentary).
+
+    A line passes if it's mostly ASCII printable and contains no known
+    meta-commentary tokens. Empty strings fail.
+    """
+    if not text or not text.strip():
+        return False
+    stripped = text.strip()
+    # Reject leading/trailing markdown section headers like **Analyze:**
+    if stripped.startswith("**") and stripped.endswith("**"):
+        return False
+    if stripped.endswith(":**") or stripped.endswith("**:"):
+        return False
+    total = len(stripped)
+    if total == 0:
+        return False
+    nonascii = sum(1 for ch in stripped if ord(ch) > 127)
+    if nonascii / total > max_nonascii_ratio:
+        return False
+    lower = stripped.lower()
+    for marker in _META_MARKERS:
+        if marker in lower:
+            return False
+    return True
+
+
+def _generate_with_retry(
+    fn: Callable[[float], str | None],
+    validate: Callable[[str], bool],
+    attempts: int = 3,
+    temps: tuple[float, ...] = (0.9, 0.7, 0.5),
+) -> str | None:
+    """Call ``fn(temp)`` until ``validate`` accepts, ramping temperature down.
+
+    Returns the first accepted text, or None if every attempt failed.
+    """
+    last: str | None = None
+    for i in range(min(attempts, len(temps))):
+        text = fn(temps[i])
+        if text and validate(text):
+            return text
+        if text:
+            last = text
+    return None if last is None else None
+
+
 # Franchise → character names for cross-franchise banning
 _FRANCHISE_CHARACTERS: dict[str, list[str]] = {
     "Adventure Time": [
@@ -159,6 +232,14 @@ def _extract_anchor_lines(
     return [line for line, _ in scored[:max_anchors]]
 
 
+def _validate_persona(text: str) -> bool:
+    """Persona must be clean English and hit both required sections."""
+    if not _is_clean_english(text):
+        return False
+    upper = text.upper()
+    return "VOICE:" in upper and "CATCHPHRASES:" in upper
+
+
 def _generate_persona(
     character: str, lines: list[str], franchise: str = "",
 ) -> str | None:
@@ -166,7 +247,7 @@ def _generate_persona(
     samples_block = _sample_block(lines, 25)
     origin = f' from {franchise}' if franchise else ''
 
-    return _ollama_generate(
+    prompt = (
         f'You are analyzing dialogue from "{character}"{origin}.\n\n'
         f"Here are 25 sample lines:\n{samples_block}\n\n"
         f"Write a character voice card for {character}. "
@@ -178,38 +259,58 @@ def _generate_persona(
         "CATCHPHRASES: 3-5 signature phrases in quotes, comma-separated. "
         "Only real ones from the dialogue.\n"
         "NEVER: 3-4 things this character would NEVER say or do. "
-        "Be specific — name actual words or tones to avoid.\n"
+        "Be specific - name actual words or tones to avoid.\n"
         "WORLDVIEW: 1-2 sentences. What does this character care about? "
         "How do they see the world?\n\n"
-        "Write ONLY the card. No preamble. Keep each section concise.",
-        max_tokens=500,
-        temperature=0.7,
+        "Write ONLY the card. No preamble. Keep each section concise.\n\n"
+        f"{_ENGLISH_ONLY_SUFFIX}"
+    )
+    return _generate_with_retry(
+        lambda t: _ollama_generate(prompt, max_tokens=500, temperature=t),
+        _validate_persona,
     )
 
 
-def _generate_lines_from_prompt(character: str, lines: list[str], task_prompt: str) -> list[str]:
-    """Generate numbered one-liners via Ollama from a character's voice samples."""
-    samples_block = _sample_block(lines)
-
-    text = _ollama_generate(
-        f"""Here are sample dialogue lines from "{character}":
-
-{samples_block}
-
-{task_prompt}""",
-        max_tokens=200,
-        temperature=0.9,
-    )
-
-    if not text:
-        return []
-
+def _parse_numbered_lines(text: str) -> list[str]:
+    """Strip numbering/quotes, keep lines that are 8-60 chars and clean English."""
     result: list[str] = []
     for line in text.splitlines():
         cleaned = re.sub(r"^\d+[.)]\s*", "", line).strip().strip("\"'").strip()
-        if cleaned and 8 <= len(cleaned) <= 60:
-            result.append(cleaned)
+        if not (cleaned and 8 <= len(cleaned) <= 60):
+            continue
+        if not _is_clean_english(cleaned):
+            continue
+        result.append(cleaned)
     return result
+
+
+def _generate_lines_from_prompt(
+    character: str, lines: list[str], task_prompt: str, *, min_accepted: int = 3,
+) -> list[str]:
+    """Generate numbered one-liners via Ollama from a character's voice samples.
+
+    Retries with lower temperature if output drifts (non-English, meta-commentary,
+    or fewer than ``min_accepted`` usable lines survive filtering).
+    """
+    samples_block = _sample_block(lines)
+    prompt = (
+        f'Here are sample dialogue lines from "{character}":\n\n'
+        f"{samples_block}\n\n"
+        f"{task_prompt}\n\n"
+        f"{_ENGLISH_ONLY_SUFFIX}"
+    )
+
+    best: list[str] = []
+    for temp in (0.9, 0.7, 0.5):
+        text = _ollama_generate(prompt, max_tokens=200, temperature=temp)
+        if not text:
+            continue
+        parsed = _parse_numbered_lines(text)
+        if len(parsed) > len(best):
+            best = parsed
+        if len(parsed) >= min_accepted:
+            return parsed
+    return best
 
 
 def _generate_greetings(character: str, lines: list[str]) -> list[str]:
@@ -235,13 +336,34 @@ def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
         "Match this character's personality.")
 
 
+def _frames_look_usable(
+    idle: list[str], idle_alt: list[str], talking: list[str],
+) -> bool:
+    """A frame set is usable if every frame has >=4 non-empty lines."""
+    for frame in (idle, idle_alt, talking):
+        if sum(1 for line in frame if line.strip()) < 4:
+            return False
+    return True
+
+
 def _generate_ascii_art(
     character: str, persona: str,
 ) -> tuple[list[str], list[str], list[str]]:
     """Generate 3 Rich-markup ASCII art frames for a character.
 
-    Returns (idle, idle_alt, talking) as lists of markup lines.
+    Returns (idle, idle_alt, talking) as lists of markup lines. Retries once
+    if the first attempt yields blank frames.
     """
+    for temp in (0.8, 0.6):
+        result = _generate_ascii_art_once(character, persona, temp)
+        if _frames_look_usable(*result):
+            return result
+    return result  # return best-effort last try even if short
+
+
+def _generate_ascii_art_once(
+    character: str, persona: str, temperature: float,
+) -> tuple[list[str], list[str], list[str]]:
     text = _ollama_generate(
         f'You are a pixel artist who creates detailed terminal character art '
         f'using Unicode and Rich markup.\n\n'
@@ -276,7 +398,7 @@ def _generate_ascii_art(
         f'IDLE_ALT:\n(10 lines of art)\n'
         f'TALKING:\n(10 lines of art)',
         max_tokens=1200,
-        temperature=0.8,
+        temperature=temperature,
     )
 
     if not text:
@@ -435,11 +557,12 @@ def _generate_mood_prompts_legacy(
         "CONCERNED: (worried about the user)\n"
         "HYPER: (excited, energetic)\n"
         "SLEEPY: (tired, half-awake)\n\n"
-        "Write ONLY the 6 lines, nothing else.",
+        "Write ONLY the 6 lines, nothing else.\n\n"
+        f"{_ENGLISH_ONLY_SUFFIX}",
         max_tokens=300,
         temperature=0.8,
     )
-    if not text:
+    if not text or not _is_clean_english(text):
         return {}
 
     moods: dict[str, str] = {}
@@ -487,16 +610,28 @@ def _generate_mood_prompts(
         "- Write ONLY the 6 lines, nothing else"
     )
 
-    for _attempt in range(2):
-        text = _ollama_generate(prompt, max_tokens=400, temperature=0.8)
-        if not text:
+    for temp in (0.8, 0.65, 0.5):
+        text = _ollama_generate(
+            prompt + "\n\n" + _ENGLISH_ONLY_SUFFIX,
+            max_tokens=400,
+            temperature=temp,
+        )
+        if not text or not _is_clean_english(text):
             continue
         parsed = _parse_custom_moods(text)
         if parsed:
             return parsed
 
-    # Fallback to legacy (hardcoded mood names, character descriptions)
+    # Fallback to legacy (hardcoded mood names, character descriptions).
+    # Validate legacy output too — empty dict means the whole thing drifted
+    # and the caller should WARN rather than silently ship {}.
     legacy = _generate_mood_prompts_legacy(character, lines)
+    if not legacy:
+        print(
+            f"  WARN: mood generation failed for {character}; "
+            "run /voice regenerate <slug> after training to retry.",
+            file=sys.stderr,
+        )
     return legacy, {}, ""
 
 
@@ -561,15 +696,21 @@ def train_from_wiki(
     return profile
 
 
-def regenerate_persona(
+def regenerate_voice_assets(
     profile: VoiceProfile,
     voices_dir: Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    *,
+    persona_only: bool = False,
 ) -> VoiceProfile:
-    """Re-generate only the persona for an existing profile.
+    """Re-run LLM-backed generators for an existing profile in place.
 
-    Updates persona, anchor_lines, banned_names, and bumps version.
-    Preserves all other fields (greetings, moods, lines, etc.).
+    By default refreshes persona, anchor_lines, banned_names, ASCII art,
+    greetings, offline_quips, mood_prompts/roles/default_mood, and
+    structure_hints. Preserves lines, finetune metadata, source, created.
+
+    With ``persona_only=True`` behaves like the legacy regenerate_persona:
+    persona + anchor_lines + banned_names + ASCII only.
     """
     def _progress(msg: str) -> None:
         if progress_callback:
@@ -591,6 +732,24 @@ def regenerate_persona(
     profile.anchor_lines = anchor_lines
     profile.banned_names = banned_names
 
+    if not persona_only:
+        _progress(f"Generating greetings / quips / hints for {profile.character}...")
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            f_g = pool.submit(_generate_greetings, profile.character, profile.lines)
+            f_q = pool.submit(_generate_offline_quips, profile.character, profile.lines)
+            f_m = pool.submit(_generate_mood_prompts, profile.character, profile.lines)
+            f_s = pool.submit(_generate_structure_hints, profile.character, profile.lines)
+
+        profile.greetings = f_g.result()
+        profile.offline_quips = f_q.result()
+        mood_prompts, mood_roles, default_mood = f_m.result()
+        profile.mood_prompts = mood_prompts
+        profile.mood_roles = mood_roles
+        profile.default_mood = default_mood
+        profile.structure_hints = f_s.result()
+
     _progress(f"Generating ASCII art for {profile.character}...")
     ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
         profile.character, persona,
@@ -603,8 +762,120 @@ def regenerate_persona(
 
     out_dir = voices_dir or _get_voices_dir()
     save_profile(profile, out_dir)
-    _progress(f"Saved {profile.character} (v2)")
+
+    report = audit_profile(profile)
+    if report.issues:
+        _progress(
+            f"Saved {profile.character} (v2) with {len(report.issues)} "
+            "health warnings - run --audit to inspect."
+        )
+    else:
+        _progress(f"Saved {profile.character} (v2)")
     return profile
+
+
+def regenerate_persona(
+    profile: VoiceProfile,
+    voices_dir: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> VoiceProfile:
+    """Backward-compatible shim: full refresh of all LLM-backed assets.
+
+    Historically this only refreshed persona + ASCII; callers that want the
+    narrow behavior must pass ``persona_only=True`` to
+    :func:`regenerate_voice_assets` directly. Default is now full refresh so
+    profiles that shipped with broken greetings/moods actually heal.
+    """
+    return regenerate_voice_assets(
+        profile, voices_dir, progress_callback,
+    )
+
+
+@dataclass
+class AuditReport:
+    slug: str
+    character: str
+    issues: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
+
+
+def audit_profile(profile: VoiceProfile) -> AuditReport:
+    """Inspect a profile for drift/empty-fallback damage. Returns a report."""
+    issues: list[str] = []
+
+    if not profile.persona.strip():
+        issues.append("persona is empty")
+    elif not _validate_persona(profile.persona):
+        issues.append("persona failed English/format validation")
+
+    for field_name, value in (
+        ("greetings", profile.greetings),
+        ("offline_quips", profile.offline_quips),
+        ("structure_hints", profile.structure_hints),
+    ):
+        if not value:
+            issues.append(f"{field_name} is empty")
+            continue
+        dirty = [v for v in value if not _is_clean_english(v)]
+        if dirty:
+            issues.append(
+                f"{field_name} contains {len(dirty)} non-English / meta entries"
+            )
+
+    if not profile.mood_prompts:
+        issues.append("mood_prompts is empty")
+    if not profile.mood_roles:
+        issues.append("mood_roles is empty")
+    if not profile.default_mood:
+        issues.append("default_mood is empty")
+
+    if not _frames_look_usable(
+        profile.ascii_idle, profile.ascii_idle_alt, profile.ascii_talking,
+    ):
+        issues.append("ascii frames are blank or too short")
+
+    return AuditReport(
+        slug=slugify(profile.character),
+        character=profile.character,
+        issues=issues,
+    )
+
+
+def _cmd_audit(target: str) -> int:
+    """Run the health audit. target is a slug, '--all', or '' (== --all)."""
+    from tokenpal.tools.voice_profile import load_profile
+
+    voices_dir = _get_voices_dir()
+    if target in ("", "--all"):
+        slugs = [slug for slug, _, _ in list_profiles(voices_dir)]
+    else:
+        slugs = [slugify(target)]
+
+    if not slugs:
+        print("No voice profiles found.")
+        return 0
+
+    any_broken = False
+    for slug in slugs:
+        try:
+            profile = load_profile(slug, voices_dir)
+        except FileNotFoundError:
+            print(f"{slug}: NOT FOUND")
+            any_broken = True
+            continue
+        report = audit_profile(profile)
+        if report.ok:
+            print(f"{slug:<20} OK  ({profile.character})")
+        else:
+            any_broken = True
+            print(f"{slug:<20} BROKEN  ({profile.character}):")
+            for issue in report.issues:
+                print(f"    - {issue}")
+
+    return 1 if any_broken else 0
 
 
 def activate_voice(slug: str) -> None:
@@ -793,9 +1064,19 @@ def _cmd_extract(args: argparse.Namespace) -> None:
 
     print(f"Saved voice \"{slug}\" ({len(lines)} lines) to {out_path}")
 
+    report = audit_profile(profile)
+    if report.issues:
+        print(f"\nWARN: {len(report.issues)} health issue(s):", file=sys.stderr)
+        for issue in report.issues:
+            print(f"  - {issue}", file=sys.stderr)
+        print(
+            f"  Re-run with /voice regenerate {slug} to retry the broken fields.",
+            file=sys.stderr,
+        )
+
     # Auto-activate in config.toml
     activate_voice(slug)
-    print(f"Activated voice \"{slug}\" in config.toml — restart TokenPal to use it.")
+    print(f"Activated voice \"{slug}\" in config.toml. Restart TokenPal to use it.")
 
 
 def main() -> None:
@@ -843,8 +1124,16 @@ def main() -> None:
         "--max-pages", type=int, default=500,
         help="Max transcript pages to fetch from wiki (default: 500)",
     )
+    parser.add_argument(
+        "--audit", nargs="?", const="--all", default=None,
+        help="Audit voice profiles for drift/empty-field damage. "
+             "Pass a slug or --all (default).",
+    )
 
     args = parser.parse_args()
+
+    if args.audit is not None:
+        sys.exit(_cmd_audit(args.audit))
 
     if args.list:
         _cmd_list()
