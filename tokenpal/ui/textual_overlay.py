@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 _BUDDY_PANEL_PADDING = 4
 _CHAT_LOG_MIN_SPACE = 30
+_MAX_BUBBLE_QUEUE = 3
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -131,6 +132,10 @@ class SpeechBubbleWidget(VerticalScroll):
 
     def compose(self) -> ComposeResult:
         yield self._body
+
+    @property
+    def is_active(self) -> bool:
+        return self._bubble is not None
 
     def start_typing(self, bubble: SpeechBubble) -> None:
         self._cancel_timers()
@@ -301,6 +306,7 @@ class TokenPalApp(App[None]):
         super().__init__()
         self._overlay = overlay
         self._chat_log_user_hidden: bool = False
+        self._bubble_queue: list[SpeechBubble] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -391,15 +397,26 @@ class TokenPalApp(App[None]):
     # --- Message handlers (all run on app thread) ---
 
     def on_show_speech(self, message: ShowSpeech) -> None:
-        buddy = self.query_one(BuddyWidget)
-        buddy.show_frame(buddy._get_frame("talking"))
-        self.query_one(SpeechBubbleWidget).start_typing(message.bubble)
         self._log_buddy(message.bubble.text)
+        speech = self.query_one(SpeechBubbleWidget)
+        if speech.is_active:
+            if len(self._bubble_queue) < _MAX_BUBBLE_QUEUE:
+                self._bubble_queue.append(message.bubble)
+            return
+        self._begin_bubble(message.bubble)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()
+        if self._bubble_queue:
+            self._begin_bubble(self._bubble_queue.pop(0))
+            return
         buddy = self.query_one(BuddyWidget)
         buddy.show_frame(buddy._get_frame("idle"))
+
+    def _begin_bubble(self, bubble: SpeechBubble) -> None:
+        buddy = self.query_one(BuddyWidget)
+        buddy.show_frame(buddy._get_frame("talking"))
+        self.query_one(SpeechBubbleWidget).start_typing(bubble)
 
     def on_show_buddy(self, message: ShowBuddy) -> None:
         self.query_one(BuddyWidget).show_frame(message.frame)
