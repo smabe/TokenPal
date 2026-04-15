@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from typing import Any, ClassVar
 
 
+@dataclass(frozen=True)
+class RateLimit:
+    """Cap how often a tool can fire inside a rolling window.
+
+    Enforced by ``ToolInvoker``; exceeded calls fail-fast with a
+    ``ActionResult(success=False)`` rather than sleeping or queueing.
+    """
+
+    max_calls: int
+    window_s: float
+
+
 @dataclass
 class ActionResult:
     """Result from executing an action."""
@@ -34,6 +46,12 @@ class AbstractAction(abc.ABC):
     # before the LLM can invoke this unattended.
     safe: ClassVar[bool] = False
     requires_confirm: ClassVar[bool] = True
+    # Opt-in throttle. When set, the registry's invoker fails calls that
+    # would exceed ``max_calls`` inside the trailing ``window_s`` seconds.
+    rate_limit: ClassVar[RateLimit | None] = None
+    # When False, the agent in-run result cache skips this tool (e.g. because
+    # the output is time-sensitive or carries side effects worth re-running).
+    cacheable: ClassVar[bool] = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

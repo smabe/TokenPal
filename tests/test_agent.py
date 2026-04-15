@@ -11,7 +11,6 @@ from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner, AgentSession
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 
-
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
@@ -425,3 +424,111 @@ def test_summary_formatter_reports_each_reason() -> None:
         summary = _format_agent_summary(session)
         assert "step(s)" in summary
         assert "tokens" in summary
+
+
+# ---------------------------------------------------------------------------
+# In-run result cache
+# ---------------------------------------------------------------------------
+
+
+class _Counting(AbstractAction):
+    action_name = "counting"
+    description = "Returns a running count."
+    parameters = {"type": "object", "properties": {"x": {"type": "string"}}}
+    safe = True
+    requires_confirm = False
+    calls = 0
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        _Counting.calls += 1
+        return ActionResult(output=f"n={_Counting.calls}")
+
+
+@pytest.mark.asyncio
+async def test_identical_tool_call_returns_cached_result() -> None:
+    _Counting.calls = 0
+    llm = _ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("counting", {"x": "a"}, "call_1")],
+        ),
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("counting", {"x": "a"}, "call_2")],
+        ),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    logs: list[str] = []
+    session = await _runner(
+        llm, actions={"counting": _Counting({})}, logs=logs
+    ).run("call twice")
+
+    assert len(session.steps) == 2
+    assert session.steps[0].cached is False
+    assert session.steps[1].cached is True
+    assert session.steps[0].result == "n=1"
+    assert session.steps[1].result == "n=1"
+    # Action body ran exactly once.
+    assert _Counting.calls == 1
+    assert any("(cached)" in line for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_cache_key_is_order_insensitive() -> None:
+    _Counting.calls = 0
+    llm = _ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("counting", {"x": "a", "y": "b"}, "c1")],
+        ),
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("counting", {"y": "b", "x": "a"}, "c2")],
+        ),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, actions={"counting": _Counting({})}).run("g")
+
+    assert session.steps[1].cached is True
+    assert _Counting.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_noncacheable_tool_never_hits_cache() -> None:
+    class _Live(_Counting):
+        action_name = "live"
+        cacheable = False
+
+    _Counting.calls = 0
+    llm = _ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("live", {"x": "a"}, "c1")],
+        ),
+        LLMResponse(
+            text="",
+            tokens_used=0,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("live", {"x": "a"}, "c2")],
+        ),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, actions={"live": _Live({})}).run("g")
+    assert [s.cached for s in session.steps] == [False, False]
+    assert _Counting.calls == 2

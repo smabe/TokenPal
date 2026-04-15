@@ -14,9 +14,9 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any
 
+from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.senses.web_search.client import BackendName, SearchResult, search
 
@@ -24,16 +24,6 @@ log = logging.getLogger(__name__)
 
 LogFn = Callable[[str], None]
 FetchFn = Callable[[str], "asyncio.Future[str | None]"] | Callable[[str], Any]
-
-
-class ResearchStopReason(StrEnum):
-    COMPLETE = "complete"
-    NO_QUERIES = "no_queries"
-    NO_SOURCES = "no_sources"
-    TOKEN_BUDGET = "token_budget"
-    TIMEOUT = "timeout"
-    CRASHED = "crashed"
-    UNAVAILABLE = "unavailable"
 
 
 @dataclass

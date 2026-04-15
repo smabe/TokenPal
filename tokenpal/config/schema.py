@@ -187,6 +187,9 @@ class ResearchConfig:
     token_budget: int = 6000
     per_search_timeout_s: float = 5.0
     per_fetch_timeout_s: float = 8.0
+    # Identical questions within this window return the previous synthesis
+    # instead of re-searching. Zero disables the cache.
+    cache_ttl_s: float = 86400.0
 
 
 @dataclass

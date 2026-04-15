@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import random
 import re
@@ -11,20 +13,19 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 from urllib.parse import urlparse
 
 from tokenpal.actions.base import AbstractAction
-from tokenpal.brain.agent import AgentRunner, AgentSession, StopReason
+from tokenpal.actions.invoker import ToolInvoker
+from tokenpal.brain.agent import AgentRunner, AgentSession
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
-from tokenpal.brain.research import (
-    ResearchRunner,
-    ResearchSession,
-    ResearchStopReason,
-)
+from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
+from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
 from tokenpal.config.schema import AgentConfig, ConversationConfig, ResearchConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -85,6 +86,32 @@ _FORCED_SILENCE_DURATION = 120.0
 # Freeform chance for voices with 50+ example lines
 _FREEFORM_CHANCE_RICH = 0.20
 
+class BrainMode(StrEnum):
+    """Heavyweight mode of the brain. Conversation isn't a mode because it
+    carries history state on ``_conversation`` rather than a flag."""
+
+    IDLE = "idle"
+    AGENT = "agent"
+    RESEARCH = "research"
+
+
+@dataclass
+class AgentBridge:
+    """Config + host callbacks needed to run /agent."""
+
+    config: AgentConfig
+    log_callback: Callable[[str], None] | None = None
+    confirm_callback: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None
+
+
+@dataclass
+class ResearchBridge:
+    """Config + host callbacks needed to run /research."""
+
+    config: ResearchConfig
+    log_callback: Callable[[str], None] | None = None
+
+
 # Topic focus hints prepended to the context snapshot
 _TOPIC_FOCUS_HINTS: dict[str, str] = {
     "weather": "Focus your comment on the weather conditions.",
@@ -121,12 +148,8 @@ class Brain:
         context_max_tokens: int = 2048,
         sense_intervals: dict[str, float] | None = None,
         conversation: ConversationConfig | None = None,
-        agent_config: AgentConfig | None = None,
-        agent_log_callback: Callable[[str], None] | None = None,
-        agent_confirm_callback: Callable[
-            [str, dict[str, Any]], Awaitable[bool]
-        ] | None = None,
-        research_config: ResearchConfig | None = None,
+        agent_bridge: AgentBridge | None = None,
+        research_bridge: ResearchBridge | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -174,13 +197,9 @@ class Brain:
         self._conversation: ConversationSession | None = None
         self._conv_config = conversation or ConversationConfig()
 
-        self._agent_config = agent_config or AgentConfig()
-        self._agent_log_callback = agent_log_callback
-        self._agent_confirm_callback = agent_confirm_callback
-        self._agent_running: bool = False
-
-        self._research_config = research_config or ResearchConfig()
-        self._research_running: bool = False
+        self._agent = agent_bridge or AgentBridge(config=AgentConfig())
+        self._research = research_bridge or ResearchBridge(config=ResearchConfig())
+        self._mode: BrainMode = BrainMode.IDLE
 
         # Proactive scheduler (phase 3). Shared across all focus actions.
         # Pauses during active conversation and sensitive-app detection.
@@ -398,7 +417,7 @@ class Brain:
         self._conversation = None
 
     def _any_long_task(self) -> bool:
-        return self._agent_running or self._research_running
+        return self._mode is not BrainMode.IDLE
 
     def _should_comment(self) -> bool:
         if self._paused:
@@ -745,43 +764,48 @@ class Brain:
         self._post_threadsafe(self._research_queue, question, "research question")
 
     @property
+    def mode(self) -> BrainMode:
+        return self._mode
+
+    @property
     def agent_running(self) -> bool:
-        return self._agent_running
+        return self._mode is BrainMode.AGENT
 
     @property
     def research_running(self) -> bool:
-        return self._research_running
+        return self._mode is BrainMode.RESEARCH
 
     async def _handle_agent_goal(self, goal: str) -> AgentSession:
         """Run one agent session from start to finish. Suppresses
         observations + freeform for the duration and swaps to the agent
         model if configured."""
-        if self._agent_log_callback is None or self._agent_confirm_callback is None:
+        if self._agent.log_callback is None or self._agent.confirm_callback is None:
             self._ui_callback(
                 "/agent isn't wired up — the overlay can't show confirm modals yet."
             )
-            return AgentSession(goal=goal, stopped_reason=StopReason.UNAVAILABLE)
+            return AgentSession(goal=goal, stopped_reason=AgentStopReason.UNAVAILABLE)
 
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
             self._ui_callback("Not now — sensitive window is open.")
-            return AgentSession(goal=goal, stopped_reason=StopReason.SENSITIVE)
+            return AgentSession(goal=goal, stopped_reason=AgentStopReason.SENSITIVE)
 
         runner = AgentRunner(
             llm=self._llm,
             actions=self._actions,
             tool_specs=self._tool_specs,
-            log_callback=self._agent_log_callback,
-            confirm_callback=self._agent_confirm_callback,
+            log_callback=self._agent.log_callback,
+            confirm_callback=self._agent.confirm_callback,
             is_sensitive=self._sensitive_check,
-            max_steps=self._agent_config.max_steps,
-            token_budget=self._agent_config.token_budget,
-            per_step_timeout_s=self._agent_config.per_step_timeout_s,
+            max_steps=self._agent.config.max_steps,
+            token_budget=self._agent.config.token_budget,
+            per_step_timeout_s=self._agent.config.per_step_timeout_s,
+            invoker=self._build_invoker(),
         )
 
         previous_model = self._llm.model_name
         swapped = False
-        target_model = self._agent_config.model.strip()
+        target_model = self._agent.config.model.strip()
         if target_model and target_model != previous_model:
             try:
                 self._llm.set_model(target_model)
@@ -790,17 +814,17 @@ class Brain:
             except NotImplementedError:
                 log.debug("Backend does not support model swap — staying on %s", previous_model)
 
-        self._agent_running = True
+        self._mode = BrainMode.AGENT
         if self._status_callback:
             self._status_callback("agent running...")
-        self._agent_log_callback(f"> agent: {goal}")
+        self._agent.log_callback(f"> agent: {goal}")
         try:
             session = await runner.run(goal)
         except Exception:
             log.exception("Agent run crashed")
-            session = AgentSession(goal=goal, stopped_reason=StopReason.CRASHED)
+            session = AgentSession(goal=goal, stopped_reason=AgentStopReason.CRASHED)
         finally:
-            self._agent_running = False
+            self._mode = BrainMode.IDLE
             if swapped:
                 try:
                     self._llm.set_model(previous_model)
@@ -810,7 +834,7 @@ class Brain:
 
         summary = _format_agent_summary(session)
         final = session.final_text.strip() or summary
-        self._agent_log_callback(f"= {summary}")
+        self._agent.log_callback(f"= {summary}")
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()
         return session
@@ -819,10 +843,21 @@ class Brain:
         """Runner-facing predicate — re-check on every agent step."""
         return self._personality.check_sensitive_app(self._context.snapshot())
 
+    def _build_invoker(self) -> ToolInvoker:
+        on_call = None
+        if self._memory is not None and self._memory.enabled:
+            memory = self._memory
+
+            def _record(name: str, duration_ms: float, success: bool) -> None:
+                memory.record_tool_call(name, duration_ms, success)
+
+            on_call = _record
+        return ToolInvoker(on_call=on_call)
+
     async def _handle_research(self, question: str) -> ResearchSession:
         """Run one /research pipeline. Log callback routes to chat log via
-        _agent_log_callback (same sink — trace lines, not speech bubbles)."""
-        log_cb = self._agent_log_callback or (lambda _s: None)
+        the agent log sink (same stream — trace lines, not speech bubbles)."""
+        log_cb = self._agent.log_callback or (lambda _s: None)
 
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
@@ -831,12 +866,19 @@ class Brain:
                 question=question, stopped_reason=ResearchStopReason.UNAVAILABLE
             )
 
+        cached = self._load_research_cache(question)
+        if cached is not None:
+            log_cb(f"> research: {question} (cached)")
+            self._ui_callback(cached.answer)
+            self._last_comment_time = time.monotonic()
+            return cached
+
         from tokenpal.actions.research.fetch_url import fetch_and_extract
 
         async def _fetch(url: str) -> str | None:
             try:
                 return await fetch_and_extract(
-                    url, timeout_s=self._research_config.per_fetch_timeout_s
+                    url, timeout_s=self._research.config.per_fetch_timeout_s
                 )
             except Exception:
                 log.exception("fetch_and_extract raised during research")
@@ -845,8 +887,8 @@ class Brain:
         previous_model = self._llm.model_name
         active_model = previous_model
         target = (
-            self._research_config.planner_model.strip()
-            or self._research_config.synth_model.strip()
+            self._research.config.planner_model.strip()
+            or self._research.config.synth_model.strip()
         )
         swapped = False
         if target and target != previous_model:
@@ -862,14 +904,14 @@ class Brain:
             llm=self._llm,
             fetch_url=_fetch,
             log_callback=log_cb,
-            max_queries=self._research_config.max_queries,
-            max_fetches=self._research_config.max_fetches,
-            token_budget=self._research_config.token_budget,
-            per_search_timeout_s=self._research_config.per_search_timeout_s,
-            per_fetch_timeout_s=self._research_config.per_fetch_timeout_s,
+            max_queries=self._research.config.max_queries,
+            max_fetches=self._research.config.max_fetches,
+            token_budget=self._research.config.token_budget,
+            per_search_timeout_s=self._research.config.per_search_timeout_s,
+            per_fetch_timeout_s=self._research.config.per_fetch_timeout_s,
         )
 
-        self._research_running = True
+        self._mode = BrainMode.RESEARCH
         if self._status_callback:
             self._status_callback("researching...")
         log_cb(f"> research: {question}")
@@ -881,7 +923,7 @@ class Brain:
                 question=question, stopped_reason=ResearchStopReason.CRASHED
             )
         finally:
-            self._research_running = False
+            self._mode = BrainMode.IDLE
             if swapped:
                 try:
                     self._llm.set_model(previous_model)
@@ -896,7 +938,73 @@ class Brain:
         final = (session.answer or summary).strip()
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()
+        if session.is_complete:
+            self._save_research_cache(question, session)
         return session
+
+    def _research_cache_key(self, question: str) -> str:
+        return hashlib.sha256(question.strip().lower().encode("utf-8")).hexdigest()
+
+    def _research_cache_ttl(self) -> float | None:
+        """Return the cache TTL in seconds, or None when the cache is off."""
+        if self._memory is None or not self._memory.enabled:
+            return None
+        ttl = self._research.config.cache_ttl_s
+        return ttl if ttl > 0 else None
+
+    def _load_research_cache(self, question: str) -> ResearchSession | None:
+        ttl = self._research_cache_ttl()
+        if ttl is None:
+            return None
+        assert self._memory is not None
+        hit = self._memory.get_research_answer(
+            self._research_cache_key(question), max_age_s=ttl
+        )
+        if hit is None:
+            return None
+        answer, sources_json, age = hit
+        try:
+            payload = json.loads(sources_json)
+        except (TypeError, ValueError):
+            payload = []
+        sources = [
+            Source(
+                number=int(s.get("number", i + 1)),
+                url=str(s.get("url", "")),
+                title=str(s.get("title", "")),
+                excerpt=str(s.get("excerpt", "")),
+                backend=str(s.get("backend", "")),
+            )
+            for i, s in enumerate(payload)
+        ]
+        prefix = _format_cache_age(age)
+        return ResearchSession(
+            question=question,
+            sources=sources,
+            answer=f"{prefix} {answer}",
+            stopped_reason=ResearchStopReason.COMPLETE,
+        )
+
+    def _save_research_cache(self, question: str, session: ResearchSession) -> None:
+        if self._research_cache_ttl() is None:
+            return
+        assert self._memory is not None
+        payload = json.dumps([
+            {
+                "number": s.number,
+                "url": s.url,
+                "title": s.title,
+                "excerpt": s.excerpt,
+                "backend": s.backend,
+            }
+            for s in session.sources
+        ])
+        self._memory.cache_research_answer(
+            self._research_cache_key(question),
+            question,
+            session.answer,
+            payload,
+        )
 
     async def _handle_user_input(self, user_message: str) -> None:
         """Respond to direct user input using multi-turn conversation context."""
@@ -1077,15 +1185,15 @@ class Brain:
         log.info("Brain stopped")
 
 
-_STOP_REASON_LABELS: dict[StopReason, str] = {
-    StopReason.COMPLETE: "done",
-    StopReason.STEP_CAP: "hit step cap",
-    StopReason.TOKEN_BUDGET: "hit token budget",
-    StopReason.SENSITIVE: "stopped, sensitive window",
-    StopReason.DENIED: "stopped, user denied a tool",
-    StopReason.TIMEOUT: "stopped, step timed out",
-    StopReason.CRASHED: "stopped, crashed",
-    StopReason.UNAVAILABLE: "stopped, agent bridge unavailable",
+_STOP_REASON_LABELS: dict[AgentStopReason, str] = {
+    AgentStopReason.COMPLETE: "done",
+    AgentStopReason.STEP_CAP: "hit step cap",
+    AgentStopReason.TOKEN_BUDGET: "hit token budget",
+    AgentStopReason.SENSITIVE: "stopped, sensitive window",
+    AgentStopReason.DENIED: "stopped, user denied a tool",
+    AgentStopReason.TIMEOUT: "stopped, step timed out",
+    AgentStopReason.CRASHED: "stopped, crashed",
+    AgentStopReason.UNAVAILABLE: "stopped, agent bridge unavailable",
 }
 
 
@@ -1111,6 +1219,16 @@ def _format_session_summary(
     )
     tail = ", ".join(f"{n} {name}" for name, n in counts)
     return f"{reason} in {duration_s:.1f}s ({tail}, {session.tokens_used} tokens)"
+
+
+def _format_cache_age(age_s: float) -> str:
+    if age_s < 60:
+        return "(cached just now)"
+    if age_s < 3600:
+        return f"(cached {int(age_s / 60)}m ago)"
+    if age_s < 86400:
+        return f"(cached {int(age_s / 3600)}h ago)"
+    return f"(cached {int(age_s / 86400)}d ago)"
 
 
 def _format_research_summary(session: ResearchSession) -> str:

@@ -54,6 +54,22 @@ CREATE TABLE IF NOT EXISTS mood_log (
     mood TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_mood_time ON mood_log(timestamp);
+CREATE TABLE IF NOT EXISTS tool_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    tool_name TEXT NOT NULL,
+    duration_ms REAL NOT NULL,
+    success INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_name ON tool_calls(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_calls_time ON tool_calls(timestamp);
+CREATE TABLE IF NOT EXISTS research_cache (
+    question_hash TEXT PRIMARY KEY,
+    question TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    sources_json TEXT NOT NULL,
+    created_at REAL NOT NULL
+);
 """
 
 
@@ -605,6 +621,74 @@ class MemoryStore:
                 else:
                     break
         return (current, longest)
+
+    # ------------------------------------------------------------------
+    # Tool usage stats + research cache
+    # ------------------------------------------------------------------
+
+    def record_tool_call(self, tool_name: str, duration_ms: float, success: bool) -> None:
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO tool_calls (timestamp, tool_name, duration_ms, success) "
+                "VALUES (?, ?, ?, ?)",
+                (time.time(), tool_name, float(duration_ms), 1 if success else 0),
+            )
+            self._conn.commit()
+
+    def tool_usage_counts(self, since_days: int | None = None) -> dict[str, int]:
+        """Return ``{tool_name: call_count}``. Filters failed calls out — a
+        tool that crashed every time isn't "used", it's "attempted"."""
+        if not self._enabled or not self._conn:
+            return {}
+        query = "SELECT tool_name, COUNT(*) FROM tool_calls WHERE success = 1"
+        params: tuple[Any, ...] = ()
+        if since_days is not None:
+            query += " AND timestamp >= ?"
+            params = (time.time() - since_days * 86400,)
+        query += " GROUP BY tool_name"
+        with self._lock:
+            rows = self._conn.execute(query, params).fetchall()
+        return {name: cnt for name, cnt in rows}
+
+    def cache_research_answer(
+        self,
+        question_hash: str,
+        question: str,
+        answer: str,
+        sources_json: str,
+    ) -> None:
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO research_cache "
+                "(question_hash, question, answer, sources_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (question_hash, question, answer, sources_json, time.time()),
+            )
+            self._conn.commit()
+
+    def get_research_answer(
+        self, question_hash: str, max_age_s: float
+    ) -> tuple[str, str, float] | None:
+        """Return ``(answer, sources_json, age_s)`` if a fresh hit exists."""
+        if not self._enabled or not self._conn:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT answer, sources_json, created_at FROM research_cache "
+                "WHERE question_hash = ?",
+                (question_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        answer, sources_json, created_at = row
+        age = time.time() - created_at
+        if age > max_age_s:
+            return None
+        return (answer, sources_json, age)
 
     def log_mood(self, mood: str) -> None:
         """Record a mood-check response."""

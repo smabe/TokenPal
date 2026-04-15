@@ -18,10 +18,11 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Any
 
 from tokenpal.actions.base import AbstractAction
+from tokenpal.actions.invoker import ToolInvoker
+from tokenpal.brain.stop_reason import AgentStopReason
 from tokenpal.llm.base import AbstractLLMBackend, ToolCall
 
 log = logging.getLogger(__name__)
@@ -40,17 +41,6 @@ SensitiveFn = Callable[[], bool]
 LogFn = Callable[[str], None]
 
 
-class StopReason(StrEnum):
-    COMPLETE = "complete"
-    STEP_CAP = "step_cap"
-    TOKEN_BUDGET = "token_budget"
-    SENSITIVE = "sensitive"
-    DENIED = "denied"
-    TIMEOUT = "timeout"
-    CRASHED = "crashed"
-    UNAVAILABLE = "unavailable"
-
-
 @dataclass
 class AgentStep:
     """One executed tool call or final-text step in an agent run."""
@@ -60,6 +50,7 @@ class AgentStep:
     result: str
     duration_ms: float
     denied: bool = False
+    cached: bool = False
 
 
 @dataclass
@@ -70,12 +61,12 @@ class AgentSession:
     steps: list[AgentStep] = field(default_factory=list)
     final_text: str = ""
     tokens_used: int = 0
-    stopped_reason: StopReason | str = ""
+    stopped_reason: AgentStopReason | str = ""
     started_at: float = field(default_factory=time.monotonic)
 
     @property
     def is_complete(self) -> bool:
-        return self.stopped_reason == StopReason.COMPLETE
+        return self.stopped_reason == AgentStopReason.COMPLETE
 
 
 class AgentRunner:
@@ -100,6 +91,7 @@ class AgentRunner:
         token_budget: int = 12000,
         per_step_timeout_s: float = 45.0,
         system_prompt: str | None = None,
+        invoker: ToolInvoker | None = None,
     ) -> None:
         self._llm = llm
         self._actions = actions
@@ -115,9 +107,11 @@ class AgentRunner:
         self._token_budget = token_budget
         self._per_step_timeout_s = per_step_timeout_s
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
+        self._invoker = invoker or ToolInvoker()
 
     async def run(self, goal: str) -> AgentSession:
         session = AgentSession(goal=goal)
+        self._cache: dict[tuple[str, str], str] = {}
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": goal},
@@ -125,14 +119,14 @@ class AgentRunner:
 
         for step in range(self._max_steps):
             if self._is_sensitive():
-                session.stopped_reason = StopReason.SENSITIVE
+                session.stopped_reason = AgentStopReason.SENSITIVE
                 log.info("Agent aborted mid-run: sensitive app detected")
                 return session
 
             # Ollama sometimes returns tokens_used=0, so this is a soft cap —
             # if usage data is bad, step_cap still bounds the run.
             if session.tokens_used >= self._token_budget:
-                session.stopped_reason = StopReason.TOKEN_BUDGET
+                session.stopped_reason = AgentStopReason.TOKEN_BUDGET
                 log.info(
                     "Agent hit token budget (%d/%d)",
                     session.tokens_used,
@@ -149,7 +143,7 @@ class AgentRunner:
                     timeout=self._per_step_timeout_s,
                 )
             except TimeoutError:
-                session.stopped_reason = StopReason.TIMEOUT
+                session.stopped_reason = AgentStopReason.TIMEOUT
                 log.warning("Agent step %d timed out", step)
                 return session
 
@@ -157,7 +151,7 @@ class AgentRunner:
 
             if not response.tool_calls:
                 session.final_text = response.text
-                session.stopped_reason = StopReason.COMPLETE
+                session.stopped_reason = AgentStopReason.COMPLETE
                 return session
 
             messages.append(response.to_assistant_message())
@@ -177,11 +171,11 @@ class AgentRunner:
                     denied = True
 
             if denied:
-                session.stopped_reason = StopReason.DENIED
+                session.stopped_reason = AgentStopReason.DENIED
                 session.final_text = await self._force_synthesis(messages)
                 return session
 
-        session.stopped_reason = StopReason.STEP_CAP
+        session.stopped_reason = AgentStopReason.STEP_CAP
         log.info("Agent hit step cap (%d)", self._max_steps)
         session.final_text = await self._force_synthesis(messages)
         return session
@@ -192,6 +186,15 @@ class AgentRunner:
             msg = f"Unknown tool '{tc.name}'."
             self._log(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, 0.0)
+
+        cache_eligible = action.cacheable and not action.requires_confirm
+        cache_key: tuple[str, str] | None = None
+        if cache_eligible:
+            cache_key = (tc.name, _stable_args_key(tc.arguments))
+            hit = self._cache.get(cache_key)
+            if hit is not None:
+                self._log(f"\u2190 (cached) {_truncate(hit, 240)}")
+                return AgentStep(tc.name, tc.arguments, hit, 0.0, cached=True)
 
         if action.requires_confirm:
             allowed = await self._confirm(tc.name, tc.arguments)
@@ -204,13 +207,15 @@ class AgentRunner:
         start = time.monotonic()
         try:
             result = await asyncio.wait_for(
-                action.execute(**tc.arguments),
+                self._invoker.invoke(action, tc.arguments),
                 timeout=self._per_step_timeout_s,
             )
             duration_ms = (time.monotonic() - start) * 1000
             output = result.output if result.success else f"error: {result.output}"
             stored = _truncate(output, _SESSION_RESULT_CAP)
             self._log(f"\u2190 {_truncate(stored, 240)}")
+            if cache_key is not None and result.success:
+                self._cache[cache_key] = stored
             return AgentStep(tc.name, tc.arguments, stored, duration_ms)
         except TimeoutError:
             duration_ms = (time.monotonic() - start) * 1000
@@ -255,6 +260,16 @@ def fmt_args(args: dict[str, Any], max_len: int = 80) -> str:
 
 def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "\u2026"
+
+
+def _stable_args_key(args: dict[str, Any]) -> str:
+    """Canonical JSON for cache keys — sort keys so {a:1,b:2} hashes the
+    same as {b:2,a:1}. Fallback to repr for unhashable-but-json-serializable
+    edge cases (rare; the registry accepts only JSON-schema types)."""
+    try:
+        return json.dumps(args, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        return repr(sorted(args.items()))
 
 
 _DEFAULT_SYSTEM_PROMPT = (

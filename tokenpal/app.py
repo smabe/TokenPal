@@ -16,7 +16,7 @@ from typing import Any
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.registry import discover_actions, resolve_actions
 from tokenpal.brain.memory import MemoryStore
-from tokenpal.brain.orchestrator import Brain
+from tokenpal.brain.orchestrator import AgentBridge, Brain, ResearchBridge
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
@@ -191,10 +191,12 @@ def main() -> None:
         context_max_tokens=config.brain.context_max_tokens,
         sense_intervals=config.brain.sense_intervals,
         conversation=config.conversation,
-        agent_config=config.agent,
-        agent_log_callback=_agent_log,
-        agent_confirm_callback=_agent_confirm,
-        research_config=config.research,
+        agent_bridge=AgentBridge(
+            config=config.agent,
+            log_callback=_agent_log,
+            confirm_callback=_agent_confirm,
+        ),
+        research_bridge=ResearchBridge(config=config.research),
     )
 
     # Load voice-specific buddy art into the overlay
@@ -535,7 +537,8 @@ def main() -> None:
         return CommandResult(f"Research started: {question[:60]}")
 
     def _cmd_tools(args: str) -> CommandResult:
-        from tokenpal.actions.catalog import SECTIONS, default_tool_names
+        from tokenpal.actions.catalog import SECTIONS, default_tool_names, find_entry
+        from tokenpal.actions.registry import _ACTION_REGISTRY
 
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
@@ -561,7 +564,40 @@ def main() -> None:
                     rows.append(f"    {mark}  {entry.name}{tag}")
             return CommandResult("Tools:\n" + "\n".join(rows))
 
-        return CommandResult("Usage: /tools [list] — omit args to open picker.")
+        if subcmd == "describe":
+            target = parts[1].strip() if len(parts) > 1 else ""
+            if not target:
+                return CommandResult("Usage: /tools describe <name>")
+            match = find_entry(target)
+            if match is None:
+                return CommandResult(f"Unknown tool '{target}'.")
+            entry, section = match
+            cls = _ACTION_REGISTRY.get(entry.name)
+            lines = [
+                f"{entry.name} — {entry.blurb}",
+                f"  section: {section.title} ({entry.kind})",
+            ]
+            if entry.consent_category:
+                lines.append(f"  consent: {entry.consent_category}")
+            if cls is None:
+                lines.append("  (no implementation registered yet)")
+            else:
+                lines.append(f"  platforms: {', '.join(cls.platforms)}")
+                lines.append(
+                    f"  safe: {cls.safe}, requires_confirm: {cls.requires_confirm}"
+                )
+                if cls.rate_limit is not None:
+                    lines.append(
+                        f"  rate_limit: {cls.rate_limit.max_calls}/"
+                        f"{cls.rate_limit.window_s:g}s"
+                    )
+                if not cls.cacheable:
+                    lines.append("  cacheable: false")
+            return CommandResult("\n".join(lines))
+
+        return CommandResult(
+            "Usage: /tools [list|describe <name>] — omit args to open picker."
+        )
 
     def _cmd_consent(args: str) -> CommandResult:
         from tokenpal.config.consent import ALL_CATEGORIES, load_consent, save_consent

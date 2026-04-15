@@ -338,3 +338,51 @@ class TestGetPatternCallbacks:
 
         assert has_signal
         assert not has_signal_filtered
+
+
+class TestToolCalls:
+    def test_record_and_query(self, store: MemoryStore) -> None:
+        store.record_tool_call("timer", 12.5, True)
+        store.record_tool_call("timer", 8.0, True)
+        store.record_tool_call("do_math", 0.3, True)
+        store.record_tool_call("do_math", 0.4, False)
+
+        counts = store.tool_usage_counts()
+        assert counts == {"timer": 2, "do_math": 1}
+
+    def test_since_days_filter(self, store: MemoryStore) -> None:
+        assert store._conn is not None
+        old = time.time() - 10 * 86400
+        store._conn.execute(
+            "INSERT INTO tool_calls (timestamp, tool_name, duration_ms, success) "
+            "VALUES (?, 'git_log', 5.0, 1)",
+            (old,),
+        )
+        store._conn.commit()
+        store.record_tool_call("git_log", 5.0, True)
+
+        assert store.tool_usage_counts()["git_log"] == 2
+        assert store.tool_usage_counts(since_days=7)["git_log"] == 1
+
+
+class TestResearchCache:
+    def test_hit_and_miss(self, store: MemoryStore) -> None:
+        assert store.get_research_answer("abc", 3600) is None
+        store.cache_research_answer("abc", "what?", "yes.", '[]')
+        hit = store.get_research_answer("abc", 3600)
+        assert hit is not None
+        answer, sources_json, age = hit
+        assert answer == "yes."
+        assert sources_json == "[]"
+        assert age < 1.0
+
+    def test_expiry(self, store: MemoryStore) -> None:
+        assert store._conn is not None
+        store.cache_research_answer("xyz", "q", "a", "[]")
+        store._conn.execute(
+            "UPDATE research_cache SET created_at = ? WHERE question_hash = 'xyz'",
+            (time.time() - 10,),
+        )
+        store._conn.commit()
+        assert store.get_research_answer("xyz", max_age_s=5.0) is None
+        assert store.get_research_answer("xyz", max_age_s=30.0) is not None
