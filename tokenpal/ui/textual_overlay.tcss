@@ -16,13 +16,25 @@ Screen {
     text-style: bold;
 }
 
+#speech-region {
+    height: 1fr;
+    min-height: 0;
+    layout: vertical;
+}
+
+#buddy-footer {
+    height: auto;
+    layout: vertical;
+}
+
 #spacer {
     height: 1fr;
+    min-height: 0;
 }
 
 #speech-scroll {
     height: auto;
-    max-height: 50%;
+    max-height: 100%;
     padding: 0 2;
     scrollbar-size: 1 1;
     display: none;

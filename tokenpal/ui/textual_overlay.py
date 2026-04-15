@@ -305,11 +305,13 @@ class TokenPalApp(App[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
             yield HeaderWidget(self._overlay._buddy_name)
-            yield Static(id="spacer")
-            yield SpeechBubbleWidget()
-            yield BuddyWidget()
-            yield Input(placeholder="Type a message or /command...", id="user-input")
-            yield StatusBarWidget()
+            with Vertical(id="speech-region"):
+                yield Static(id="spacer")
+                yield SpeechBubbleWidget()
+            with Vertical(id="buddy-footer"):
+                yield BuddyWidget()
+                yield Input(placeholder="Type a message or /command...", id="user-input")
+                yield StatusBarWidget()
         with VerticalScroll(id="chat-log"):
             yield Static(id="chat-log-content")
 
