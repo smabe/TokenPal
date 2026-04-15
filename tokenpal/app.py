@@ -281,7 +281,16 @@ def main() -> None:
 
             llm.set_api_url(url)
             asyncio.run_coroutine_threadsafe(llm.setup(), brain._loop)
-            return CommandResult(f"Switching to {url}...")
+            try:
+                from tokenpal.config.toml_writer import update_config
+
+                def _persist(data: dict[str, Any]) -> None:
+                    data.setdefault("llm", {})["api_url"] = url
+
+                update_config(_persist)
+            except Exception:
+                log.exception("Failed to persist /server switch to config.toml")
+            return CommandResult(f"Switching to {url} (persisted).")
 
         return CommandResult("Usage: /server [status|switch <host|local|remote>]")
 
@@ -1139,6 +1148,13 @@ def _overlay_show(overlay: AbstractOverlay, msg: str, persistent: bool = False) 
     overlay.schedule_callback(lambda: overlay.show_speech(bubble))
 
 
+def _overlay_finalize(overlay: AbstractOverlay, msg: str) -> None:
+    """Clear any persistent progress bubble, then show a final message."""
+    overlay.schedule_callback(overlay.hide_speech)
+    bubble = SpeechBubble(text=msg, persistent=False)
+    overlay.schedule_callback(lambda: overlay.show_speech(bubble))
+
+
 def _overlay_status(overlay: AbstractOverlay, msg: str) -> None:
     """Update the status bar via the overlay (thread-safe)."""
     overlay.schedule_callback(lambda: overlay.update_status(msg))
@@ -1164,7 +1180,8 @@ def _start_voice_training(
 
     def _train() -> None:
         try:
-            from tokenpal.tools.train_voice import train_from_wiki
+            from tokenpal.tools.train_voice import activate_voice, train_from_wiki
+            from tokenpal.tools.voice_profile import slugify
 
             def _on_progress(step: str) -> None:
                 _overlay_show(overlay, step, persistent=True)
@@ -1175,13 +1192,16 @@ def _start_voice_training(
                 progress_callback=_on_progress,
             )
             if profile is None:
-                _overlay_show(overlay, f"Not enough lines for {character}.")
+                _overlay_finalize(overlay, f"Not enough lines for {character}.")
                 return
 
             personality.set_voice(profile)
+            activate_voice(slugify(profile.character))
             if on_voice_loaded:
                 overlay.schedule_callback(on_voice_loaded)
-            _overlay_show(overlay, f"I'm {character} now! ({len(profile.lines)} lines)")
+            _overlay_finalize(
+                overlay, f"I'm {character} now! ({len(profile.lines)} lines)"
+            )
             log.info(
                 "Voice trained: %s from %s (%d lines)",
                 character, wiki, len(profile.lines),
@@ -1189,7 +1209,7 @@ def _start_voice_training(
 
         except Exception:
             log.exception("Voice training failed")
-            _overlay_show(overlay, "Training failed. Check logs.")
+            _overlay_finalize(overlay, "Training failed. Check logs.")
         finally:
             if brain:
                 brain.paused = False
@@ -1251,7 +1271,7 @@ def _start_voice_regenerate(
 
             count = len(slugs)
             msg = f"Regenerated {count} voice{'s' if count != 1 else ''}."
-            _overlay_show(overlay, msg)
+            _overlay_finalize(overlay, msg)
             log.info("Voice regeneration complete: %s", slugs)
 
             # Hot-swap if current voice was regenerated
@@ -1263,7 +1283,7 @@ def _start_voice_regenerate(
                     overlay.schedule_callback(on_voice_loaded)
         except Exception:
             log.exception("Voice regeneration failed")
-            _overlay_show(overlay, "Regeneration failed. Check logs.")
+            _overlay_finalize(overlay, "Regeneration failed. Check logs.")
 
     label = f"{len(slugs)} voices" if do_all else slugs[0]
     _overlay_show(overlay, f"Regenerating {label}...", persistent=True)

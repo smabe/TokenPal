@@ -508,6 +508,17 @@ class TokenPalApp(App[None]):
             return
         speech = self.query_one(SpeechBubbleWidget)
         if speech.is_active:
+            current = speech.source_bubble
+            if (
+                message.bubble.persistent
+                and current is not None
+                and current.persistent
+            ):
+                self._pending_bubble = None
+                self._begin_bubble(
+                    variant, source=message.bubble, skip_typing=True
+                )
+                return
             if len(self._bubble_queue) < _MAX_BUBBLE_QUEUE:
                 self._bubble_queue.append(message.bubble)
             return
