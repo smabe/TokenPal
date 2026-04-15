@@ -40,3 +40,41 @@ def update_config(
     tmp.write_text(tomli_w.dumps(data), encoding="utf-8")
     os.replace(tmp, path)
     return path
+
+
+def canon_server_url(url: str) -> str:
+    """Canonical key for per-server config dicts.
+
+    Strips trailing slashes and ensures the ``/v1`` suffix so the same host
+    keyed in different shapes (``http://h:11434``, ``.../v1``, ``.../v1/``)
+    collapses to one entry. Mirrors the normalization `/server switch` does
+    in `tokenpal/app.py` so lookups agree with what gets persisted.
+    """
+    u = url.strip().rstrip("/")
+    if not u.endswith("/v1"):
+        u += "/v1"
+    return u
+
+
+def remember_server_model(url: str, model: str, path: Path | None = None) -> Path:
+    """Persist the remembered model for *url* into ``[llm.per_server_models]``."""
+    key = canon_server_url(url)
+
+    def _mutate(data: dict[str, Any]) -> None:
+        llm = data.setdefault("llm", {})
+        mapping = llm.setdefault("per_server_models", {})
+        mapping[key] = model
+
+    return update_config(_mutate, path=path)
+
+
+def remember_server_max_tokens(url: str, n: int, path: Path | None = None) -> Path:
+    """Persist the remembered max_tokens for *url* into ``[llm.per_server_max_tokens]``."""
+    key = canon_server_url(url)
+
+    def _mutate(data: dict[str, Any]) -> None:
+        llm = data.setdefault("llm", {})
+        mapping = llm.setdefault("per_server_max_tokens", {})
+        mapping[key] = int(n)
+
+    return update_config(_mutate, path=path)

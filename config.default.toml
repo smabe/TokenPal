@@ -21,10 +21,24 @@ filesystem_pulse = false     # activity bursts in watched folders (default: Down
 [llm]
 backend = "http"
 api_url = "http://localhost:11434/v1"
-model_name = "gemma4"
-max_tokens = 60
+model_name = "gemma4"           # global default, used when the active server has no remembered model
+max_tokens = 60                 # global default, used when the active server has no remembered cap
 disable_reasoning = true
 temperature = 1.0
+
+# Per-server memory. Populated automatically by /model <name> and consulted
+# by /server switch so each host loads the model it was last used with.
+# Keys are canonical api_urls (trailing slash stripped, /v1 suffix enforced).
+# Example:
+# [llm.per_server_models]
+# "http://localhost:11434/v1" = "gemma4"
+# "http://192.168.1.50:8585/v1" = "gemma4:26b-a4b-it-q8_0"
+#
+# [llm.per_server_max_tokens]
+# "http://192.168.1.50:8585/v1" = 256
+[llm.per_server_models]
+
+[llm.per_server_max_tokens]
 
 [ui]
 overlay = "textual"

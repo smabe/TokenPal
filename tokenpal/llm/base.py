@@ -108,21 +108,21 @@ class AbstractLLMBackend(abc.ABC):
         """Load model / connect to server."""
 
     @abc.abstractmethod
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
-        """Single-shot generation."""
+    async def generate(self, prompt: str, max_tokens: int | None = None) -> LLMResponse:
+        """Single-shot generation. ``max_tokens=None`` uses the backend's configured default."""
 
     async def generate_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        max_tokens: int = 256,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         """Chat completion with tool definitions. Default: fall back to generate()."""
         # Fallback for backends that don't support tools — just use the last user message
         prompt = messages[-1].get("content", "") if messages else ""
         return await self.generate(prompt, max_tokens)
 
-    async def stream(self, prompt: str, max_tokens: int = 256) -> AsyncIterator[str]:
+    async def stream(self, prompt: str, max_tokens: int | None = None) -> AsyncIterator[str]:
         """Yield tokens as they arrive. Default: fall back to generate()."""
         response = await self.generate(prompt, max_tokens)
         yield response.text

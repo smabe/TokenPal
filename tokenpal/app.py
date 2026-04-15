@@ -278,6 +278,23 @@ def main() -> None:
                     url += "/v1"
 
             llm.set_api_url(url)
+
+            # Restore the remembered model / max_tokens for this server, if any.
+            # Falls through to whatever the backend already has (global defaults)
+            # when we've never seen this server before.
+            from tokenpal.config.toml_writer import canon_server_url
+
+            key = canon_server_url(url)
+            restored_model: str | None = None
+            remembered_model = config.llm.per_server_models.get(key)
+            if remembered_model and remembered_model != llm.model_name:
+                llm.set_model(remembered_model)
+                config.llm.model_name = remembered_model  # status bar mirror
+                restored_model = remembered_model
+            remembered_tokens = config.llm.per_server_max_tokens.get(key)
+            if remembered_tokens and hasattr(llm, "set_max_tokens"):
+                llm.set_max_tokens(int(remembered_tokens))
+
             asyncio.run_coroutine_threadsafe(llm.setup(), brain._loop)
             try:
                 from tokenpal.config.toml_writer import update_config
@@ -288,7 +305,8 @@ def main() -> None:
                 update_config(_persist)
             except Exception:
                 log.exception("Failed to persist /server switch to config.toml")
-            return CommandResult(f"Switching to {url} (persisted).")
+            suffix = f" [model: {restored_model}]" if restored_model else ""
+            return CommandResult(f"Switching to {url} (persisted).{suffix}")
 
         return CommandResult("Usage: /server [status|switch <host|local|remote>]")
 
@@ -1028,9 +1046,17 @@ def _handle_model_command(
             + " — /model pull <name> to download"
         )
 
-    # Bare name → switch model
+    # Bare name → switch model for the CURRENT server and remember it there.
+    # Does NOT touch the global [llm] model_name fallback.
     llm.set_model(subcmd)
-    return CommandResult(f"Switched to {subcmd}")
+    try:
+        from tokenpal.config.toml_writer import remember_server_model
+
+        remember_server_model(llm.api_url, subcmd)
+    except Exception:
+        log.exception("Failed to persist /model selection for %s", llm.api_url)
+        return CommandResult(f"Switched to {subcmd} (not persisted, see logs)")
+    return CommandResult(f"Switched to {subcmd} (remembered for {llm.api_url})")
 
 
 def _handle_voice_command(

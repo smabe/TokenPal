@@ -31,6 +31,17 @@ class HttpBackend(AbstractLLMBackend):
         self._temperature = config.get("temperature", 0.8)
         self._disable_reasoning = config.get("disable_reasoning", True)
         self._server_mode = config.get("server_mode", "auto")
+        self._max_tokens: int = int(config.get("max_tokens", 256))
+        # Resolve per-server overrides (populated by /model and /server switch)
+        from tokenpal.config.toml_writer import canon_server_url
+
+        key = canon_server_url(self._api_url)
+        per_model: dict[str, str] = config.get("per_server_models") or {}
+        if key in per_model:
+            self._model_name = per_model[key]
+        per_tokens: dict[str, int] = config.get("per_server_max_tokens") or {}
+        if key in per_tokens:
+            self._max_tokens = int(per_tokens[key])
         self._client: httpx.AsyncClient | None = None
         self._reachable: bool = False
         self._model_available: bool = False
@@ -90,14 +101,15 @@ class HttpBackend(AbstractLLMBackend):
             self._api_url,
         )
 
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
+    async def generate(self, prompt: str, max_tokens: int | None = None) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
         start = time.monotonic()
+        effective_max = self._max_tokens if max_tokens is None else max_tokens
         body: dict[str, Any] = {
             "model": self._model_name,
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max,
             "temperature": self._temperature,
         }
         # Disable thinking for models that support it — we want fast, short quips
@@ -126,15 +138,16 @@ class HttpBackend(AbstractLLMBackend):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        max_tokens: int = 256,
+        max_tokens: int | None = None,
     ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
         start = time.monotonic()
+        effective_max = self._max_tokens if max_tokens is None else max_tokens
         body: dict[str, Any] = {
             "model": self._model_name,
             "messages": messages,
-            "max_tokens": max_tokens,
+            "max_tokens": effective_max,
             "temperature": self._temperature,
         }
         if tools:
@@ -201,6 +214,15 @@ class HttpBackend(AbstractLLMBackend):
         """Swap the active model. Next generation call uses the new model."""
         self._model_name = model_name
         log.info("Model swapped to: %s", model_name)
+
+    def set_max_tokens(self, n: int) -> None:
+        """Swap the default max_tokens cap. Affects calls that don't pass one explicitly."""
+        self._max_tokens = int(n)
+        log.info("Default max_tokens set to: %d", self._max_tokens)
+
+    @property
+    def max_tokens(self) -> int:
+        return self._max_tokens
 
     def set_api_url(self, url: str) -> None:
         """Switch the API endpoint at runtime. Used by /server switch."""

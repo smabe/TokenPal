@@ -65,6 +65,11 @@ class LLMConfig:
     max_tokens: int = 60
     disable_reasoning: bool = True
     temperature: float = 0.8
+    # Keyed by canonical api_url (trailing slash stripped, /v1 suffix). Empty
+    # dict → fall back to model_name / max_tokens globals above. Populated by
+    # /model <name> and /server switch at runtime.
+    per_server_models: dict[str, str] = field(default_factory=dict)
+    per_server_max_tokens: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
