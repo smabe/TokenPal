@@ -29,12 +29,10 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 _BUDDY_PANEL_PADDING = 4
 _CHAT_LOG_MIN_SPACE = 30
-_MAX_BUBBLE_QUEUE = 3
 _SPEECH_SCROLL_PADDING = 4
 _MIN_BORDERED_REGION_WIDTH = 36
 _BUBBLE_HOLD_MIN_S = 2.5
 _BUBBLE_HOLD_PER_CHAR_S = 0.05
-_BUBBLE_PREEMPT_HOLD_S = 0.2
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -239,16 +237,6 @@ class SpeechBubbleWidget(VerticalScroll):
     def is_typing(self) -> bool:
         return self._typing_timer is not None
 
-    def shorten_hold(self, delay: float = _BUBBLE_PREEMPT_HOLD_S) -> bool:
-        """Accelerate auto-hide once typing is done. No-op while still typing."""
-        if self._bubble and self._bubble.persistent:
-            return False
-        if self._typing_timer is not None or self._hide_timer is None:
-            return False
-        self._hide_timer.stop()
-        self._hide_timer = self.set_timer(delay, self._fire_auto_hide)
-        return True
-
     def _fire_auto_hide(self) -> None:
         self._hide_timer = None
         self.post_message(HideSpeech())
@@ -382,7 +370,6 @@ class TokenPalApp(App[None]):
         super().__init__()
         self._overlay = overlay
         self._chat_log_user_hidden: bool = False
-        self._bubble_queue: list[SpeechBubble] = []
         self._pending_bubble: SpeechBubble | None = None
         self._last_region_size: tuple[int, int] | None = None
 
@@ -429,7 +416,7 @@ class TokenPalApp(App[None]):
 
     def _evict_oversized_bubble(self) -> None:
         speech = self.query_one(SpeechBubbleWidget)
-        if not (speech.is_active or self._bubble_queue or self._pending_bubble):
+        if not (speech.is_active or self._pending_bubble):
             return
         region = self.query_one("#speech-region", Vertical)
         region_size = (region.size.width, region.size.height)
@@ -437,7 +424,6 @@ class TokenPalApp(App[None]):
             return
         self._last_region_size = region_size
         self._rechoose_active_variant(speech)
-        self._prune_queue()
         self._promote_pending(speech)
 
     def _rechoose_active_variant(self, speech: SpeechBubbleWidget) -> None:
@@ -450,11 +436,6 @@ class TokenPalApp(App[None]):
             self.post_message(HideSpeech())
         elif variant.borderless != current.borderless or variant.max_width != current.max_width:
             speech.swap_variant(variant)
-
-    def _prune_queue(self) -> None:
-        self._bubble_queue = [
-            b for b in self._bubble_queue if self._choose_bubble_variant(b) is not None
-        ]
 
     def _promote_pending(self, speech: SpeechBubbleWidget) -> None:
         if not self._pending_bubble or speech.is_active:
@@ -524,33 +505,17 @@ class TokenPalApp(App[None]):
             self._pending_bubble = message.bubble
             return
         speech = self.query_one(SpeechBubbleWidget)
-        if speech.is_active:
-            current = speech.source_bubble
-            if (
-                message.bubble.persistent
-                and current is not None
-                and current.persistent
-            ):
-                self._pending_bubble = None
-                self._begin_bubble(
-                    variant, source=message.bubble, skip_typing=True
-                )
-                return
-            if len(self._bubble_queue) < _MAX_BUBBLE_QUEUE:
-                self._bubble_queue.append(message.bubble)
-            speech.shorten_hold()
+        current = speech.source_bubble if speech.is_active else None
+        # Don't let a transient comment clobber a persistent progress bubble.
+        if current is not None and current.persistent and not message.bubble.persistent:
             return
+        # Persistent-over-persistent skips typing; everything else clobbers with typing.
+        skip = message.bubble.persistent and current is not None and current.persistent
         self._pending_bubble = None
-        self._begin_bubble(variant, source=message.bubble)
+        self._begin_bubble(variant, source=message.bubble, skip_typing=skip)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()
-        while self._bubble_queue:
-            source = self._bubble_queue.pop(0)
-            next_variant = self._choose_bubble_variant(source)
-            if next_variant is not None:
-                self._begin_bubble(next_variant, source=source)
-                return
         buddy = self.query_one(BuddyWidget)
         buddy.show_frame(buddy._get_frame("idle"))
 
