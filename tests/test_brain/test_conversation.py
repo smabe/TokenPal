@@ -214,6 +214,37 @@ class TestPersonalityConversation:
         assert engine.filter_conversation_response("   ") is None
         assert engine.filter_conversation_response("Hi") is None  # 2 chars < 5
 
+    def test_filter_conversation_rejects_drift(self):
+        engine = _make_engine()
+        # Thai drift bubble as actually observed with gemma4:26b
+        assert engine.filter_conversation_response(
+            "**(ในลังจะหาทาง ท้อน สืบ)**",
+        ) is None
+        # Markdown meta header
+        assert engine.filter_conversation_response(
+            "**Analyze the German/Formatting Parts:**",
+        ) is None
+        # Chain-of-thought leak
+        assert engine.filter_conversation_response(
+            "I cannot provide a definitive, contextually accurate answer.",
+        ) is None
+
+    def test_filter_response_rejects_drift(self):
+        engine = _make_engine()
+        assert engine.filter_response(
+            "ยังไงก็อยู่ในกลุ่มของ 23. 06. 2024 ครับ.",
+        ) is None
+        assert engine.filter_response(
+            "**Analyze the German/Formatting Parts:**",
+        ) is None
+
+    def test_filter_response_allows_clean_english(self):
+        engine = _make_engine()
+        result = engine.filter_response(
+            "Oh hey, another window — how surprising. Nice job.",
+        )
+        assert result is not None
+
 
 # ---------------------------------------------------------------------------
 # Brain integration tests

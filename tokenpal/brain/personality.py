@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from tokenpal.tools.voice_profile import VoiceProfile
 
 from tokenpal.tools.voice_profile import franchise_from_source, parse_catchphrases
+from tokenpal.util.text_guards import is_clean_english
 
 log = logging.getLogger(__name__)
 
@@ -693,6 +694,10 @@ class PersonalityEngine:
             log.debug("Filter: too short (%d chars): %r", len(text), text[:50])
             return None
 
+        if not is_clean_english(text):
+            log.warning("Filter: drifted response suppressed: %r", text[:80])
+            return None
+
         text = self._clean_llm_text(text)
 
         if self._has_cross_franchise(text):
@@ -913,10 +918,14 @@ class PersonalityEngine:
         )
 
     def filter_conversation_response(self, text: str) -> str | None:
-        """Filter a conversational response — relaxed rules vs observation mode."""
+        """Filter a conversational response. Relaxed rules vs observation mode."""
         text = text.strip().strip(_QUOTES).strip()
 
         if not text or len(text) < 5:
+            return None
+
+        if not is_clean_english(text):
+            log.warning("Filter: drifted conversation response: %r", text[:80])
             return None
 
         text = self._clean_llm_text(text)

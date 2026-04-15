@@ -23,6 +23,7 @@ from typing import Any
 
 from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
+from tokenpal.util.text_guards import is_clean_english as _is_clean_english
 from tokenpal.tools.voice_profile import (
     FANDOM_NAMES,
     VoiceProfile,
@@ -100,51 +101,6 @@ _ENGLISH_ONLY_SUFFIX = (
     "Write only in English. Plain text only — no markdown formatting, no analysis, "
     "no meta-commentary, no translations, no section headers."
 )
-
-
-_META_MARKERS = (
-    "wikipedia",
-    "copiert",
-    "paste von",
-    "analyze the",
-    "user's request",
-    "i cannot provide",
-    "if the goal is",
-    "the preceding text",
-    "the user's prompt",
-    "**analyze",
-    "codiert",
-    "nachweislich",
-)
-
-
-def _is_clean_english(
-    text: str, *, max_nonascii_ratio: float = 0.10,
-) -> bool:
-    """Reject drift (non-English, chain-of-thought, markdown meta-commentary).
-
-    A line passes if it's mostly ASCII printable and contains no known
-    meta-commentary tokens. Empty strings fail.
-    """
-    if not text or not text.strip():
-        return False
-    stripped = text.strip()
-    # Reject leading/trailing markdown section headers like **Analyze:**
-    if stripped.startswith("**") and stripped.endswith("**"):
-        return False
-    if stripped.endswith(":**") or stripped.endswith("**:"):
-        return False
-    total = len(stripped)
-    if total == 0:
-        return False
-    nonascii = sum(1 for ch in stripped if ord(ch) > 127)
-    if nonascii / total > max_nonascii_ratio:
-        return False
-    lower = stripped.lower()
-    for marker in _META_MARKERS:
-        if marker in lower:
-            return False
-    return True
 
 
 def _generate_with_retry(
