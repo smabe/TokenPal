@@ -32,7 +32,17 @@ curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/install.sh | ba
 iwr -useb https://raw.githubusercontent.com/smabe/TokenPal/main/install.ps1 | iex
 ```
 
-The installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**, then recommends a model based on your VRAM (gemma4:26b for 16GB+, gemma4 for 8GB+).
+The installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**, then recommends a model based on your detected VRAM:
+
+| VRAM  | Model                     | Size    |
+|-------|---------------------------|---------|
+| ≥48GB | `llama3.3:70b`            | ~40 GB  |
+| ≥32GB | `gemma4:26b-a4b-it-q8_0`  | ~28 GB  |
+| ≥16GB | `gemma4:26b` (Q4_K_M)     | ~20 GB  |
+| ≥6GB  | `gemma4` (9B)             | ~6 GB   |
+| <6GB  | `gemma2:2b`               | ~2 GB   |
+
+Override via `TOKENPAL_MODEL=<model>` env var before running the installer, or pull a different model manually and edit `~/.tokenpal/config.toml`.
 
 To skip the prompt, pass a mode:
 
