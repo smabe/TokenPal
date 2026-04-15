@@ -56,6 +56,40 @@ UTILITIES_SECTION = CatalogSection(
 FOCUS_SECTION = CatalogSection(
     title="Focus",
     description="Pomodoro, reminders, and habit wrappers.",
+    entries=(
+        CatalogEntry(
+            "pomodoro",
+            "Start a work/break cycle with in-character phase announcements.",
+        ),
+        CatalogEntry(
+            "stretch_reminder",
+            "Recurring stretch nudge (speech bubble). Pauses in conversation.",
+        ),
+        CatalogEntry(
+            "water_reminder",
+            "Recurring hydration nudge. Pauses in conversation.",
+        ),
+        CatalogEntry(
+            "eye_break",
+            "Recurring 20-20-20 eye-rest prompt. Pauses in conversation.",
+        ),
+        CatalogEntry(
+            "bedtime_wind_down",
+            "Recurring wrap-up nudges starting 60 minutes before bedtime.",
+        ),
+        CatalogEntry(
+            "hydration_log",
+            "Log fluid intake and report today's running total.",
+        ),
+        CatalogEntry(
+            "habit_streak",
+            "Track a named habit and report current + longest day streak.",
+        ),
+        CatalogEntry(
+            "mood_check",
+            "Prompt a one-word mood check and record the reply if given.",
+        ),
+    ),
 )
 AGENT_SECTION = CatalogSection(
     title="Agent",

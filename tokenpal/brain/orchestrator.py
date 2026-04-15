@@ -18,6 +18,7 @@ from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
+from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -159,6 +160,18 @@ class Brain:
         self._conversation: ConversationSession | None = None
         self._conv_config = conversation or ConversationConfig()
 
+        # Proactive scheduler (phase 3). Shared across all focus actions.
+        # Pauses during active conversation and sensitive-app detection.
+        self._proactive = ProactiveScheduler(
+            ui_callback=self._ui_callback,
+            is_paused=self._proactive_paused,
+        )
+
+        # Inject brain-scoped dependencies (scheduler, memory, ui_callback)
+        # into any action that advertises a matching attribute. Phase 3 focus
+        # actions opt in via underscore-prefixed attrs set during __init__.
+        self._inject_brain_deps()
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -210,6 +223,10 @@ class Brain:
                         await self._handle_user_input(user_msg)
                     except asyncio.QueueEmpty:
                         break
+
+                # Fire any due proactive nudges (stretch/water/etc).
+                # Respects conversation + sensitive-app gates via _proactive_paused.
+                self._proactive.tick()
 
                 # Clean up expired conversation sessions
                 if self._conversation and self._conversation.is_expired:
@@ -265,6 +282,46 @@ class Brain:
             # active, so don't clear here (would wipe the reading before the
             # gate's cooldown clears).
         return readings
+
+    @property
+    def proactive(self) -> ProactiveScheduler:
+        """Shared scheduler that drives opt-in focus/health nudges."""
+        return self._proactive
+
+    @property
+    def ui_callback(self) -> Callable[[str], None]:
+        """Expose the UI callback so actions can emit in-character bubbles."""
+        return self._ui_callback
+
+    def _inject_brain_deps(self) -> None:
+        """Wire the scheduler / memory / ui_callback into actions post-hoc.
+
+        Actions constructed by resolve_actions() don't have the brain yet.
+        Rather than threading those through the constructor, we hand them
+        off here by name. Actions that don't care about these attrs are
+        untouched.
+        """
+        for action in self._actions.values():
+            if hasattr(action, "_scheduler") and getattr(action, "_scheduler") is None:
+                action._scheduler = self._proactive  # type: ignore[attr-defined]
+            if hasattr(action, "_memory") and getattr(action, "_memory") is None:
+                action._memory = self._memory  # type: ignore[attr-defined]
+            if hasattr(action, "_ui_callback"):
+                current = getattr(action, "_ui_callback", None)
+                # Replace the no-op stub from action init with the real cb.
+                if current is None or getattr(current, "__name__", "") == "<lambda>":
+                    action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
+
+    def _proactive_paused(self) -> bool:
+        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps."""
+        if self._paused:
+            return True
+        if self._in_conversation:
+            return True
+        snapshot = self._context.snapshot()
+        if snapshot and self._personality.check_sensitive_app(snapshot):
+            return True
+        return False
 
     @property
     def paused(self) -> bool:

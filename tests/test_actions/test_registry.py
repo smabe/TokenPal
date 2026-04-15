@@ -49,7 +49,11 @@ def test_resolve_actions_respects_enabled_flags():
 
 
 def test_resolve_actions_all_disabled():
+    # Scope the resolver to the four built-in defaults; opt-in tools
+    # (phase 1-5) are gated separately via optin_allowlist.
+    defaults = {"timer", "system_info", "open_app", "do_math"}
     actions = resolve_actions(
-        enabled={"timer": False, "system_info": False, "open_app": False, "do_math": False}
+        enabled={name: False for name in defaults},
+        default_tools=defaults,
     )
     assert actions == []

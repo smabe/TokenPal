@@ -36,6 +36,24 @@ CREATE TABLE IF NOT EXISTS daily_summaries (
 );
 CREATE INDEX IF NOT EXISTS idx_obs_time ON observations(timestamp);
 CREATE INDEX IF NOT EXISTS idx_obs_session ON observations(session_id);
+CREATE TABLE IF NOT EXISTS hydration_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    amount_oz REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_hydration_time ON hydration_log(timestamp);
+CREATE TABLE IF NOT EXISTS habit_log (
+    name TEXT NOT NULL,
+    date TEXT NOT NULL,
+    PRIMARY KEY (name, date)
+);
+CREATE INDEX IF NOT EXISTS idx_habit_name ON habit_log(name);
+CREATE TABLE IF NOT EXISTS mood_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp REAL NOT NULL,
+    mood TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mood_time ON mood_log(timestamp);
 """
 
 
@@ -510,3 +528,91 @@ class MemoryStore:
             chain = " \u2192 ".join(top_seq)
             return [f"Your usual startup sequence: {chain} ({top_count} sessions)"]
         return []
+
+    # ------------------------------------------------------------------
+    # Phase 3: hydration / habit / mood logs (additive)
+    # ------------------------------------------------------------------
+
+    def log_hydration(self, amount_oz: float) -> None:
+        """Append a hydration entry. Amount in fluid ounces."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO hydration_log (timestamp, amount_oz) VALUES (?, ?)",
+                (time.time(), float(amount_oz)),
+            )
+            self._conn.commit()
+
+    def get_hydration_today(self) -> float:
+        """Return total hydration recorded so far today (local time), in oz."""
+        if not self._enabled or not self._conn:
+            return 0.0
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COALESCE(SUM(amount_oz), 0) FROM hydration_log "
+                "WHERE date(timestamp, 'unixepoch', 'localtime') = ?",
+                (today_str,),
+            ).fetchone()
+        return float(row[0]) if row else 0.0
+
+    def log_habit(self, name: str, date: str | None = None) -> None:
+        """Mark habit *name* done for *date* (YYYY-MM-DD, defaults to today)."""
+        if not self._enabled or not self._conn:
+            return
+        date_str = date or datetime.now().strftime("%Y-%m-%d")
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO habit_log (name, date) VALUES (?, ?)",
+                (name, date_str),
+            )
+            self._conn.commit()
+
+    def get_habit_streak(self, name: str) -> tuple[int, int]:
+        """Return (current_streak, longest_streak) for habit *name* in days."""
+        if not self._enabled or not self._conn:
+            return (0, 0)
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT date FROM habit_log WHERE name = ? ORDER BY date",
+                (name,),
+            ).fetchall()
+        if not rows:
+            return (0, 0)
+
+        dates = sorted({datetime.strptime(r[0], "%Y-%m-%d").date() for r in rows})
+        longest = 1
+        run = 1
+        for i in range(1, len(dates)):
+            if (dates[i] - dates[i - 1]).days == 1:
+                run += 1
+                longest = max(longest, run)
+            else:
+                run = 1
+
+        today = datetime.now().date()
+        last = dates[-1]
+        gap = (today - last).days
+        if gap > 1:
+            current = 0
+        else:
+            # Count back from `last` while consecutive.
+            current = 1
+            for i in range(len(dates) - 1, 0, -1):
+                if (dates[i] - dates[i - 1]).days == 1:
+                    current += 1
+                else:
+                    break
+        return (current, longest)
+
+    def log_mood(self, mood: str) -> None:
+        """Record a mood-check response."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO mood_log (timestamp, mood) VALUES (?, ?)",
+                (time.time(), mood),
+            )
+            self._conn.commit()
