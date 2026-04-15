@@ -18,17 +18,37 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 
 from tokenpal.actions.base import AbstractAction
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
+from tokenpal.llm.base import AbstractLLMBackend, ToolCall
 
 log = logging.getLogger(__name__)
+
+# Cap for each tool result *as fed back to the LLM*. Without this, a single
+# verbose tool (system_info, list_processes) blows the prompt-context window
+# well before the cumulative completion-token budget trips.
+_MESSAGE_RESULT_CAP = 2048
+# Cap for each tool result *kept in memory on AgentSession*. Wider so the
+# user can still read the full output in the trace, tighter than unbounded.
+_SESSION_RESULT_CAP = 4096
 
 
 ConfirmFn = Callable[[str, dict[str, Any]], Awaitable[bool]]
 SensitiveFn = Callable[[], bool]
 LogFn = Callable[[str], None]
+
+
+class StopReason(StrEnum):
+    COMPLETE = "complete"
+    STEP_CAP = "step_cap"
+    TOKEN_BUDGET = "token_budget"
+    SENSITIVE = "sensitive"
+    DENIED = "denied"
+    TIMEOUT = "timeout"
+    CRASHED = "crashed"
+    UNAVAILABLE = "unavailable"
 
 
 @dataclass
@@ -50,12 +70,12 @@ class AgentSession:
     steps: list[AgentStep] = field(default_factory=list)
     final_text: str = ""
     tokens_used: int = 0
-    stopped_reason: str = ""  # "complete" | "step_cap" | "token_budget" | "sensitive" | "denied" | "timeout"
+    stopped_reason: StopReason | str = ""
     started_at: float = field(default_factory=time.monotonic)
 
     @property
     def is_complete(self) -> bool:
-        return self.stopped_reason == "complete"
+        return self.stopped_reason == StopReason.COMPLETE
 
 
 class AgentRunner:
@@ -75,6 +95,7 @@ class AgentRunner:
         log_callback: LogFn,
         confirm_callback: ConfirmFn,
         is_sensitive: SensitiveFn,
+        tool_specs: list[dict[str, Any]] | None = None,
         max_steps: int = 8,
         token_budget: int = 12000,
         per_step_timeout_s: float = 45.0,
@@ -85,6 +106,11 @@ class AgentRunner:
         self._log = log_callback
         self._confirm = confirm_callback
         self._is_sensitive = is_sensitive
+        self._tool_specs = (
+            tool_specs
+            if tool_specs is not None
+            else [a.to_tool_spec() for a in actions.values()]
+        )
         self._max_steps = max_steps
         self._token_budget = token_budget
         self._per_step_timeout_s = per_step_timeout_s
@@ -92,8 +118,6 @@ class AgentRunner:
 
     async def run(self, goal: str) -> AgentSession:
         session = AgentSession(goal=goal)
-        tool_specs = [a.to_tool_spec() for a in self._actions.values()]
-
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": goal},
@@ -101,31 +125,31 @@ class AgentRunner:
 
         for step in range(self._max_steps):
             if self._is_sensitive():
-                session.stopped_reason = "sensitive"
+                session.stopped_reason = StopReason.SENSITIVE
                 log.info("Agent aborted mid-run: sensitive app detected")
                 return session
 
+            # Ollama sometimes returns tokens_used=0, so this is a soft cap —
+            # if usage data is bad, step_cap still bounds the run.
             if session.tokens_used >= self._token_budget:
-                session.stopped_reason = "token_budget"
+                session.stopped_reason = StopReason.TOKEN_BUDGET
                 log.info(
                     "Agent hit token budget (%d/%d)",
                     session.tokens_used,
                     self._token_budget,
                 )
-                # Force a final synthesis with no tools so we return something
-                # useful instead of a bare trace.
                 session.final_text = await self._force_synthesis(messages)
                 return session
 
             try:
                 response = await asyncio.wait_for(
                     self._llm.generate_with_tools(
-                        messages=messages, tools=tool_specs
+                        messages=messages, tools=self._tool_specs
                     ),
                     timeout=self._per_step_timeout_s,
                 )
-            except asyncio.TimeoutError:
-                session.stopped_reason = "timeout"
+            except TimeoutError:
+                session.stopped_reason = StopReason.TIMEOUT
                 log.warning("Agent step %d timed out", step)
                 return session
 
@@ -133,11 +157,10 @@ class AgentRunner:
 
             if not response.tool_calls:
                 session.final_text = response.text
-                session.stopped_reason = "complete"
+                session.stopped_reason = StopReason.COMPLETE
                 return session
 
-            assistant_msg = _build_assistant_message(response)
-            messages.append(assistant_msg)
+            messages.append(response.to_assistant_message())
 
             # Execute tool calls sequentially so confirm prompts don't stack.
             denied = False
@@ -148,17 +171,17 @@ class AgentRunner:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": normalized.id,
-                    "content": step_record.result,
+                    "content": _truncate(step_record.result, _MESSAGE_RESULT_CAP),
                 })
                 if step_record.denied:
                     denied = True
 
             if denied:
-                session.stopped_reason = "denied"
+                session.stopped_reason = StopReason.DENIED
                 session.final_text = await self._force_synthesis(messages)
                 return session
 
-        session.stopped_reason = "step_cap"
+        session.stopped_reason = StopReason.STEP_CAP
         log.info("Agent hit step cap (%d)", self._max_steps)
         session.final_text = await self._force_synthesis(messages)
         return session
@@ -167,17 +190,17 @@ class AgentRunner:
         action = self._actions.get(tc.name)
         if action is None:
             msg = f"Unknown tool '{tc.name}'."
-            self._log(f"← {msg}")
+            self._log(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, 0.0)
 
         if action.requires_confirm:
             allowed = await self._confirm(tc.name, tc.arguments)
             if not allowed:
                 msg = f"User denied {tc.name}."
-                self._log(f"← {msg}")
+                self._log(f"\u2190 {msg}")
                 return AgentStep(tc.name, tc.arguments, msg, 0.0, denied=True)
 
-        self._log(f"→ {tc.name}({_fmt_args(tc.arguments)})")
+        self._log(f"\u2192 {tc.name}({fmt_args(tc.arguments)})")
         start = time.monotonic()
         try:
             result = await asyncio.wait_for(
@@ -186,64 +209,43 @@ class AgentRunner:
             )
             duration_ms = (time.monotonic() - start) * 1000
             output = result.output if result.success else f"error: {result.output}"
-            self._log(f"← {_truncate(output, 240)}")
-            return AgentStep(tc.name, tc.arguments, output, duration_ms)
-        except asyncio.TimeoutError:
+            stored = _truncate(output, _SESSION_RESULT_CAP)
+            self._log(f"\u2190 {_truncate(stored, 240)}")
+            return AgentStep(tc.name, tc.arguments, stored, duration_ms)
+        except TimeoutError:
             duration_ms = (time.monotonic() - start) * 1000
             msg = f"{tc.name} timed out after {self._per_step_timeout_s:.0f}s"
-            self._log(f"← {msg}")
+            self._log(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, duration_ms)
-        except Exception as e:  # noqa: BLE001 — tool errors must not crash the run
+        except Exception as e:  # noqa: BLE001
+            log.exception("Agent tool '%s' raised", tc.name)
             duration_ms = (time.monotonic() - start) * 1000
             msg = f"{tc.name} raised: {e}"
-            self._log(f"← {msg}")
+            self._log(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, duration_ms)
 
     async def _force_synthesis(self, messages: list[dict[str, Any]]) -> str:
-        """Ask the LLM for a final text summary with tools disabled.
-
-        Called on step cap / token budget / denied to return *something* useful
-        instead of a bare trace. Failures here are swallowed — the partial
-        trace is still on the session.
-        """
+        """Best-effort final text with tools disabled so a capped run still
+        returns something useful instead of a bare trace."""
         try:
             response = await asyncio.wait_for(
                 self._llm.generate_with_tools(messages=messages, tools=[]),
                 timeout=self._per_step_timeout_s,
             )
             return response.text
-        except Exception as e:  # noqa: BLE001 — synthesis is best-effort
-            log.debug("Forced synthesis failed: %s", e)
+        except Exception:
+            log.exception("Forced synthesis failed")
             return ""
 
 
-def _build_assistant_message(response: LLMResponse) -> dict[str, Any]:
-    return {
-        "role": "assistant",
-        "content": response.text or "",
-        "tool_calls": [
-            {
-                "id": tc.id or f"call_{i}",
-                "type": "function",
-                "function": {
-                    "name": tc.name,
-                    "arguments": json.dumps(tc.arguments),
-                },
-            }
-            for i, tc in enumerate(response.tool_calls)
-        ],
-    }
-
-
 def _normalize_tool_call(tc: ToolCall, index: int) -> ToolCall:
-    """Ollama sometimes returns empty tool_call_id strings — the tool-result
-    message would be silently dropped without a stable id."""
     if tc.id:
         return tc
     return ToolCall(id=f"call_{index}", name=tc.name, arguments=tc.arguments)
 
 
-def _fmt_args(args: dict[str, Any], max_len: int = 80) -> str:
+def fmt_args(args: dict[str, Any], max_len: int = 80) -> str:
+    """Shared with ConfirmModal so user-visible arg rendering stays consistent."""
     try:
         s = json.dumps(args, ensure_ascii=False)
     except (TypeError, ValueError):

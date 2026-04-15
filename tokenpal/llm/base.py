@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import abc
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -26,6 +27,29 @@ class LLMResponse:
     model_name: str
     latency_ms: float
     tool_calls: list[ToolCall] = field(default_factory=list)
+
+    def to_assistant_message(self) -> dict[str, Any]:
+        """OpenAI-format assistant message for round-tripping back to the LLM.
+
+        Substitutes ``call_{i}`` for empty tool_call_ids — Ollama sometimes
+        returns empty strings which would cause the corresponding tool result
+        message to be silently dropped.
+        """
+        return {
+            "role": "assistant",
+            "content": self.text or "",
+            "tool_calls": [
+                {
+                    "id": tc.id or f"call_{i}",
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": json.dumps(tc.arguments),
+                    },
+                }
+                for i, tc in enumerate(self.tool_calls)
+            ],
+        }
 
 
 class AbstractLLMBackend(abc.ABC):

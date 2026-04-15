@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import random
 import re
@@ -16,7 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from tokenpal.actions.base import AbstractAction
-from tokenpal.brain.agent import AgentRunner, AgentSession
+from tokenpal.brain.agent import AgentRunner, AgentSession, StopReason
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
@@ -168,7 +167,6 @@ class Brain:
         self._conversation: ConversationSession | None = None
         self._conv_config = conversation or ConversationConfig()
 
-        # Agent mode state
         self._agent_config = agent_config or AgentConfig()
         self._agent_log_callback = agent_log_callback
         self._agent_confirm_callback = agent_confirm_callback
@@ -680,22 +678,7 @@ class Brain:
             if not response.tool_calls:
                 return response
 
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": response.text or "",
-                "tool_calls": [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments),
-                        },
-                    }
-                    for tc in response.tool_calls
-                ],
-            }
-            messages.append(assistant_msg)
+            messages.append(response.to_assistant_message())
 
             results = await asyncio.gather(
                 *(self._execute_tool_call(tc) for tc in response.tool_calls),
@@ -758,16 +741,17 @@ class Brain:
             self._ui_callback(
                 "/agent isn't wired up — the overlay can't show confirm modals yet."
             )
-            return AgentSession(goal=goal, stopped_reason="unavailable")
+            return AgentSession(goal=goal, stopped_reason=StopReason.UNAVAILABLE)
 
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
             self._ui_callback("Not now — sensitive window is open.")
-            return AgentSession(goal=goal, stopped_reason="sensitive")
+            return AgentSession(goal=goal, stopped_reason=StopReason.SENSITIVE)
 
         runner = AgentRunner(
             llm=self._llm,
             actions=self._actions,
+            tool_specs=self._tool_specs,
             log_callback=self._agent_log_callback,
             confirm_callback=self._agent_confirm_callback,
             is_sensitive=self._sensitive_check,
@@ -795,7 +779,7 @@ class Brain:
             session = await runner.run(goal)
         except Exception:
             log.exception("Agent run crashed")
-            session = AgentSession(goal=goal, stopped_reason="crashed")
+            session = AgentSession(goal=goal, stopped_reason=StopReason.CRASHED)
         finally:
             self._agent_running = False
             if swapped:
@@ -995,18 +979,23 @@ class Brain:
         log.info("Brain stopped")
 
 
+_STOP_REASON_LABELS: dict[StopReason, str] = {
+    StopReason.COMPLETE: "done",
+    StopReason.STEP_CAP: "hit step cap",
+    StopReason.TOKEN_BUDGET: "hit token budget",
+    StopReason.SENSITIVE: "stopped, sensitive window",
+    StopReason.DENIED: "stopped, user denied a tool",
+    StopReason.TIMEOUT: "stopped, step timed out",
+    StopReason.CRASHED: "stopped, crashed",
+    StopReason.UNAVAILABLE: "stopped, agent bridge unavailable",
+}
+
+
 def _format_agent_summary(session: AgentSession) -> str:
     duration_s = time.monotonic() - session.started_at
-    reason_map = {
-        "complete": "done",
-        "step_cap": "hit step cap",
-        "token_budget": "hit token budget",
-        "sensitive": "stopped — sensitive window",
-        "denied": "stopped — user denied a tool",
-        "timeout": "stopped — step timed out",
-        "crashed": "stopped — crashed",
-    }
-    reason = reason_map.get(session.stopped_reason, session.stopped_reason or "unknown")
+    reason = _STOP_REASON_LABELS.get(
+        session.stopped_reason, str(session.stopped_reason) or "unknown"
+    )
     return (
         f"{reason} in {duration_s:.1f}s "
         f"({len(session.steps)} step(s), {session.tokens_used} tokens)"

@@ -143,13 +143,12 @@ def main() -> None:
     # Set up the overlay (must happen on main thread)
     overlay.setup()
 
-    # Agent confirm modal bridge — brain coroutine awaits a future; the
-    # modal callback resolves it. Must be created on the brain's event loop
-    # (inside the async world), so we build a factory here and thread it in.
     def _agent_log(text: str) -> None:
         overlay.schedule_callback(lambda t=text: overlay.log_buddy_message(t))
 
     async def _agent_confirm(tool_name: str, args: dict[str, Any]) -> bool:
+        from tokenpal.brain.agent import fmt_args
+
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[bool] = loop.create_future()
 
@@ -157,14 +156,18 @@ def main() -> None:
             if not fut.done():
                 loop.call_soon_threadsafe(fut.set_result, result)
 
-        body = f"Tool wants to run:\n\n  {tool_name}({args})\n\nAllow this call?"
+        body = (
+            f"Tool wants to run:\n\n"
+            f"  {tool_name}({fmt_args(args, max_len=200)})\n\n"
+            f"Allow this call?"
+        )
         opened = overlay.open_confirm_modal(
             title="Agent confirmation",
             body=body,
             on_result=_resolve,
         )
         if not opened:
-            # Overlay can't show modals (console/headless) — safe default: deny.
+            # Console/headless overlays can't gate side effects, so deny.
             log.warning("Overlay has no modal support; auto-denying %s", tool_name)
             return False
         return await fut
