@@ -21,6 +21,7 @@ from tokenpal.config.schema import (
     PathsConfig,
     PluginsConfig,
     RemoteTrainConfig,
+    ResearchConfig,
     SensesConfig,
     ServerConfig,
     TokenPalConfig,
@@ -55,6 +56,7 @@ _SECTION_MAP: dict[str, type] = {
     "web_search": WebSearchConfig,
     "conversation": ConversationConfig,
     "agent": AgentConfig,
+    "research": ResearchConfig,
     "filesystem_pulse": FilesystemPulseConfig,
 }
 

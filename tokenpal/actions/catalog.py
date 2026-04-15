@@ -186,7 +186,27 @@ AGENT_SECTION = CatalogSection(
 )
 RESEARCH_SECTION = CatalogSection(
     title="Research",
-    description="Plan-search-read-synthesize research pipeline.",
+    description=(
+        "Plan-search-read-synthesize pipeline. /research gates on the "
+        "research_mode flag plus web_fetches consent."
+    ),
+    entries=(
+        CatalogEntry(
+            "research_mode",
+            "Enable /research <question> — plans queries, searches, cites sources.",
+            consent_category="research_mode",
+        ),
+        CatalogEntry(
+            "search_web",
+            "Search DuckDuckGo or Wikipedia for a single query.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "fetch_url",
+            "Fetch a URL and extract clean article text (no JS).",
+            consent_category="web_fetches",
+        ),
+    ),
 )
 
 

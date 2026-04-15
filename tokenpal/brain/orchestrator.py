@@ -20,7 +20,12 @@ from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
-from tokenpal.config.schema import AgentConfig, ConversationConfig
+from tokenpal.brain.research import (
+    ResearchRunner,
+    ResearchSession,
+    ResearchStopReason,
+)
+from tokenpal.config.schema import AgentConfig, ConversationConfig, ResearchConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 
@@ -121,10 +126,12 @@ class Brain:
         agent_confirm_callback: Callable[
             [str, dict[str, Any]], Awaitable[bool]
         ] | None = None,
+        research_config: ResearchConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._research_queue: asyncio.Queue[str] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._senses = senses
         self._llm = llm
@@ -171,6 +178,9 @@ class Brain:
         self._agent_log_callback = agent_log_callback
         self._agent_confirm_callback = agent_confirm_callback
         self._agent_running: bool = False
+
+        self._research_config = research_config or ResearchConfig()
+        self._research_running: bool = False
 
         # Proactive scheduler (phase 3). Shared across all focus actions.
         # Pauses during active conversation and sensitive-app detection.
@@ -242,6 +252,13 @@ class Brain:
                     try:
                         goal = self._agent_goal_queue.get_nowait()
                         await self._handle_agent_goal(goal)
+                    except asyncio.QueueEmpty:
+                        break
+
+                while not self._research_queue.empty():
+                    try:
+                        question = self._research_queue.get_nowait()
+                        await self._handle_research(question)
                     except asyncio.QueueEmpty:
                         break
 
@@ -334,10 +351,10 @@ class Brain:
                     action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
 
     def _proactive_paused(self) -> bool:
-        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps / agent runs."""
+        """Gate for ProactiveScheduler. Pause during conversation / sensitive apps / agent or research runs."""
         if self._paused:
             return True
-        if self._agent_running:
+        if self._agent_running or self._research_running:
             return True
         if self._in_conversation:
             return True
@@ -385,7 +402,7 @@ class Brain:
             return False
         if self._in_conversation:
             return False
-        if self._agent_running:
+        if self._agent_running or self._research_running:
             return False
 
         now = time.monotonic()
@@ -456,7 +473,7 @@ class Brain:
             return False
         if self._in_conversation:
             return False
-        if self._agent_running:
+        if self._agent_running or self._research_running:
             return False
         if not self._personality.has_rich_voice:
             return False
@@ -729,9 +746,24 @@ class Brain:
         except RuntimeError:
             log.warning("Brain event loop closed — agent goal dropped")
 
+    def submit_research_question(self, question: str) -> None:
+        """Thread-safe: enqueue a /research question from the main thread."""
+        if self._loop is None:
+            return
+        try:
+            self._loop.call_soon_threadsafe(
+                self._research_queue.put_nowait, question
+            )
+        except RuntimeError:
+            log.warning("Brain event loop closed — research question dropped")
+
     @property
     def agent_running(self) -> bool:
         return self._agent_running
+
+    @property
+    def research_running(self) -> bool:
+        return self._research_running
 
     async def _handle_agent_goal(self, goal: str) -> AgentSession:
         """Run one agent session from start to finish. Suppresses
@@ -799,6 +831,86 @@ class Brain:
     def _sensitive_check(self) -> bool:
         """Runner-facing predicate — re-check on every agent step."""
         return self._personality.check_sensitive_app(self._context.snapshot())
+
+    async def _handle_research(self, question: str) -> ResearchSession:
+        """Run one /research pipeline. Log callback routes to chat log via
+        _agent_log_callback (same sink — trace lines, not speech bubbles)."""
+        log_cb = self._agent_log_callback or (lambda _s: None)
+
+        snapshot = self._context.snapshot()
+        if self._personality.check_sensitive_app(snapshot):
+            self._ui_callback("Not now — sensitive window is open.")
+            return ResearchSession(
+                question=question, stopped_reason=ResearchStopReason.UNAVAILABLE
+            )
+
+        fetch_tool = self._actions.get("fetch_url")
+
+        async def _fetch(url: str) -> str | None:
+            if fetch_tool is None:
+                return None
+            try:
+                r = await fetch_tool.execute(url=url)
+            except Exception:
+                log.exception("fetch_url tool raised during research")
+                return None
+            return r.output if r.success else None
+
+        previous_model = self._llm.model_name
+        active_model = previous_model
+        target = (
+            self._research_config.planner_model.strip()
+            or self._research_config.synth_model.strip()
+        )
+        swapped = False
+        if target and target != previous_model:
+            try:
+                self._llm.set_model(target)
+                active_model = target
+                swapped = True
+                log.info("Research model swapped: %s -> %s", previous_model, target)
+            except NotImplementedError:
+                log.debug("Backend does not support model swap")
+
+        runner = ResearchRunner(
+            llm=self._llm,
+            fetch_url=_fetch,
+            log_callback=log_cb,
+            max_queries=self._research_config.max_queries,
+            max_fetches=self._research_config.max_fetches,
+            token_budget=self._research_config.token_budget,
+            per_search_timeout_s=self._research_config.per_search_timeout_s,
+            per_fetch_timeout_s=self._research_config.per_fetch_timeout_s,
+        )
+
+        self._research_running = True
+        if self._status_callback:
+            self._status_callback("researching...")
+        log_cb(f"> research: {question}")
+        try:
+            session = await runner.run(question)
+        except Exception:
+            log.exception("Research run crashed")
+            session = ResearchSession(
+                question=question, stopped_reason=ResearchStopReason.CRASHED
+            )
+        finally:
+            self._research_running = False
+            if swapped:
+                try:
+                    self._llm.set_model(previous_model)
+                except NotImplementedError:
+                    pass
+            self._push_status()
+
+        log.debug("Research used model %s (%d tokens)", active_model, session.tokens_used)
+
+        summary = _format_research_summary(session)
+        log_cb(f"= {summary}")
+        final = (session.answer or summary).strip()
+        self._ui_callback(final)
+        self._last_comment_time = time.monotonic()
+        return session
 
     async def _handle_user_input(self, user_message: str) -> None:
         """Respond to direct user input using multi-turn conversation context."""
@@ -989,6 +1101,29 @@ _STOP_REASON_LABELS: dict[StopReason, str] = {
     StopReason.CRASHED: "stopped, crashed",
     StopReason.UNAVAILABLE: "stopped, agent bridge unavailable",
 }
+
+
+_RESEARCH_REASON_LABELS: dict[ResearchStopReason, str] = {
+    ResearchStopReason.COMPLETE: "done",
+    ResearchStopReason.NO_QUERIES: "stopped, planner emitted no queries",
+    ResearchStopReason.NO_SOURCES: "stopped, no usable sources",
+    ResearchStopReason.TOKEN_BUDGET: "hit token budget",
+    ResearchStopReason.TIMEOUT: "stopped, timed out",
+    ResearchStopReason.CRASHED: "stopped, crashed",
+    ResearchStopReason.UNAVAILABLE: "stopped, unavailable",
+}
+
+
+def _format_research_summary(session: ResearchSession) -> str:
+    duration_s = time.monotonic() - session.started_at
+    reason = _RESEARCH_REASON_LABELS.get(
+        session.stopped_reason, str(session.stopped_reason) or "unknown"
+    )
+    return (
+        f"{reason} in {duration_s:.1f}s "
+        f"({len(session.queries)} quer(ies), {len(session.sources)} source(s), "
+        f"{session.tokens_used} tokens)"
+    )
 
 
 def _format_agent_summary(session: AgentSession) -> str:

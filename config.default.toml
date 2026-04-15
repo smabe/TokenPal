@@ -60,6 +60,20 @@ max_steps = 8
 per_step_timeout_s = 45.0
 token_budget = 12000
 
+[research]
+# /research plan-search-read-synthesize pipeline. Per-call model overrides
+# (all empty = reuse [llm] model_name). Plan recommends deepseek-r1:32b for
+# planner + synthesizer (reasoning helps decomposition + citation fidelity);
+# reader stays on qwen2.5:32b since it doesn't benefit from reasoning.
+# planner_model = "deepseek-r1:32b"
+# synth_model = "deepseek-r1:32b"
+# reader_model = "qwen2.5:32b"
+max_queries = 3
+max_fetches = 5
+token_budget = 6000
+per_search_timeout_s = 5.0
+per_fetch_timeout_s = 8.0
+
 [web_search]
 # /ask is gated by a first-use consent marker (~/.tokenpal/.ask_consent)
 # written when you first run the command — no config toggle needed.

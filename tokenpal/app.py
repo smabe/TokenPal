@@ -194,6 +194,7 @@ def main() -> None:
         agent_config=config.agent,
         agent_log_callback=_agent_log,
         agent_confirm_callback=_agent_confirm,
+        research_config=config.research,
     )
 
     # Load voice-specific buddy art into the overlay
@@ -514,6 +515,25 @@ def main() -> None:
         brain.submit_agent_goal(goal)
         return CommandResult(f"Agent started: {goal[:60]}")
 
+    def _cmd_research(args: str) -> CommandResult:
+        from tokenpal.config.consent import Category, has_consent
+
+        question = args.strip()
+        if not question:
+            return CommandResult("Usage: /research <question>")
+        if "research_mode" not in config.tools.enabled_tools:
+            return CommandResult(
+                "/research is off. Enable 'research_mode' in /tools and restart."
+            )
+        if not has_consent(Category.RESEARCH_MODE) or not has_consent(Category.WEB_FETCHES):
+            return CommandResult(
+                "/research needs research_mode + web_fetches consent. Run /consent."
+            )
+        if brain.research_running:
+            return CommandResult("/research: already running. Wait for it to finish.")
+        brain.submit_research_question(question)
+        return CommandResult(f"Research started: {question[:60]}")
+
     def _cmd_tools(args: str) -> CommandResult:
         from tokenpal.actions.catalog import SECTIONS, default_tool_names
 
@@ -735,6 +755,7 @@ def main() -> None:
     dispatcher.register("tools", _cmd_tools)
     dispatcher.register("consent", _cmd_consent)
     dispatcher.register("agent", _cmd_agent)
+    dispatcher.register("research", _cmd_research)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

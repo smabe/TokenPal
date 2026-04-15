@@ -175,6 +175,21 @@ class FinetuneConfig:
 
 
 @dataclass
+class ResearchConfig:
+    # Model overrides. Empty = reuse LLMConfig.model_name.
+    # Plan recommends deepseek-r1:32b for planner + synthesizer (reasoning
+    # helps decomposition + citation fidelity) and qwen2.5:32b for reader.
+    planner_model: str = ""
+    synth_model: str = ""
+    reader_model: str = ""
+    max_queries: int = 3
+    max_fetches: int = 5
+    token_budget: int = 6000
+    per_search_timeout_s: float = 5.0
+    per_fetch_timeout_s: float = 8.0
+
+
+@dataclass
 class AgentConfig:
     # Empty string = fall back to LLMConfig.model_name. Plan recommends
     # `qwen2.5:32b` for tool-call reliability on a 40GB-class GPU.
@@ -207,6 +222,7 @@ class TokenPalConfig:
     finetune: FinetuneConfig = field(default_factory=FinetuneConfig)
     conversation: ConversationConfig = field(default_factory=ConversationConfig)
     agent: AgentConfig = field(default_factory=AgentConfig)
+    research: ResearchConfig = field(default_factory=ResearchConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
