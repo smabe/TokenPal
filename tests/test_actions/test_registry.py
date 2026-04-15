@@ -49,7 +49,5 @@ def test_resolve_actions_respects_enabled_flags():
 
 
 def test_resolve_actions_all_disabled():
-    actions = resolve_actions(
-        enabled={"timer": False, "system_info": False, "open_app": False, "do_math": False}
-    )
+    actions = resolve_actions(enabled={name: False for name in _ACTION_REGISTRY})
     assert actions == []
