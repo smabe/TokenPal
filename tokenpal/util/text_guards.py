@@ -1,12 +1,8 @@
 """Shared text-quality guards for LLM output.
 
-Used by both voice training (to reject drifted generations at build time)
-and the runtime response filter (to suppress drifted commentary bubbles).
-
 A line is "clean English" when it's mostly ASCII printable and contains no
-known chain-of-thought / meta-commentary markers. gemma4 occasionally drifts
-into Thai, Chinese, or German with markdown-wrapped analysis fragments;
-this guard catches those before they reach the user.
+known chain-of-thought / meta-commentary markers. Used by both voice
+training and the runtime response filter.
 """
 
 from __future__ import annotations
@@ -44,14 +40,8 @@ def is_clean_english(
         return False
     if stripped.endswith(":**") or stripped.endswith("**:"):
         return False
-    total = len(stripped)
-    if total == 0:
-        return False
     nonascii = sum(1 for ch in stripped if ord(ch) > 127)
-    if nonascii / total > max_nonascii_ratio:
+    if nonascii / len(stripped) > max_nonascii_ratio:
         return False
     lower = stripped.lower()
-    for marker in _META_MARKERS:
-        if marker in lower:
-            return False
-    return True
+    return not any(marker in lower for marker in _META_MARKERS)

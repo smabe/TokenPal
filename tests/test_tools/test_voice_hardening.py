@@ -7,52 +7,52 @@ from unittest.mock import patch
 from tokenpal.tools import train_voice
 from tokenpal.tools.train_voice import (
     _frames_look_usable,
-    _is_clean_english,
     _parse_numbered_lines,
     _validate_persona,
     audit_profile,
 )
+from tokenpal.util.text_guards import is_clean_english
 from tokenpal.tools.voice_profile import VoiceProfile, save_profile
 
 
 # ---------------------------------------------------------------
-# _is_clean_english
+# is_clean_english
 # ---------------------------------------------------------------
 
 
 class TestCleanEnglish:
     def test_accepts_plain_english(self):
-        assert _is_clean_english("Hey man, whoa!")
-        assert _is_clean_english("Respond with excited slang.")
+        assert is_clean_english("Hey man, whoa!")
+        assert is_clean_english("Respond with excited slang.")
 
     def test_rejects_empty(self):
-        assert not _is_clean_english("")
-        assert not _is_clean_english("   ")
+        assert not is_clean_english("")
+        assert not is_clean_english("   ")
 
     def test_rejects_thai(self):
-        assert not _is_clean_english("ยังไงก็อยู่ในกลุ่ม")
+        assert not is_clean_english("ยังไงก็อยู่ในกลุ่ม")
 
     def test_rejects_chinese(self):
-        assert not _is_clean_english("銀行家，我只想平静地活下去。")
+        assert not is_clean_english("銀行家，我只想平静地活下去。")
 
     def test_rejects_german_meta(self):
-        assert not _is_clean_english(
+        assert not is_clean_english(
             "copiert/paste von Wikipedia/nachweislich kopiert.",
         )
 
     def test_rejects_markdown_headers(self):
-        assert not _is_clean_english("**Analyze the German/Formatting Parts:**")
-        assert not _is_clean_english("**expansion:**")
+        assert not is_clean_english("**Analyze the German/Formatting Parts:**")
+        assert not is_clean_english("**expansion:**")
 
     def test_rejects_chain_of_thought(self):
-        assert not _is_clean_english(
+        assert not is_clean_english(
             "I cannot provide a definitive answer without more context.",
         )
-        assert not _is_clean_english("If the goal is to respond neutrally...")
+        assert not is_clean_english("If the goal is to respond neutrally...")
 
     def test_allows_mild_accents(self):
         # "café" should pass - single non-ASCII char well under threshold
-        assert _is_clean_english("Grab a café before the meeting, man.")
+        assert is_clean_english("Grab a café before the meeting, man.")
 
 
 # ---------------------------------------------------------------
@@ -246,30 +246,6 @@ def test_regenerate_refreshes_all_llm_fields(tmp_path):
     assert result.default_mood == "HEROIC"
     assert result.structure_hints == ["Respond heroically."]
     assert audit_profile(result).ok
-
-
-def test_regenerate_persona_only_preserves_other_fields(tmp_path):
-    starting = _blank_profile()
-    save_profile(starting, tmp_path)
-    fake_persona = (
-        'VOICE: You yell.\nCATCHPHRASES: "whoa"\nNEVER: whisper\n'
-        "WORLDVIEW: heroism"
-    )
-    fake_frames = (["[red]X[/]"] * 10, ["[red]X[/]"] * 10, ["[red]X[/]"] * 10)
-
-    with patch.object(
-        train_voice, "_generate_persona", return_value=fake_persona,
-    ), patch.object(
-        train_voice, "_generate_ascii_art", return_value=fake_frames,
-    ):
-        result = train_voice.regenerate_voice_assets(
-            starting, tmp_path, persona_only=True,
-        )
-
-    # Unchanged fields
-    assert result.greetings == starting.greetings
-    assert result.offline_quips == starting.offline_quips
-    assert result.mood_prompts == starting.mood_prompts
 
 
 # ---------------------------------------------------------------

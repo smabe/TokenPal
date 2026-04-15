@@ -1253,7 +1253,7 @@ def _start_voice_regenerate(
 
     def _regen() -> None:
         try:
-            from tokenpal.tools.train_voice import regenerate_persona
+            from tokenpal.tools.train_voice import regenerate_voice_assets
 
             for slug in slugs:
                 try:
@@ -1265,7 +1265,7 @@ def _start_voice_regenerate(
                 def _on_progress(step: str) -> None:
                     _overlay_show(overlay, step, persistent=True)
 
-                regenerate_persona(
+                regenerate_voice_assets(
                     profile, voices_dir, progress_callback=_on_progress,
                 )
 

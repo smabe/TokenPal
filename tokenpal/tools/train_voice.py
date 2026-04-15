@@ -17,18 +17,20 @@ import sys
 import urllib.request
 import urllib.error
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
-from tokenpal.util.text_guards import is_clean_english as _is_clean_english
+from tokenpal.util.text_guards import is_clean_english
 from tokenpal.tools.voice_profile import (
     FANDOM_NAMES,
     VoiceProfile,
     franchise_from_source,
     list_profiles,
+    load_profile,
     make_profile,
     parse_catchphrases,
     save_profile,
@@ -98,29 +100,9 @@ def _sample_block(lines: list[str], n: int = 10) -> str:
 
 
 _ENGLISH_ONLY_SUFFIX = (
-    "Write only in English. Plain text only — no markdown formatting, no analysis, "
+    "Write only in English. Plain text only, no markdown formatting, no analysis, "
     "no meta-commentary, no translations, no section headers."
 )
-
-
-def _generate_with_retry(
-    fn: Callable[[float], str | None],
-    validate: Callable[[str], bool],
-    attempts: int = 3,
-    temps: tuple[float, ...] = (0.9, 0.7, 0.5),
-) -> str | None:
-    """Call ``fn(temp)`` until ``validate`` accepts, ramping temperature down.
-
-    Returns the first accepted text, or None if every attempt failed.
-    """
-    last: str | None = None
-    for i in range(min(attempts, len(temps))):
-        text = fn(temps[i])
-        if text and validate(text):
-            return text
-        if text:
-            last = text
-    return None if last is None else None
 
 
 # Franchise → character names for cross-franchise banning
@@ -190,7 +172,7 @@ def _extract_anchor_lines(
 
 def _validate_persona(text: str) -> bool:
     """Persona must be clean English and hit both required sections."""
-    if not _is_clean_english(text):
+    if not is_clean_english(text):
         return False
     upper = text.upper()
     return "VOICE:" in upper and "CATCHPHRASES:" in upper
@@ -221,10 +203,11 @@ def _generate_persona(
         "Write ONLY the card. No preamble. Keep each section concise.\n\n"
         f"{_ENGLISH_ONLY_SUFFIX}"
     )
-    return _generate_with_retry(
-        lambda t: _ollama_generate(prompt, max_tokens=500, temperature=t),
-        _validate_persona,
-    )
+    for temp in (0.9, 0.7, 0.5):
+        text = _ollama_generate(prompt, max_tokens=500, temperature=temp)
+        if text and _validate_persona(text):
+            return text
+    return None
 
 
 def _parse_numbered_lines(text: str) -> list[str]:
@@ -234,7 +217,7 @@ def _parse_numbered_lines(text: str) -> list[str]:
         cleaned = re.sub(r"^\d+[.)]\s*", "", line).strip().strip("\"'").strip()
         if not (cleaned and 8 <= len(cleaned) <= 60):
             continue
-        if not _is_clean_english(cleaned):
+        if not is_clean_english(cleaned):
             continue
         result.append(cleaned)
     return result
@@ -518,7 +501,7 @@ def _generate_mood_prompts_legacy(
         max_tokens=300,
         temperature=0.8,
     )
-    if not text or not _is_clean_english(text):
+    if not text or not is_clean_english(text):
         return {}
 
     moods: dict[str, str] = {}
@@ -572,7 +555,7 @@ def _generate_mood_prompts(
             max_tokens=400,
             temperature=temp,
         )
-        if not text or not _is_clean_english(text):
+        if not text or not is_clean_english(text):
             continue
         parsed = _parse_custom_moods(text)
         if parsed:
@@ -656,63 +639,52 @@ def regenerate_voice_assets(
     profile: VoiceProfile,
     voices_dir: Path | None = None,
     progress_callback: Callable[[str], None] | None = None,
-    *,
-    persona_only: bool = False,
 ) -> VoiceProfile:
-    """Re-run LLM-backed generators for an existing profile in place.
+    """Re-run every LLM-backed generator for a profile in place.
 
-    By default refreshes persona, anchor_lines, banned_names, ASCII art,
-    greetings, offline_quips, mood_prompts/roles/default_mood, and
-    structure_hints. Preserves lines, finetune metadata, source, created.
-
-    With ``persona_only=True`` behaves like the legacy regenerate_persona:
-    persona + anchor_lines + banned_names + ASCII only.
+    Refreshes persona, anchor_lines, banned_names, greetings, offline_quips,
+    mood_prompts/roles/default_mood, structure_hints, and ASCII art.
+    Preserves lines, finetune metadata, source, and created.
     """
     def _progress(msg: str) -> None:
         if progress_callback:
             progress_callback(msg)
 
     franchise = franchise_from_source(profile.source)
-    _progress(f"Generating persona for {profile.character}...")
-    persona = _generate_persona(
-        profile.character, profile.lines, franchise,
-    ) or ""
+    _progress(f"Regenerating {profile.character}...")
 
-    catchphrases = parse_catchphrases(persona)
-    anchor_lines = _extract_anchor_lines(profile.lines, catchphrases)
-    banned_names = _derive_banned_names(
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        f_p = pool.submit(
+            _generate_persona, profile.character, profile.lines, franchise,
+        )
+        f_g = pool.submit(_generate_greetings, profile.character, profile.lines)
+        f_q = pool.submit(_generate_offline_quips, profile.character, profile.lines)
+        f_m = pool.submit(_generate_mood_prompts, profile.character, profile.lines)
+        f_s = pool.submit(_generate_structure_hints, profile.character, profile.lines)
+
+    persona = f_p.result() or ""
+    profile.persona = persona
+    profile.anchor_lines = _extract_anchor_lines(
+        profile.lines, parse_catchphrases(persona),
+    )
+    profile.banned_names = _derive_banned_names(
         profile.source, profile.character,
     )
+    profile.greetings = f_g.result()
+    profile.offline_quips = f_q.result()
+    mood_prompts, mood_roles, default_mood = f_m.result()
+    profile.mood_prompts = mood_prompts
+    profile.mood_roles = mood_roles
+    profile.default_mood = default_mood
+    profile.structure_hints = f_s.result()
 
-    profile.persona = persona
-    profile.anchor_lines = anchor_lines
-    profile.banned_names = banned_names
-
-    if not persona_only:
-        _progress(f"Generating greetings / quips / hints for {profile.character}...")
-        from concurrent.futures import ThreadPoolExecutor
-
-        with ThreadPoolExecutor(max_workers=4) as pool:
-            f_g = pool.submit(_generate_greetings, profile.character, profile.lines)
-            f_q = pool.submit(_generate_offline_quips, profile.character, profile.lines)
-            f_m = pool.submit(_generate_mood_prompts, profile.character, profile.lines)
-            f_s = pool.submit(_generate_structure_hints, profile.character, profile.lines)
-
-        profile.greetings = f_g.result()
-        profile.offline_quips = f_q.result()
-        mood_prompts, mood_roles, default_mood = f_m.result()
-        profile.mood_prompts = mood_prompts
-        profile.mood_roles = mood_roles
-        profile.default_mood = default_mood
-        profile.structure_hints = f_s.result()
-
+    # ASCII art depends on persona, so it runs serially after the pool.
     _progress(f"Generating ASCII art for {profile.character}...")
-    ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
-        profile.character, persona,
-    )
-    profile.ascii_idle = ascii_idle
-    profile.ascii_idle_alt = ascii_idle_alt
-    profile.ascii_talking = ascii_talking
+    (
+        profile.ascii_idle,
+        profile.ascii_idle_alt,
+        profile.ascii_talking,
+    ) = _generate_ascii_art(profile.character, persona)
 
     profile.version = 2
 
@@ -723,28 +695,11 @@ def regenerate_voice_assets(
     if report.issues:
         _progress(
             f"Saved {profile.character} (v2) with {len(report.issues)} "
-            "health warnings - run --audit to inspect."
+            "health warnings. Run --audit to inspect."
         )
     else:
         _progress(f"Saved {profile.character} (v2)")
     return profile
-
-
-def regenerate_persona(
-    profile: VoiceProfile,
-    voices_dir: Path | None = None,
-    progress_callback: Callable[[str], None] | None = None,
-) -> VoiceProfile:
-    """Backward-compatible shim: full refresh of all LLM-backed assets.
-
-    Historically this only refreshed persona + ASCII; callers that want the
-    narrow behavior must pass ``persona_only=True`` to
-    :func:`regenerate_voice_assets` directly. Default is now full refresh so
-    profiles that shipped with broken greetings/moods actually heal.
-    """
-    return regenerate_voice_assets(
-        profile, voices_dir, progress_callback,
-    )
 
 
 @dataclass
@@ -775,7 +730,7 @@ def audit_profile(profile: VoiceProfile) -> AuditReport:
         if not value:
             issues.append(f"{field_name} is empty")
             continue
-        dirty = [v for v in value if not _is_clean_english(v)]
+        dirty = [v for v in value if not is_clean_english(v)]
         if dirty:
             issues.append(
                 f"{field_name} contains {len(dirty)} non-English / meta entries"
@@ -800,12 +755,10 @@ def audit_profile(profile: VoiceProfile) -> AuditReport:
     )
 
 
-def _cmd_audit(target: str) -> int:
-    """Run the health audit. target is a slug, '--all', or '' (== --all)."""
-    from tokenpal.tools.voice_profile import load_profile
-
+def _cmd_audit(target: str | None) -> int:
+    """Run the health audit. ``target`` is a slug or None to audit all."""
     voices_dir = _get_voices_dir()
-    if target in ("", "--all"):
+    if not target:
         slugs = [slug for slug, _, _ in list_profiles(voices_dir)]
     else:
         slugs = [slugify(target)]
@@ -1081,9 +1034,9 @@ def main() -> None:
         help="Max transcript pages to fetch from wiki (default: 500)",
     )
     parser.add_argument(
-        "--audit", nargs="?", const="--all", default=None,
+        "--audit", nargs="?", const="", default=None,
         help="Audit voice profiles for drift/empty-field damage. "
-             "Pass a slug or --all (default).",
+             "Pass a slug, or no argument to audit every profile.",
     )
 
     args = parser.parse_args()
