@@ -331,8 +331,8 @@ if ($ollamaRunning) {
             $Recommended = "llama3.3:70b"
             Write-Host "  Detected ~${vramGB}GB, recommending llama3.3:70b (70B, best quality)" -ForegroundColor Cyan
         } elseif ($vramGB -ge 32) {
-            $Recommended = "qwen2.5:32b"
-            Write-Host "  Detected ~${vramGB}GB, recommending qwen2.5:32b (32B). gemma4:26b also fits with headroom." -ForegroundColor Cyan
+            $Recommended = "gemma4:26b-a4b-it-q8_0"
+            Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b-a4b-it-q8_0 (26B Q8, ~28GB). qwen2.5:32b also fits." -ForegroundColor Cyan
         } elseif ($vramGB -ge 16) {
             $Recommended = "gemma4:26b"
             Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b (26B, best quality)" -ForegroundColor Cyan
