@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -126,6 +127,7 @@ class SpeechBubbleWidget(VerticalScroll):
         self._body: Static = Static(id="speech")
         self._full_text: str = ""
         self._bubble: SpeechBubble | None = None
+        self._source_bubble: SpeechBubble | None = None
         self._typing_index: int = 0
         self._typing_timer: Timer | None = None
         self._hide_timer: Timer | None = None
@@ -137,14 +139,42 @@ class SpeechBubbleWidget(VerticalScroll):
     def is_active(self) -> bool:
         return self._bubble is not None
 
-    def start_typing(self, bubble: SpeechBubble) -> None:
+    @property
+    def current_bubble(self) -> SpeechBubble | None:
+        return self._bubble
+
+    @property
+    def source_bubble(self) -> SpeechBubble | None:
+        return self._source_bubble
+
+    def start_typing(
+        self, bubble: SpeechBubble, source: SpeechBubble | None = None
+    ) -> None:
+        self._prime(bubble, source, typing_index=0)
+        self._typing_timer = self.set_interval(0.03, self._advance_typing)
+
+    def show_immediate(
+        self, bubble: SpeechBubble, source: SpeechBubble | None = None
+    ) -> None:
+        self._prime(bubble, source, typing_index=max(0, len(bubble.text) - 1))
+        self._start_auto_hide()
+
+    def swap_variant(self, bubble: SpeechBubble) -> None:
+        if self._bubble is None:
+            return
+        self._bubble = bubble
+        self._render_partial()
+
+    def _prime(
+        self, bubble: SpeechBubble, source: SpeechBubble | None, typing_index: int
+    ) -> None:
         self._cancel_timers()
         self._bubble = bubble
+        self._source_bubble = source or bubble
         self._full_text = bubble.text
-        self._typing_index = 0
+        self._typing_index = typing_index
         self.display = True
         self._render_partial()
-        self._typing_timer = self.set_interval(0.03, self._advance_typing)
 
     def _advance_typing(self) -> None:
         self._typing_index += 1
@@ -160,10 +190,8 @@ class SpeechBubbleWidget(VerticalScroll):
     def _render_partial(self) -> None:
         if not self._bubble:
             return
-        partial = SpeechBubble(
-            text=self._full_text[: self._typing_index + 1],
-            style=self._bubble.style,
-            max_width=self._bubble.max_width,
+        partial = dataclasses.replace(
+            self._bubble, text=self._full_text[: self._typing_index + 1]
         )
         self._body.update("\n".join(partial.render()))
         self.scroll_end(animate=False)
@@ -181,6 +209,7 @@ class SpeechBubbleWidget(VerticalScroll):
     def hide(self) -> None:
         self._cancel_timers()
         self._bubble = None
+        self._source_bubble = None
         self.display = False
 
     def _cancel_timers(self) -> None:
@@ -307,6 +336,8 @@ class TokenPalApp(App[None]):
         self._overlay = overlay
         self._chat_log_user_hidden: bool = False
         self._bubble_queue: list[SpeechBubble] = []
+        self._pending_bubble: SpeechBubble | None = None
+        self._last_region_size: tuple[int, int] | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -338,12 +369,55 @@ class TokenPalApp(App[None]):
         panel.styles.min_width = buddy.max_frame_width() + _BUDDY_PANEL_PADDING
 
     def on_resize(self, _event: Resize) -> None:
+        self._apply_chat_log_visibility()
+        self._evict_oversized_bubble()
+
+    def _apply_chat_log_visibility(self) -> None:
         if self._chat_log_user_hidden:
             return
         buddy = self.query_one(BuddyWidget)
         threshold = buddy.max_frame_width() + _BUDDY_PANEL_PADDING + _CHAT_LOG_MIN_SPACE
         chat_log = self.query_one("#chat-log", VerticalScroll)
         chat_log.display = self.size.width >= threshold
+
+    def _evict_oversized_bubble(self) -> None:
+        speech = self.query_one(SpeechBubbleWidget)
+        if not (speech.is_active or self._bubble_queue or self._pending_bubble):
+            return
+        region = self.query_one("#speech-region", Vertical)
+        region_size = (region.size.width, region.size.height)
+        if region_size == self._last_region_size:
+            return
+        self._last_region_size = region_size
+        self._rechoose_active_variant(speech)
+        self._prune_queue()
+        self._promote_pending(speech)
+
+    def _rechoose_active_variant(self, speech: SpeechBubbleWidget) -> None:
+        source = speech.source_bubble
+        current = speech.current_bubble
+        if not (speech.is_active and source and current):
+            return
+        variant = self._choose_bubble_variant(source)
+        if variant is None:
+            self.post_message(HideSpeech())
+        elif variant.borderless != current.borderless or variant.max_width != current.max_width:
+            speech.swap_variant(variant)
+
+    def _prune_queue(self) -> None:
+        self._bubble_queue = [
+            b for b in self._bubble_queue if self._choose_bubble_variant(b) is not None
+        ]
+
+    def _promote_pending(self, speech: SpeechBubbleWidget) -> None:
+        if not self._pending_bubble or speech.is_active:
+            return
+        variant = self._choose_bubble_variant(self._pending_bubble)
+        if variant is None:
+            return
+        source = self._pending_bubble
+        self._pending_bubble = None
+        self._begin_bubble(variant, source=source, skip_typing=True)
 
     # --- Keyboard shortcuts ---
 
@@ -398,25 +472,58 @@ class TokenPalApp(App[None]):
 
     def on_show_speech(self, message: ShowSpeech) -> None:
         self._log_buddy(message.bubble.text)
+        variant = self._choose_bubble_variant(message.bubble)
+        if variant is None:
+            self._pending_bubble = message.bubble
+            return
         speech = self.query_one(SpeechBubbleWidget)
         if speech.is_active:
             if len(self._bubble_queue) < _MAX_BUBBLE_QUEUE:
                 self._bubble_queue.append(message.bubble)
             return
-        self._begin_bubble(message.bubble)
+        self._pending_bubble = None
+        self._begin_bubble(variant, source=message.bubble)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()
-        if self._bubble_queue:
-            self._begin_bubble(self._bubble_queue.pop(0))
-            return
+        while self._bubble_queue:
+            source = self._bubble_queue.pop(0)
+            next_variant = self._choose_bubble_variant(source)
+            if next_variant is not None:
+                self._begin_bubble(next_variant, source=source)
+                return
         buddy = self.query_one(BuddyWidget)
         buddy.show_frame(buddy._get_frame("idle"))
 
-    def _begin_bubble(self, bubble: SpeechBubble) -> None:
+    def _begin_bubble(
+        self, bubble: SpeechBubble, source: SpeechBubble, skip_typing: bool = False
+    ) -> None:
         buddy = self.query_one(BuddyWidget)
         buddy.show_frame(buddy._get_frame("talking"))
-        self.query_one(SpeechBubbleWidget).start_typing(bubble)
+        speech = self.query_one(SpeechBubbleWidget)
+        if skip_typing:
+            speech.show_immediate(bubble, source=source)
+        else:
+            speech.start_typing(bubble, source=source)
+
+    def _choose_bubble_variant(self, bubble: SpeechBubble) -> SpeechBubble | None:
+        # None signals "no variant fits — park as pending until resize-up".
+        region = self.query_one("#speech-region", Vertical)
+        region_h = region.size.height
+        region_w = region.size.width
+        if region_h <= 0 or region_w <= 0:
+            return bubble
+        bordered = dataclasses.replace(
+            bubble, max_width=min(bubble.max_width, region_w), borderless=False
+        )
+        if len(bordered.render()) <= region_h:
+            return bordered
+        borderless = dataclasses.replace(
+            bubble, max_width=max(1, region_w), borderless=True
+        )
+        if len(borderless.render()) <= region_h:
+            return borderless
+        return None
 
     def on_show_buddy(self, message: ShowBuddy) -> None:
         self.query_one(BuddyWidget).show_frame(message.frame)

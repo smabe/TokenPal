@@ -144,9 +144,14 @@ class SpeechBubble:
     style: str = "speech"
     max_width: int = 40
     persistent: bool = False
+    borderless: bool = False
 
     def render(self) -> list[str]:
         """Render text inside an ASCII speech bubble."""
+        if self.borderless:
+            wrapped = textwrap.wrap(self.text, width=max(1, self.max_width))
+            return list(wrapped)
+
         wrapped = textwrap.wrap(self.text, width=self.max_width - 4)
         if not wrapped:
             return []
