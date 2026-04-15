@@ -52,6 +52,12 @@ LOCAL_SECTION = CatalogSection(
 UTILITIES_SECTION = CatalogSection(
     title="Utilities",
     description="Everyday lookups. Some hit the public internet.",
+    entries=(
+        CatalogEntry("convert", "Convert between units (miles/km, lb/kg, F/C, etc.)."),
+        CatalogEntry("timezone", "Current local time for a named city."),
+        CatalogEntry("sunrise_sunset", "Today's sunrise, solar noon, and sunset."),
+        CatalogEntry("moon_phase", "Moon phase and illumination for a date."),
+    ),
 )
 FOCUS_SECTION = CatalogSection(
     title="Focus",
