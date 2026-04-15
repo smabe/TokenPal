@@ -65,11 +65,11 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## UI
 - Default overlay: Textual (`tokenpal/ui/textual_overlay.py`). Console and tkinter overlays as fallbacks
-- Layout: horizontal split — buddy panel (left) with header/speech/buddy/input/status, scrollable chat log (right)
-- Chat log shows all buddy comments (observations + conversation) and user messages, with timestamps and voice/user labels separated by `──────` dividers
+- Layout: horizontal split — buddy panel (left) with header/speech/buddy/input/status, scrollable chat log (right). Buddy/input/status are wrapped in `#buddy-footer` (height: auto) so the bubble can never push them off-screen; speech + spacer share `#speech-region` (1fr) which absorbs leftover space
+- Chat log shows all buddy comments (observations + conversation) and user messages, with timestamps and voice/user labels separated by `──────` dividers. Auto-hides when terminal width drops below `buddy.max_frame_width() + _BUDDY_PANEL_PADDING + _CHAT_LOG_MIN_SPACE` (F2 always overrides). `#buddy-panel.min_width` is set dynamically to `max_frame_width() + 4` so frames never wrap, and `#buddy { text-wrap: nowrap; overflow-x: hidden }` crops rather than wraps if the panel is forced narrower
 - Status bar: `mood | server | model | voice | app | weather | music | spoke Xs ago` — mood is color-coded
 - Keyboard shortcuts: F1=/help, F2=toggle chat log, Ctrl+L=/clear, Ctrl+C=quit
-- Typing animation on speech bubbles via `set_interval(0.03)`
+- Speech bubbles: typing animation via `set_interval(0.03)`. SpeechBubbleWidget is a `VerticalScroll` wrapping an inner Static so long bubbles get a scrollbar. Three render tiers picked by `_choose_bubble_variant` and re-picked on resize: bordered (requires `region_w >= _MIN_BORDERED_REGION_WIDTH = 36` and fits in region_h, max_width clamped accounting for `_SPEECH_SCROLL_PADDING = 4`), borderless (plain wrapped text, no border/tail, full region width), or hide. Suppressed bubbles park in `_pending_bubble` and promote via `show_immediate` (no replay-from-zero typing) when the terminal grows. Incoming bubbles arriving mid-animation queue (cap `_MAX_BUBBLE_QUEUE = 3`) so observations don't cut off conversation replies. Chat log always logs every bubble on arrival, so suppression never silently drops content. Voice ASCII art markup is healed at load time in `ascii_renderer._fix_markup` — Rich-only color names (silver/gray/etc) get remapped to hex so Textual's stricter `Style.from_rich_style` doesn't crash with `MissingStyle`
 - Thread safety: brain→UI via typed `Message` subclasses + `post_message()`, never `call_from_thread`
 - Voice-specific ASCII art: LLM-generated Rich-markup frames (idle, idle_alt, talking) with 4s blink animation
 

@@ -7,7 +7,7 @@ Catalog Textual-enabled improvements now that the framework is in place. Each it
 
 ### Quick wins
 - [x] **Conversation history panel (#8)** — Shipped as right-side chat log
-- [ ] **Scrollable speech bubbles** — Wrap SpeechBubbleWidget in VerticalScroll for long responses
+- [x] **Scrollable speech bubbles** — SpeechBubbleWidget is now a VerticalScroll wrapping an inner Static. Also added three-tier responsive degradation (bordered → borderless → hide-and-park), an `_pending_bubble` slot that promotes via `show_immediate` on resize-up, dynamic `#buddy-panel` min-width tracking the widest frame, auto-hide chat log when terminal is too narrow (F2 still toggles), and a bubble queue (cap 3) so observations don't cut off conversation replies
 - [x] ~~**Focus management**~~ — Skipped: conflicts with chat log text selection
 - [x] **Keyboard shortcuts** — F1=/help, Ctrl+L=/clear
 - [x] **Color-coded status bar** — Mood-colored first segment via Rich markup
