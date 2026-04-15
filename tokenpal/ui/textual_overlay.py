@@ -32,6 +32,9 @@ _CHAT_LOG_MIN_SPACE = 30
 _MAX_BUBBLE_QUEUE = 3
 _SPEECH_SCROLL_PADDING = 4
 _MIN_BORDERED_REGION_WIDTH = 36
+_BUBBLE_HOLD_MIN_S = 2.5
+_BUBBLE_HOLD_PER_CHAR_S = 0.05
+_BUBBLE_PREEMPT_HOLD_S = 0.2
 
 
 # --- Messages (all thread-safe via post_message) ---
@@ -229,8 +232,22 @@ class SpeechBubbleWidget(VerticalScroll):
     def _start_auto_hide(self) -> None:
         if self._bubble and self._bubble.persistent:
             return
-        delay = max(10.0, len(self._full_text) * 0.15)
+        delay = max(_BUBBLE_HOLD_MIN_S, len(self._full_text) * _BUBBLE_HOLD_PER_CHAR_S)
         self._hide_timer = self.set_timer(delay, self._fire_auto_hide)
+
+    @property
+    def is_typing(self) -> bool:
+        return self._typing_timer is not None
+
+    def shorten_hold(self, delay: float = _BUBBLE_PREEMPT_HOLD_S) -> bool:
+        """Accelerate auto-hide once typing is done. No-op while still typing."""
+        if self._bubble and self._bubble.persistent:
+            return False
+        if self._typing_timer is not None or self._hide_timer is None:
+            return False
+        self._hide_timer.stop()
+        self._hide_timer = self.set_timer(delay, self._fire_auto_hide)
+        return True
 
     def _fire_auto_hide(self) -> None:
         self._hide_timer = None
@@ -521,6 +538,7 @@ class TokenPalApp(App[None]):
                 return
             if len(self._bubble_queue) < _MAX_BUBBLE_QUEUE:
                 self._bubble_queue.append(message.bubble)
+            speech.shorten_hold()
             return
         self._pending_bubble = None
         self._begin_bubble(variant, source=message.bubble)
