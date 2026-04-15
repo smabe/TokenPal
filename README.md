@@ -102,7 +102,9 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 |---|---|
 | **Senses** | App awareness (macOS/Windows), CPU/RAM/battery, idle detection, time of day, weather (Open-Meteo), music (Music.app/Spotify), productivity patterns, git activity, HN front-page ambient awareness, battery transitions, network state (wifi + VPN), process heat (top CPU hog), typing cadence (WPM bursts + post-burst silence), filesystem pulse (activity bursts in watched dirs) |
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
-| **Actions** | Timers, system info, open apps, safe math eval — via LLM tool calling + slash commands |
+| **Actions** | Timers, system info, open apps, safe math eval — plus opt-in local (git/grep/read_file), utility (currency, weather forecast, CoinGecko, etc.), and focus (pomodoro, water/stretch reminders) tools. All gated through a Textual picker with per-category consent. Optional per-tool rate limits + usage stats in `memory.db` |
+| **Agent mode** | `/agent <goal>` — multi-step tool-calling loop with confirm gate, step cap, token budget, in-run result cache. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
+| **Research mode** | `/research <question>` — plan → parallel search → read → synthesize with numbered citations. 24h answer cache. DuckDuckGo + Wikipedia free/keyless; Brave optional. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
 | **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
@@ -134,9 +136,18 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /gh prs                  open pull requests
 /gh issues               open issues
 /ask <question>          web search (DuckDuckGo + Wikipedia), buddy riffs on result
+/tools                   open the Textual tool-picker modal (grouped sections)
+/tools list              plain-text list with on/off marks
+/tools describe <name>   full metadata for a tool (flags, consent, rate limit)
+/consent                 open the consent-category picker (web/location/keyed/research)
+/agent <goal>            multi-step agent loop (chains tools toward a goal)
+/research <question>     plan-search-read-synthesize with numbered citations
 /mood                    current mood
 /status                  model, senses, actions
 ```
+
+For the full agent/research/tool picture — enabling tools, adding your own action,
+model recommendations, caches, rate limits — see [docs/agents-and-tools.md](docs/agents-and-tools.md).
 
 ## Voices
 
@@ -282,8 +293,16 @@ Everything is pluggable via decorators (`@register_sense`, `@register_backend`, 
 
 ```
 tokenpal/
-├── actions/         # LLM-callable tools (timer, system_info, open_app, do_math)
+├── actions/         # LLM-callable tools — defaults + local/utilities/focus/research
+│   ├── base.py          # AbstractAction + RateLimit
+│   ├── catalog.py       # sections + kind discriminator for /tools describe
+│   ├── invoker.py       # shared call-site (rate-limit + usage hook)
+│   ├── registry.py      # @register_action discovery
+│   └── {focus,network,research,utilities}/
 ├── brain/           # Orchestrator, context builder, personality, memory
+│   ├── agent.py         # /agent multi-step loop + in-run cache
+│   ├── research.py      # /research plan-search-read-synthesize pipeline
+│   ├── stop_reason.py   # AgentStopReason + ResearchStopReason
 ├── config/          # TOML schema, loader, weather config helpers
 ├── llm/             # HTTP backend with auto-fallback (local ↔ remote)
 ├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git, battery, network_state, process_heat, typing_cadence, filesystem_pulse
@@ -306,8 +325,10 @@ scripts/
 └── start-server.bat    # Start Ollama + server (Windows)
 
 docs/
+├── agents-and-tools.md          # /agent, /research, /tools, consent, rate limits, caches
 ├── server-setup.md              # Server setup guide
 ├── remote-training-guide.md     # LoRA fine-tuning guide
+├── voice-training.md            # Persona cards, anchor lines, ASCII art
 ├── dynamic-mood-transitions.md  # V2 mood system design (parked)
 ├── dev-setup-macos.md           # macOS dev environment
 ├── dev-setup-linux.md           # Linux dev environment
