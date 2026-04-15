@@ -16,6 +16,8 @@ dependencies = [
     "watchdog>=4.0",
     "pint>=0.23",
     "astral>=3.2",
+    "aiohttp>=3.9",
+    "feedparser>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +55,7 @@ dev = [
     "ruff>=0.4",
     "mypy>=1.10",
     "build>=1.0",
+    "aioresponses>=0.7",
 ]
 
 [project.scripts]

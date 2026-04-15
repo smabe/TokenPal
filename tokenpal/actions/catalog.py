@@ -57,6 +57,71 @@ UTILITIES_SECTION = CatalogSection(
         CatalogEntry("timezone", "Current local time for a named city."),
         CatalogEntry("sunrise_sunset", "Today's sunrise, solar noon, and sunset."),
         CatalogEntry("moon_phase", "Moon phase and illumination for a date."),
+        CatalogEntry(
+            "currency",
+            "Convert amounts between currencies (open.er-api.com).",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "weather_forecast_week",
+            "7-day forecast for the configured /zip location.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "pollen_count",
+            "Current pollen counts (alder, birch, grass, ragweed).",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "air_quality",
+            "Current AQI, PM2.5 and PM10 for your location.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "random_fact",
+            "Fetch a random trivia fact (uselessfacts.jsph.pl).",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "joke_of_the_day",
+            "Fetch a random dad joke (icanhazdadjoke.com).",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "word_of_the_day",
+            "Today's Wordnik word of the day via RSS.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "on_this_day",
+            "Historical events for today (Wikimedia).",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "random_recipe",
+            "Random recipe from TheMealDB, optionally by ingredient.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "trivia_question",
+            "Multiple-choice trivia question from OpenTDB.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "sports_score",
+            "Recent results for a team via TheSportsDB.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "crypto_price",
+            "Current USD crypto price via CoinGecko public API.",
+            consent_category="web_fetches",
+        ),
+        CatalogEntry(
+            "book_suggestion",
+            "Random book pick by genre via Google Books.",
+            consent_category="web_fetches",
+        ),
     ),
 )
 FOCUS_SECTION = CatalogSection(
