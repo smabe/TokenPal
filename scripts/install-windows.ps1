@@ -319,15 +319,30 @@ if ($ollamaRunning) {
                 $vramGB = [math]::Floor([int]$nvOut / 1024)
             }
         } catch {}
-        # Try AMD via WMI (often capped at 4GB — fall back to system RAM)
+        # Try AMD via registry qwMemorySize (Win32_VideoController.AdapterRAM
+        # is a UINT32, capped at 4GB — useless on modern cards). The registry
+        # key is the same source GPU-Z uses.
         if ($vramGB -eq 0 -and $amdGpu) {
-            $totalRAM = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
-            $vramGB = $totalRAM  # Vulkan can use system RAM, total is the budget
-            Write-Host "  AMD GPU: using system RAM (${totalRAM}GB) as memory budget for model recommendation" -ForegroundColor Cyan
+            $gpuClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+            $maxBytes = 0L
+            if (Test-Path $gpuClass) {
+                Get-ChildItem $gpuClass -ErrorAction SilentlyContinue | ForEach-Object {
+                    $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                    if ($props -and $props.ProviderName -match "AMD|Advanced Micro|ATI") {
+                        $qwm = $props."HardwareInformation.qwMemorySize"
+                        if ($qwm -and [int64]$qwm -gt $maxBytes) { $maxBytes = [int64]$qwm }
+                    }
+                }
+            }
+            if ($maxBytes -gt 0) {
+                $vramGB = [math]::Floor($maxBytes / 1GB)
+                Write-Host "  AMD GPU detected with ~${vramGB}GB VRAM" -ForegroundColor Cyan
+            }
         }
-        # NVIDIA fallback to system RAM
+        # Final fallback: system RAM (no GPU VRAM detected)
         if ($vramGB -eq 0) {
             $vramGB = [math]::Floor((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
+            Write-Host "  No discrete GPU VRAM detected — using system RAM (${vramGB}GB) for model recommendation" -ForegroundColor Yellow
         }
 
         # Tiers. For reasoning models (deepseek-r1, qwq), override via TOKENPAL_MODEL.
@@ -338,9 +353,9 @@ if ($ollamaRunning) {
         } elseif ($vramGB -ge 32) {
             $Recommended = "gemma4:26b-a4b-it-q8_0"
             Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b-a4b-it-q8_0 (26B Q8, ~28GB). qwen2.5:32b also fits." -ForegroundColor Cyan
-        } elseif ($vramGB -ge 16) {
+        } elseif ($vramGB -ge 20) {
             $Recommended = "gemma4:26b"
-            Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b (26B, best quality)" -ForegroundColor Cyan
+            Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b (26B, ~19GB, fits entirely in VRAM)" -ForegroundColor Cyan
         } elseif ($vramGB -ge 6) {
             $Recommended = "gemma4"
             Write-Host "  Detected ~${vramGB}GB, recommending gemma4 (9B, solid default)" -ForegroundColor Cyan

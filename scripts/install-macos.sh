@@ -329,9 +329,9 @@ if [[ "$MODE" == "server" || "$MODE" == "both" ]]; then
     elif (( total_gb >= 32 )); then
         RECOMMENDED="qwen2.5:32b"
         info "Detected ${total_gb}GB unified memory, recommending qwen2.5:32b (32B). gemma4:26b also fits."
-    elif (( total_gb >= 16 )); then
+    elif (( total_gb >= 24 )); then
         RECOMMENDED="gemma4:26b"
-        info "Detected ${total_gb}GB unified memory, recommending gemma4:26b (26B, best quality)"
+        info "Detected ${total_gb}GB unified memory, recommending gemma4:26b (26B, ~19GB + OS headroom)"
     elif (( total_gb >= 6 )); then
         RECOMMENDED="gemma4"
         info "Detected ${total_gb}GB unified memory, recommending gemma4 (9B, solid default)"
