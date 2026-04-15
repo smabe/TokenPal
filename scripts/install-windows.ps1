@@ -489,6 +489,47 @@ if (Test-Path $configPath) {
     Write-Host "  WARNING: config.default.toml not found — config setup skipped" -ForegroundColor Yellow
 }
 
+# Client mode: ask which remote inference server to connect to
+if ($InstallClient -and -not $InstallServer -and (Test-Path $configPath)) {
+    $serverTarget = $env:TOKENPAL_SERVER
+    if (-not $serverTarget -and [System.Environment]::UserInteractive -and $Host.UI.RawUI) {
+        Write-Host ""
+        Write-Host "  Client mode: which inference server should the buddy connect to?" -ForegroundColor Cyan
+        Write-Host "  Enter hostname (becomes http://host:8585/v1) or full URL," -ForegroundColor DarkGray
+        Write-Host "  or leave blank to configure later via /server switch." -ForegroundColor DarkGray
+        $serverTarget = Read-Host "  Server"
+    }
+    $serverTarget = ($serverTarget -replace '\s', '')
+    if ($serverTarget) {
+        if ($serverTarget -match '^https?://') {
+            $serverUrl = $serverTarget.TrimEnd('/')
+        } else {
+            $serverUrl = "http://${serverTarget}:8585/v1"
+        }
+        if (-not ($serverUrl -match '/v1$')) {
+            $serverUrl = "$serverUrl/v1"
+        }
+        $pyScript = @"
+import pathlib, sys, tomllib
+import tomli_w
+path, url = sys.argv[1], sys.argv[2]
+p = pathlib.Path(path)
+data = tomllib.loads(p.read_text())
+data.setdefault('llm', {})['api_url'] = url
+p.write_text(tomli_w.dumps(data))
+"@
+        try {
+            $pyScript | & "$VenvDir\Scripts\python.exe" - $configPath $serverUrl
+            Write-Host "  Client points at $serverUrl" -ForegroundColor Green
+        } catch {
+            Write-Host "  WARNING: Could not write api_url. Edit $configPath manually ([llm] api_url)." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  WARNING: No server set. The buddy will fail on launch." -ForegroundColor Yellow
+        Write-Host "  Fix by editing [llm] api_url in $configPath or running /server switch." -ForegroundColor Yellow
+    }
+}
+
 # ── Phase 9: Validation ────────────────────────────────────────────────────
 
 Write-Host ""

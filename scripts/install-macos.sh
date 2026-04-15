@@ -486,6 +486,48 @@ else
     warn "config.default.toml not found. Skipping config setup."
 fi
 
+# Client mode: ask which remote inference server to connect to
+if [[ "$MODE" == "client" && -f "$CONFIG_PATH" ]]; then
+    SERVER_TARGET="${TOKENPAL_SERVER:-}"
+    if [[ -z "$SERVER_TARGET" && -t 0 ]]; then
+        echo ""
+        info "Client mode: which inference server should the buddy connect to?"
+        info "  Enter hostname (becomes http://host:8585/v1) or full URL,"
+        info "  or leave blank to configure later via /server switch."
+        printf "  Server: "
+        read -r SERVER_TARGET < /dev/tty || SERVER_TARGET=""
+    fi
+
+    SERVER_TARGET="$(echo "$SERVER_TARGET" | tr -d '[:space:]')"
+    if [[ -n "$SERVER_TARGET" ]]; then
+        if [[ "$SERVER_TARGET" == http://* || "$SERVER_TARGET" == https://* ]]; then
+            SERVER_URL="${SERVER_TARGET%/}"
+        else
+            SERVER_URL="http://$SERVER_TARGET:8585/v1"
+        fi
+        if [[ "$SERVER_URL" != */v1 ]]; then
+            SERVER_URL="$SERVER_URL/v1"
+        fi
+        if "$VENV_DIR/bin/python" - "$CONFIG_PATH" "$SERVER_URL" <<'PY'
+import pathlib, sys, tomllib
+import tomli_w
+path, url = sys.argv[1], sys.argv[2]
+p = pathlib.Path(path)
+data = tomllib.loads(p.read_text())
+data.setdefault("llm", {})["api_url"] = url
+p.write_text(tomli_w.dumps(data))
+PY
+        then
+            ok "Client points at $SERVER_URL"
+        else
+            warn "Could not write api_url. Edit $CONFIG_PATH manually ([llm] api_url)."
+        fi
+    else
+        warn "No server set. The buddy will fail on launch."
+        warn "Fix by editing [llm] api_url in $CONFIG_PATH or running /server switch."
+    fi
+fi
+
 # ── Validate ────────────────────────────────────────────────────────────────
 
 echo ""
