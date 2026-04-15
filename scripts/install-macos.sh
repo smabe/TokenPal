@@ -508,17 +508,49 @@ if [[ "$MODE" == "client" && -f "$CONFIG_PATH" ]]; then
         if [[ "$SERVER_URL" != */v1 ]]; then
             SERVER_URL="$SERVER_URL/v1"
         fi
-        if "$VENV_DIR/bin/python" - "$CONFIG_PATH" "$SERVER_URL" <<'PY'
-import pathlib, sys, tomllib
+        MODEL_SUGGESTED=$("$VENV_DIR/bin/python" - "$CONFIG_PATH" "$SERVER_URL" <<'PY' 2>/dev/null
+import json, pathlib, sys, tomllib, urllib.request
 import tomli_w
 path, url = sys.argv[1], sys.argv[2]
 p = pathlib.Path(path)
 data = tomllib.loads(p.read_text())
 data.setdefault("llm", {})["api_url"] = url
+
+base = url.rstrip("/")
+if base.endswith("/v1"):
+    base = base[:-3]
+
+models = []
+for endpoint, key in (("/api/v1/models/list", None), ("/api/tags", "models")):
+    try:
+        with urllib.request.urlopen(f"{base}{endpoint}", timeout=5) as resp:
+            parsed = json.loads(resp.read().decode("utf-8"))
+        models = parsed if key is None else parsed.get(key, [])
+        if models:
+            break
+    except Exception:
+        continue
+
+if models:
+    models.sort(key=lambda m: m.get("size") or 0, reverse=True)
+    picked = models[0]
+    data["llm"]["model_name"] = picked["name"]
+    size_gb = (picked.get("size") or 0) / 1e9
+    print(f"{picked['name']}|{size_gb:.1f}")
+
 p.write_text(tomli_w.dumps(data))
 PY
-        then
+)
+        if [[ $? -eq 0 ]]; then
             ok "Client points at $SERVER_URL"
+            if [[ -n "$MODEL_SUGGESTED" ]]; then
+                M_NAME="${MODEL_SUGGESTED%|*}"
+                M_SIZE="${MODEL_SUGGESTED#*|}"
+                ok "Detected server model: $M_NAME (${M_SIZE} GB) saved to [llm] model_name"
+            else
+                warn "Could not list models on $SERVER_URL. Keeping default model_name."
+                warn "Run /model list after launch to see what the server has."
+            fi
         else
             warn "Could not write api_url. Edit $CONFIG_PATH manually ([llm] api_url)."
         fi

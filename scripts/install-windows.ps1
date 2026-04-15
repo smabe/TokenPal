@@ -510,17 +510,50 @@ if ($InstallClient -and -not $InstallServer -and (Test-Path $configPath)) {
             $serverUrl = "$serverUrl/v1"
         }
         $pyScript = @"
-import pathlib, sys, tomllib
+import json, pathlib, sys, tomllib, urllib.request
 import tomli_w
 path, url = sys.argv[1], sys.argv[2]
 p = pathlib.Path(path)
 data = tomllib.loads(p.read_text())
 data.setdefault('llm', {})['api_url'] = url
+
+base = url.rstrip('/')
+if base.endswith('/v1'):
+    base = base[:-3]
+
+models = []
+for endpoint, key in (('/api/v1/models/list', None), ('/api/tags', 'models')):
+    try:
+        with urllib.request.urlopen(f'{base}{endpoint}', timeout=5) as resp:
+            parsed = json.loads(resp.read().decode('utf-8'))
+        models = parsed if key is None else parsed.get(key, [])
+        if models:
+            break
+    except Exception:
+        continue
+
+if models:
+    models.sort(key=lambda m: m.get('size') or 0, reverse=True)
+    picked = models[0]
+    data['llm']['model_name'] = picked['name']
+    size_gb = (picked.get('size') or 0) / 1e9
+    print(f"{picked['name']}|{size_gb:.1f}")
+
 p.write_text(tomli_w.dumps(data))
 "@
         try {
-            $pyScript | & "$VenvDir\Scripts\python.exe" - $configPath $serverUrl
+            $modelSuggested = ($pyScript | & "$VenvDir\Scripts\python.exe" - $configPath $serverUrl 2>$null) | Out-String
+            $modelSuggested = $modelSuggested.Trim()
             Write-Host "  Client points at $serverUrl" -ForegroundColor Green
+            if ($modelSuggested) {
+                $parts = $modelSuggested.Split('|', 2)
+                $mName = $parts[0]
+                $mSize = if ($parts.Length -gt 1) { $parts[1] } else { '?' }
+                Write-Host "  Detected server model: $mName ($mSize GB) saved to [llm] model_name" -ForegroundColor Green
+            } else {
+                Write-Host "  WARNING: Could not list models on $serverUrl. Keeping default model_name." -ForegroundColor Yellow
+                Write-Host "  Run /model list after launch to see what the server has." -ForegroundColor Yellow
+            }
         } catch {
             Write-Host "  WARNING: Could not write api_url. Edit $configPath manually ([llm] api_url)." -ForegroundColor Yellow
         }
