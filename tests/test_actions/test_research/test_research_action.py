@@ -141,6 +141,10 @@ async def test_happy_path_returns_cited_answer(
     assert "<sources>" in result.output
     assert "[1]" in result.output
     assert "https://example.com/" in result.output
+    assert result.display_urls is not None
+    assert len(result.display_urls) >= 1
+    assert all(u.startswith("https://") for _, u in result.display_urls)
+    assert any(label.startswith("[1]") for label, _ in result.display_urls)
 
 
 @pytest.mark.asyncio

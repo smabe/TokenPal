@@ -94,7 +94,16 @@ class ResearchAction(AbstractAction):
                 output=f"research: incomplete ({reason})", success=False,
             )
 
-        return ActionResult(output=_format_result(session), success=True)
+        display_urls = [
+            (f"[{s.number}] {s.title}" if s.title else f"[{s.number}] {s.url}", s.url)
+            for s in session.sources
+            if s.url
+        ]
+        return ActionResult(
+            output=_format_result(session),
+            success=True,
+            display_urls=display_urls or None,
+        )
 
 
 def _format_result(session: ResearchSession) -> str:

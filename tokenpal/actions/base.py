@@ -26,6 +26,9 @@ class ActionResult:
     output: str
     success: bool = True
     display_url: str | None = None
+    # Multiple clickable links to surface in the chat log, each a
+    # (label, url) pair. Used by multi-source tools like `research`.
+    display_urls: list[tuple[str, str]] | None = None
 
 
 class AbstractAction(abc.ABC):

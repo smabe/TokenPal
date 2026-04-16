@@ -832,6 +832,9 @@ class Brain:
                 )
             if result.display_url and self._log_callback:
                 self._log_callback("Source:", url=result.display_url)
+            if result.display_urls and self._log_callback:
+                for label, url in result.display_urls:
+                    self._log_callback(label, url=url)
             return result.output
         except Exception as e:
             log.warning("Action '%s' failed: %s", tc.name, e)
