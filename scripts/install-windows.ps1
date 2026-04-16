@@ -27,7 +27,7 @@ $Model     = if ($env:TOKENPAL_MODEL) { $env:TOKENPAL_MODEL } else { "gemma4" }
 
 # lemonade-sdk llamacpp-rocm release pin. Bump as a maintenance PR when we
 # bless a newer nightly. Override with TOKENPAL_LEMONADE_TAG for testing.
-$LemonadeTag = if ($env:TOKENPAL_LEMONADE_TAG) { $env:TOKENPAL_LEMONADE_TAG } else { "b1240" }
+$LemonadeTag = if ($env:TOKENPAL_LEMONADE_TAG) { $env:TOKENPAL_LEMONADE_TAG } else { "b1241" }
 $LlamacppDir = "$env:LOCALAPPDATA\TokenPal\llamacpp-rocm"
 $ModelsDir   = "$env:LOCALAPPDATA\TokenPal\models"
 
@@ -307,7 +307,7 @@ if (-not $InstallServer -and $InstallClient) {
         New-Item -ItemType Directory -Path $ModelsDir -Force | Out-Null
     }
 
-    $zipName = "llama-$LemonadeTag-bin-windows-rocm-gfx120X-x64.zip"
+    $zipName = "llama-$LemonadeTag-windows-rocm-gfx120X-x64.zip"
     $zipUrl  = "https://github.com/lemonade-sdk/llamacpp-rocm/releases/download/$LemonadeTag/$zipName"
     $zipPath = "$env:TEMP\$zipName"
 
