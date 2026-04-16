@@ -350,6 +350,11 @@ class ResearchRunner:
     async def _synthesize(
         self, question: str, sources: list[Source]
     ) -> tuple[SynthResult | None, str, int]:
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "research synth input: excerpt chars per source = %s",
+                {s.number: len(s.excerpt) for s in sources},
+            )
         sources_block = "\n\n".join(
             f"[{s.number}] {s.url}\n{s.excerpt}" for s in sources
         )
@@ -584,10 +589,17 @@ def _validate_picks(
             )
             kept.append(repaired)
         else:
-            log.debug(
-                "research: pick dropped (name=%r cited=[%d])",
-                pick.name, pick.citation,
-            )
+            if log.isEnabledFor(logging.DEBUG):
+                tokens = re.findall(r"\w+", pick.name.lower())
+                diag = {
+                    num: [t for t in tokens if t in excerpts_lower[num]]
+                    for num in numbers
+                }
+                log.debug(
+                    "research: pick dropped (name=%r cited=[%d]) "
+                    "token hits per source: %s",
+                    pick.name, pick.citation, diag,
+                )
             dropped.append(pick)
     return kept, dropped
 
