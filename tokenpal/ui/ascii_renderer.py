@@ -54,6 +54,11 @@ BUDDY_SURPRISED = [
 # LLM-generated art sometimes uses [#namedcolor] which Textual rejects.
 _NAMED_COLOR_RE = re.compile(r"\[#(?![0-9a-fA-F]{6}\])([a-zA-Z]\w*)\]")
 
+# LLMs occasionally leak HTML-style tags (<u>, </u>) into ASCII frames; Textual
+# uses [bracket] markup so angle-bracket tags render as raw characters. Letter-
+# start only so legit ASCII like "<- arrow ->" survives.
+_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^<>]*>")
+
 # Rich accepts these CSS color names but Textual's Style.from_rich_style
 # rejects them with MissingStyle. Remap to hex so both renderers work.
 RICH_ONLY_COLOR_HEX: dict[str, str] = {
@@ -78,14 +83,14 @@ RICH_ONLY_COLOR_HEX: dict[str, str] = {
     "fuchsia": "#ff00ff",
 }
 
-_TAG_RE = re.compile(r"\[([^\[\]/][^\[\]]*)\]")
+_TAG_RE = re.compile(r"\[(/?)([a-zA-Z][^\[\]]*)\]")
 
 
 def _remap_rich_only_names(line: str) -> str:
     def repl(match: re.Match[str]) -> str:
-        inner = match.group(1)
+        slash, inner = match.group(1), match.group(2)
         tokens = [RICH_ONLY_COLOR_HEX.get(tok.lower(), tok) for tok in inner.split()]
-        return "[" + " ".join(tokens) + "]"
+        return "[" + slash + " ".join(tokens) + "]"
 
     return _TAG_RE.sub(repl, line)
 
@@ -93,7 +98,8 @@ def _remap_rich_only_names(line: str) -> str:
 def _fix_markup(lines: list[str]) -> list[str]:
     """Fix LLM-generated Rich markup for Textual compatibility."""
     out = [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in lines]
-    return [_remap_rich_only_names(line) for line in out]
+    out = [_remap_rich_only_names(line) for line in out]
+    return [_HTML_TAG_RE.sub("", line) for line in out]
 
 
 FRAMES: dict[str, list[str]] = {

@@ -163,6 +163,12 @@ class HttpBackend(AbstractLLMBackend):
         else:
             body["reasoning_effort"] = "high" if effective else "none"
 
+    def _apply_cache_hints(self, body: dict[str, Any]) -> None:
+        """llama-server host-memory prompt cache: reuses KV across calls with
+        overlapping prefixes. Ollama ignores cache_prompt."""
+        if self._inference_engine == "llamacpp":
+            body["cache_prompt"] = True
+
     async def generate(
         self,
         prompt: str,
@@ -182,6 +188,7 @@ class HttpBackend(AbstractLLMBackend):
             "temperature": self._temperature,
         }
         self._apply_thinking_controls(body, enable_thinking)
+        self._apply_cache_hints(body)
         if response_format is not None:
             body["response_format"] = response_format
 
@@ -228,6 +235,7 @@ class HttpBackend(AbstractLLMBackend):
         if tools:
             body["tools"] = tools
         self._apply_thinking_controls(body, enable_thinking)
+        self._apply_cache_hints(body)
         if response_format is not None:
             body["response_format"] = response_format
 

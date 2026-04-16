@@ -189,6 +189,36 @@ async def test_runner_planner_search_synthesize(monkeypatch: pytest.MonkeyPatch)
 
 
 @pytest.mark.asyncio
+async def test_runner_warns_when_synth_truncated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    truncated = LLMResponse(
+        text='{"kind": "factual", "answer": "partial',
+        tokens_used=1800,
+        model_name="t",
+        latency_ms=0,
+        finish_reason="length",
+    )
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=50),  # planner
+        truncated,                              # truncated synth
+    ])
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        return [_hit(f"https://ex/{q}", "t", "summary", "duckduckgo")]
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, max_fetches=1,
+    )
+    await runner.run("what is X")
+    assert any("synth hit max_tokens" in line for line in logs)
+
+
+@pytest.mark.asyncio
 async def test_runner_no_queries_stops_cleanly() -> None:
     llm = _ScriptedLLM([_ok("", tokens=0)])
     logs, log_cb = _logs()

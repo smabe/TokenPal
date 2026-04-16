@@ -15,8 +15,6 @@ _DEFAULT_READING_TTL = 120.0
 _SENSE_WEIGHTS: dict[str, float] = {
     "app_awareness": 0.3,
     "idle": 1.0,
-    "clipboard": 0.8,
-    "screen_capture": 0.6,
     "hardware": 0.3,
     "time_awareness": 0.15,
     "productivity": 0.1,

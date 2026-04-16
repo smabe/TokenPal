@@ -6,10 +6,6 @@ time_awareness = true
 music = true
 productivity = true
 weather = false              # opt-in: needs zip code (run /zip or first-run wizard)
-screen_capture = false       # not yet implemented
-clipboard = false            # not yet implemented
-ocr = false                  # not yet implemented
-vision = false               # not yet implemented
 voice = false                # not yet implemented
 world_awareness = false      # HN front-page ambient context (opt-in, network call)
 battery = false              # plug/unplug transitions, low-battery warnings (no-op on desktops)
@@ -88,8 +84,8 @@ per_search_timeout_s = 5.0
 per_fetch_timeout_s = 8.0
 
 [web_search]
-# /ask is gated by a first-use consent marker (~/.tokenpal/.ask_consent)
-# written when you first run the command — no config toggle needed.
+# /ask is gated by the web_fetches consent category (~/.tokenpal/.consent.json).
+# Grant via /consent on first run.
 backend = "duckduckgo"  # "duckduckgo" | "wikipedia" | "brave"
 brave_api_key = ""  # or set TOKENPAL_BRAVE_KEY env var
 

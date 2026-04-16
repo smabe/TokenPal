@@ -325,23 +325,15 @@ def main() -> None:
         return CommandResult("")
 
     def _cmd_ask(args: str) -> CommandResult:
+        from tokenpal.config.consent import Category, has_consent
+
         query = args.strip()
         if not query:
             return CommandResult("Usage: /ask <question>")
-
-        marker = data_dir / ".ask_consent"
-        if not marker.exists():
-            try:
-                marker.parent.mkdir(parents=True, exist_ok=True)
-                marker.touch()
-            except OSError:
-                pass
-            warning = (
-                "/ask sends your query to DuckDuckGo. "
-                "No cookies, no IP beyond TCP. Query text leaves the machine. "
-                "Run /ask again to confirm and proceed."
+        if not has_consent(Category.WEB_FETCHES):
+            return CommandResult(
+                "/ask needs web_fetches consent. Run /consent."
             )
-            return CommandResult(warning)
 
         def _run_ask() -> None:
             from rich.markup import escape as _esc

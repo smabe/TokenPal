@@ -10,15 +10,11 @@ InferenceEngine = Literal["ollama", "llamacpp"]
 
 @dataclass
 class SensesConfig:
-    screen_capture: bool = True
     app_awareness: bool = True
-    clipboard: bool = True
     music: bool = False
     hardware: bool = True
     idle: bool = True
     time_awareness: bool = True
-    ocr: bool = False
-    vision: bool = False
     voice: bool = False
     productivity: bool = False
     weather: bool = False

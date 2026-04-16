@@ -393,6 +393,15 @@ class ResearchRunner:
             "research synth: %d chars, finish=%s, tokens=%d",
             len(raw_text), response.finish_reason, response.tokens_used,
         )
+        if response.finish_reason == "length":
+            self._log(
+                f"  warning: synth hit max_tokens ({budget}), JSON may be truncated"
+            )
+            log.warning(
+                "research synth truncated at max_tokens=%d (tokens_used=%d); "
+                "parse may fall back to prose path",
+                budget, response.tokens_used,
+            )
         result = _parse_synth_json(raw_text)
         return result, raw_text, response.tokens_used
 

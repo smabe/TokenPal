@@ -77,6 +77,26 @@ def test_llamacpp_dispatch_respects_backend_default_when_disable_reasoning_false
     assert body["chat_template_kwargs"] == {"enable_thinking": "true"}
 
 
+def test_llamacpp_cache_hints_set_cache_prompt():
+    backend = HttpBackend({
+        "api_url": "http://localhost:11434/v1",
+        "inference_engine": "llamacpp",
+    })
+    body: dict = {}
+    backend._apply_cache_hints(body)
+    assert body["cache_prompt"] is True
+
+
+def test_ollama_cache_hints_noop():
+    backend = HttpBackend({
+        "api_url": "http://localhost:11434/v1",
+        "inference_engine": "ollama",
+    })
+    body: dict = {}
+    backend._apply_cache_hints(body)
+    assert "cache_prompt" not in body
+
+
 def test_ollama_dispatch_sends_reasoning_effort():
     backend = HttpBackend({
         "api_url": "http://localhost:11434/v1",
