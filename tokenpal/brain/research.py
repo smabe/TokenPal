@@ -515,20 +515,41 @@ def _has_verdict_fields(item: dict[str, Any]) -> bool:
     )
 
 
+def _pick_name_in_excerpt(name: str, excerpt_lower: str) -> bool:
+    """Exact substring first, fallback to all-tokens-present (order-independent).
+
+    The fallback catches legitimate rephrasings that substring misses:
+    synth says "Fitbit Versa 4" and the source says "Versa 4 by Fitbit",
+    or "Apple Watch Series 9" vs "the Watch Series 9 from Apple". Still
+    strict enough to reject pure hallucinations, since every word in the
+    name must appear somewhere in the excerpt.
+    """
+    lowered = name.lower()
+    if lowered in excerpt_lower:
+        return True
+    tokens = re.findall(r"\w+", lowered)
+    if not tokens:
+        return False
+    return all(tok in excerpt_lower for tok in tokens)
+
+
 def _validate_picks(
     picks: list[Pick], sources: list[Source]
 ) -> tuple[list[Pick], list[Pick]]:
-    """A pick is valid iff its lowercased ``name`` appears as a substring in
-    the cited source's lowercased excerpt. Drops picks that cite out-of-range
-    sources or whose name doesn't appear at all; these are the claims the
-    old range-only strip couldn't catch."""
+    """Drop picks whose name can't be grounded in the cited source's excerpt
+    (either as a substring or via all-tokens-present match). Out-of-range
+    citations are also dropped."""
     excerpts_lower = {s.number: s.excerpt.lower() for s in sources}
     kept: list[Pick] = []
     dropped: list[Pick] = []
     for pick in picks:
         haystack = excerpts_lower.get(pick.citation)
-        if haystack is None or pick.name.lower() not in haystack:
+        if haystack is None or not _pick_name_in_excerpt(pick.name, haystack):
             dropped.append(pick)
+            log.debug(
+                "research: pick dropped (name=%r cited=[%d])",
+                pick.name, pick.citation,
+            )
         else:
             kept.append(pick)
     return kept, dropped

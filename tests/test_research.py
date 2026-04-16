@@ -416,6 +416,23 @@ def test_validate_picks_case_insensitive() -> None:
     assert kept == picks
 
 
+def test_validate_picks_token_fallback_reordered() -> None:
+    """Source says 'Versa 4 from Fitbit' but synth names it 'Fitbit Versa 4'.
+    Substring fails, token-overlap rescues it."""
+    sources = [_src(1, "The Versa 4 from Fitbit ships with GPS and heart rate.")]
+    picks = [Pick(name="Fitbit Versa 4", reason="gps", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == picks and dropped == []
+
+
+def test_validate_picks_token_fallback_rejects_partial() -> None:
+    """Missing any token of the name means the pick is still dropped."""
+    sources = [_src(1, "The Fitbit Versa ships with a great display.")]
+    picks = [Pick(name="Fitbit Versa 4", reason="display", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == [] and dropped == picks
+
+
 # ---------------------------------------------------------------------------
 # Render
 # ---------------------------------------------------------------------------
