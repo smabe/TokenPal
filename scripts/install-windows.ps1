@@ -730,6 +730,8 @@ data = tomllib.loads(p.read_text())
 data.setdefault('llm', {})['inference_engine'] = 'llamacpp'
 if gguf:
     data['llm']['model_path'] = gguf
+    import pathlib as _pl
+    data['llm']['model_name'] = _pl.Path(gguf).stem
 p.write_text(tomli_w.dumps(data))
 "@
     $ggufArg = if ($script:LlamacppGgufPath) { $script:LlamacppGgufPath } else { "" }
