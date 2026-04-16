@@ -51,7 +51,7 @@ Auto-selected when the installer detects an AMD dGPU with ≥6 GB VRAM. Download
 | VRAM   | Model                           | On-card  | Notes |
 |--------|---------------------------------|----------|-------|
 | ≥24 GB | gemma-4 26B MoE Q4_K_M          | ~17 GB   | Best quality MoE quant |
-| ≥12 GB | gemma-4 26B MoE IQ3_S           | ~13.5 GB | Default on 9070 XT, ~102 tok/s |
+| ≥12 GB | Qwen3 14B Q4_K_M                | ~9 GB    | Default on 9070 XT, strong reasoning + tool calling |
 | ≥6 GB  | gemma-4 E4B dense Q4_K_M        | ~5 GB    | Fast dense, ~106 tok/s |
 | <6 GB  | gemma-4 E2B dense Q4_K_M        | ~2.5 GB  | Tiny fallback |
 

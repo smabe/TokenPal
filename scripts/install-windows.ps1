@@ -348,9 +348,9 @@ if (-not $InstallServer -and $InstallClient) {
             $ggufFile = "gemma-4-26B-A4B-it-Q4_K_M.gguf"
             Write-Host "  ${amdVramGB} GB VRAM: pulling 26B MoE Q4_K_M (~17 GB on-card)" -ForegroundColor Cyan
         } elseif ($amdVramGB -ge 12) {
-            $ggufRepo = "unsloth/gemma-4-26B-A4B-it-GGUF"
-            $ggufFile = "gemma-4-26B-A4B-it-UD-IQ3_S.gguf"
-            Write-Host "  ${amdVramGB} GB VRAM: pulling 26B MoE IQ3_S (~13.5 GB on-card, proven on 9070 XT)" -ForegroundColor Cyan
+            $ggufRepo = "unsloth/Qwen3-14B-GGUF"
+            $ggufFile = "Qwen3-14B-Q4_K_M.gguf"
+            Write-Host "  ${amdVramGB} GB VRAM: pulling Qwen3 14B Q4_K_M (~9 GB on-card, strong reasoning + tool calling)" -ForegroundColor Cyan
         } elseif ($amdVramGB -ge 6) {
             $ggufRepo = "unsloth/gemma-4-E4B-it-GGUF"
             $ggufFile = "gemma-4-E4B-it-Q4_K_M.gguf"
