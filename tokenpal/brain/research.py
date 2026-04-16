@@ -233,6 +233,15 @@ class ResearchRunner:
                     len(dropped), len(result.picks), names,
                 )
             if len(kept) < 2:
+                self._log(
+                    f"  synth: {len(result.picks)} picks generated, "
+                    f"{len(kept)} verified, downgrading"
+                )
+                log.info(
+                    "research synth produced %d picks, %d verified "
+                    "(raw len=%d)",
+                    len(result.picks), len(kept), len(raw_text),
+                )
                 return "Sources don't name enough verifiable picks."
             return _render_synth_result(replace(result, picks=kept))
 
@@ -350,13 +359,21 @@ class ResearchRunner:
             question=question,
             marker_range=marker_range,
         )
+        # Thinking can burn ~900 tokens before the JSON starts; llama-server
+        # counts reasoning tokens against max_tokens, so give the synth a
+        # bigger budget to avoid truncating the picks list.
+        budget = 1800 if self._synth_thinking else 700
         response = await self._llm.generate(
             prompt,
-            max_tokens=600,
+            max_tokens=budget,
             enable_thinking=self._synth_thinking,
             response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
         )
         raw_text = response.text.strip()
+        log.debug(
+            "research synth: %d chars, finish=%s, tokens=%d",
+            len(raw_text), response.finish_reason, response.tokens_used,
+        )
         result = _parse_synth_json(raw_text)
         return result, raw_text, response.tokens_used
 
