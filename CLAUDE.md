@@ -19,8 +19,9 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `tokenpal --check` — quick verify: inference engine, model, senses, actions
 - `tokenpal --validate` — full preflight: Python version, platform deps, git, inference engine, model, config, senses, macOS permissions
 - `tokenpal --verbose` — show debug logs in terminal
-- `tokenpal --skip-welcome` — bypass first-run wizard
-- `pytest` — run tests (asyncio_mode=auto)
+- `tokenpal --skip-welcome` -- bypass first-run wizard
+- `scripts/download-model.ps1` -- interactive GGUF picker for llamacpp path (Windows). Downloads, updates config + bat.
+- `pytest` -- run tests (asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 
@@ -84,12 +85,12 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `/ask <question>` — web search via DuckDuckGo Instant Answer + Wikipedia REST fallback (free, keyless; Brave API stub). Opt-in via `[web_search] enabled = true`. First-use consent marker at `~/.tokenpal/.ask_consent`. Results filtered through `contains_sensitive_term`, wrapped in `<search_result>` delimiters, fed to brain via `submit_user_input()` — conversation-session follow-up auto-opens. Never auto-invoked. Search backend abstraction in `tokenpal/senses/web_search/client.py` (BackendName Literal, `_clear_conversation()` zeros history refs on session timeout)
 
 ## LLM Notes
-- Default model: `gemma4` via Ollama. Supports tool calling.
-- `disable_reasoning: true` sends `reasoning_effort: "none"` — without this, gemma4 burns ~900 tokens thinking
-- Qwen3 models use `<think>` tags → empty responses via OpenAI-compat API. Don't use.
+- Default model: `Qwen3-14B-Q4_K_M` on llamacpp path (12-16 GB VRAM tier), `gemma4` on Ollama path. Both support tool calling.
+- `disable_reasoning: true` sends `reasoning_effort: "none"`. Without this, gemma4 burns ~900 tokens thinking. Qwen3 uses `<think>` tags which llama-server handles via `--reasoning off` flag (routes all tokens to content, not reasoning_content).
 - Response filter: strips asterisks, emojis, leaked tags, prefixes, orphan punctuation. Cross-franchise name filter suppresses responses mentioning characters from wrong show
-- Tool calling: Ollama's OpenAI-compat API with `tools` parameter. `tool_choice` not supported.
-- `max_tokens` auto-derived on connect: `min(context_length // 4, 1024)` via `/api/show` probe. User pins in `[llm.per_server_max_tokens]` override. Conversation replies that hit the cap auto-continue up to `_MAX_CONTINUATIONS=2` times (re-call with partial text as assistant turn, concat), then trim to last sentence + `…`. Observation path is single-shot — no continuation.
+- Tool calling: OpenAI-compat `/v1/chat/completions` with `tools` parameter. Works on both Ollama and llama-server. `tool_choice` not supported on Ollama.
+- `max_tokens` auto-derived on connect: `min(context_length // 4, 1024)` via `/api/show` probe (Ollama only). User pins in `[llm.per_server_max_tokens]` override. Conversation replies that hit the cap auto-continue up to `_MAX_CONTINUATIONS=2` times (re-call with partial text as assistant turn, concat), then trim to last sentence + `...`. Observation path is single-shot.
+- Model auto-adopt: `HttpBackend._try_connect()` probes `/v1/models` and adopts the server's first model when the client has no per-server override. Disabled on the local Ollama fallback path to avoid grabbing random trained models.
 
 ## Voice Training
 - `/voice train`, `/voice regenerate` — structured persona cards with catchphrase priming and cross-franchise guardrails
@@ -99,15 +100,17 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 ## Fine-Tuning
 - Remote LoRA fine-tuning via SSH. Recommended: `google/gemma-2-2b-it` on RTX 4070 (~15 min Windows, ~7 min Linux)
 - Two platform paths: native Windows (PowerShell) and Linux/WSL (tmux). ROCm works for RDNA 3; RDNA 4 blocked until ROCm 7.3+
-- Pipeline: build wheel → push bundle → install → push base model → prep data → train → merge → pull → register Ollama
+- Pipeline: build wheel -> push bundle -> install -> push base model -> prep data -> train -> merge -> pull -> register (Ollama path: `ollama create`; llamacpp path: GGUF conversion deferred to M4)
 - See `docs/remote-training-guide.md` for setup, config, troubleshooting, and developer gotchas
 
 ## Server
 - `tokenpal/server/` package: FastAPI inference proxy + training orchestration
-- Byte-forwarding `/v1/*` proxy to local Ollama (streaming-ready)
-- Auto-fallback: server unreachable → tries `localhost:11434/v1`
-- `OLLAMA_KEEP_ALIVE=1m` in `start-server.bat` — frees VRAM when idle
-- See `docs/server-setup.md` for setup guide
+- Byte-forwarding `/v1/*` proxy to local inference engine (Ollama or llama-server, both bind 11434). Streaming-ready.
+- `create_app()` accepts `inference_url` + `inference_engine` params. `ollama_url` kept as deprecated alias for one release.
+- Auto-fallback: server unreachable -> tries `localhost:11434/v1` (does not auto-adopt models from fallback)
+- Launch scripts: `start-server.bat` (Ollama path) or `start-llamaserver.bat` (llamacpp path, includes `-ngl 99 -c 8192 -np 1 --no-mmap --jinja --reasoning off`, auto-kills llama-server on exit)
+- `scripts/download-model.ps1` -- interactive GGUF picker for the llamacpp path. Downloads from HF, updates config.toml + start-llamaserver.bat.
+- See `docs/server-setup.md` for Ollama setup, `docs/amd-dgpu-setup.md` for llamacpp setup
 
 ## Privacy
 - No clipboard monitoring (explicitly rejected)
