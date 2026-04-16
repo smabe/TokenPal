@@ -336,20 +336,64 @@ if (-not $InstallServer -and $InstallClient) {
     }
     Write-Host "  llama-server: $($serverExe.FullName)" -ForegroundColor Green
 
-    # GGUFs on this path are not auto-downloaded. Pinning a HF repo+file
-    # pair from a Mac risks a 404 at install time on Windows, and the user
-    # may want a different quant. Point them at docs/amd-dgpu-setup.md.
+    # GGUF auto-download. Tiers match docs/amd-dgpu-setup.md (verified on
+    # apollyon 9070 XT 2026-04-15). All from unsloth HF repos.
     $existingGguf = Get-ChildItem -Path $ModelsDir -Filter "*.gguf" -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($existingGguf) {
         Write-Host "  GGUF already present: $($existingGguf.Name)" -ForegroundColor Green
         $script:LlamacppGgufPath = $existingGguf.FullName
     } else {
-        Write-Host ""
-        Write-Host "  No GGUF found in $ModelsDir." -ForegroundColor Yellow
-        Write-Host "  Download a gfx1201-compatible GGUF into that folder before launching." -ForegroundColor Yellow
-        Write-Host "  Known-good on a 16 GB RX 9070 XT: gemma-4-E4B-it-Q4_K_M.gguf (4.62 GiB)" -ForegroundColor Cyan
-        Write-Host "  See docs/amd-dgpu-setup.md for the current recommended repo + file." -ForegroundColor Cyan
-        $script:LlamacppGgufPath = ""
+        # Pick model by VRAM tier
+        if ($amdVramGB -ge 24) {
+            $ggufRepo = "unsloth/gemma-4-26B-A4B-it-GGUF"
+            $ggufFile = "gemma-4-26B-A4B-it-Q4_K_M.gguf"
+            Write-Host "  ${amdVramGB} GB VRAM: pulling 26B MoE Q4_K_M (~17 GB on-card)" -ForegroundColor Cyan
+        } elseif ($amdVramGB -ge 12) {
+            $ggufRepo = "unsloth/gemma-4-26B-A4B-it-GGUF"
+            $ggufFile = "gemma-4-26B-A4B-it-UD-IQ3_S.gguf"
+            Write-Host "  ${amdVramGB} GB VRAM: pulling 26B MoE IQ3_S (~13.5 GB on-card, proven on 9070 XT)" -ForegroundColor Cyan
+        } elseif ($amdVramGB -ge 6) {
+            $ggufRepo = "unsloth/gemma-4-E4B-it-GGUF"
+            $ggufFile = "gemma-4-E4B-it-Q4_K_M.gguf"
+            Write-Host "  ${amdVramGB} GB VRAM: pulling E4B dense Q4_K_M (~5 GB on-card)" -ForegroundColor Cyan
+        } else {
+            $ggufRepo = "unsloth/gemma-4-E2B-it-GGUF"
+            $ggufFile = "gemma-4-E2B-it-Q4_K_M.gguf"
+            Write-Host "  ${amdVramGB} GB VRAM: pulling E2B dense Q4_K_M (~2.5 GB on-card)" -ForegroundColor Cyan
+        }
+
+        $ggufUrl = "https://huggingface.co/$ggufRepo/resolve/main/$ggufFile"
+        $ggufDest = "$ModelsDir\$ggufFile"
+
+        # Let user confirm or override
+        if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
+            $ggufChoice = Read-Host "  Pull $ggufFile? [Y/n/other filename]"
+            $ggufChoice = $ggufChoice.Trim()
+            if ($ggufChoice -eq "n" -or $ggufChoice -eq "N") {
+                $ggufFile = ""
+            } elseif ($ggufChoice -and $ggufChoice -ne "y" -and $ggufChoice -ne "Y") {
+                $ggufFile = $ggufChoice
+                $ggufUrl = "https://huggingface.co/$ggufRepo/resolve/main/$ggufFile"
+                $ggufDest = "$ModelsDir\$ggufFile"
+            }
+        }
+
+        if ($ggufFile) {
+            Write-Host "  Downloading $ggufFile (this may take several minutes)..."
+            try {
+                Invoke-WebRequest -Uri $ggufUrl -OutFile $ggufDest -UseBasicParsing
+                Write-Host "  GGUF downloaded: $ggufDest" -ForegroundColor Green
+                $script:LlamacppGgufPath = $ggufDest
+            } catch {
+                Write-Host "  ERROR: Download failed from $ggufUrl" -ForegroundColor Red
+                Write-Host "  Download manually and place in $ModelsDir" -ForegroundColor Yellow
+                Write-Host "  See docs/amd-dgpu-setup.md for alternatives." -ForegroundColor Yellow
+                $script:LlamacppGgufPath = ""
+            }
+        } else {
+            Write-Host "  Skipping GGUF download. Drop a .gguf into $ModelsDir before launching." -ForegroundColor Yellow
+            $script:LlamacppGgufPath = ""
+        }
     }
 
     # Firewall rule for port 11434 (llama-server binds the same port Ollama
@@ -560,18 +604,23 @@ if ($InstallServer) {
     if ($useLlamacpp) {
         $batPath = "$RepoDir\start-llamaserver.bat"
         $llamaExe = $script:LlamacppServerExe
-        $ggufPath = if ($script:LlamacppGgufPath) { $script:LlamacppGgufPath } else { "$ModelsDir\<your-model>.gguf" }
+        $ggufPath = if ($script:LlamacppGgufPath) { $script:LlamacppGgufPath } else { "$ModelsDir\PUT_YOUR_MODEL_HERE.gguf" }
         @"
 @echo off
 cd /d $RepoDir
 
 rem llama-server binds 11434 so TokenPal's proxy is byte-transparent.
-rem -ngl 99 offloads every layer to the GPU; drop the value if VRAM is tight.
+rem Flags (all verified on 9070 XT, see docs/amd-dgpu-setup.md):
+rem   -ngl 99       offload all layers to GPU
+rem   -c 8192       8k context (default 72k eats VRAM on MoE models)
+rem   --no-mmap     force full VRAM load, predictable memory accounting
+rem   --jinja       use model's built-in chat template
+rem   --reasoning off  route all tokens to content, not reasoning_content
 netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
 if errorlevel 1 (
     echo Starting llama-server...
-    start "" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99
-    timeout /t 5 /nobreak >nul
+    start "" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99 -c 8192 --no-mmap --jinja --reasoning off
+    timeout /t 8 /nobreak >nul
 ) else (
     echo llama-server is already running.
 )
