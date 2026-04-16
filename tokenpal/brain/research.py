@@ -150,8 +150,11 @@ class ResearchRunner:
     # ---- Stage 1: planner -------------------------------------------------
 
     async def _plan(self, question: str, session: ResearchSession) -> list[PlannedQuery]:
+        from datetime import datetime
         prompt = _PLANNER_PROMPT.format(
-            question=question, max_queries=self._max_queries
+            question=question,
+            max_queries=self._max_queries,
+            current_year=datetime.now().year,
         )
         response = await self._llm.generate(prompt, max_tokens=400)
         session.tokens_used += response.tokens_used
@@ -308,12 +311,17 @@ def _strip_dangling_markers(text: str, max_n: int) -> str:
 
 _PLANNER_PROMPT = """You decompose a research question into 1-{max_queries} web search queries.
 
+The current year is {current_year}.
+
 Rules:
 - Output ONLY a JSON array. No prose, no markdown fences.
 - Each item is an object with "query" (search string) and "intent" (what you hope to learn).
 - For a single-hop factual lookup, emit ONE query. Do NOT inflate into sub-questions.
 - For a multi-hop question (comparisons, causes, timelines), emit 2-4 queries
   targeting distinct sub-topics.
+- For time-sensitive questions (best products, recommendations, recent news,
+  current state of anything), append "{current_year}" to your queries so search
+  results favor recent sources over outdated ones.
 - Never exceed {max_queries} queries.
 
 Examples
@@ -327,11 +335,11 @@ Question: Why did Concorde stop flying?
   {{"query": "Concorde Air France crash 2000 aftermath", "intent": "safety concerns leading up"}}
 ]
 
-Question: Compare Rust and Go for backend services in 2025
+Question: Compare Rust and Go for backend services
 [
-  {{"query": "Rust vs Go backend performance benchmarks 2025", "intent": "runtime tradeoffs"}},
-  {{"query": "Rust vs Go ecosystem maturity 2025", "intent": "libraries and tooling"}},
-  {{"query": "Rust vs Go hiring market 2025", "intent": "practical adoption"}}
+  {{"query": "Rust vs Go backend performance benchmarks {current_year}", "intent": "runtime tradeoffs"}},
+  {{"query": "Rust vs Go ecosystem maturity {current_year}", "intent": "libraries and tooling"}},
+  {{"query": "Rust vs Go hiring market {current_year}", "intent": "practical adoption"}}
 ]
 
 Question: {question}
