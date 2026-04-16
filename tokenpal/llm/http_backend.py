@@ -56,7 +56,12 @@ class HttpBackend(AbstractLLMBackend):
         self._using_fallback: bool = False
 
     async def _try_connect(self, url: str) -> bool:
-        """Try connecting to an API endpoint. Returns True on success."""
+        """Try connecting to an API endpoint. Returns True on success.
+
+        Auto-adopts the server's first advertised model when the client has
+        no per-server override, so model swaps on the server propagate to
+        all clients without manual config edits.
+        """
         assert self._client is not None
         try:
             resp = await self._client.get(f"{url}/models")
@@ -65,16 +70,31 @@ class HttpBackend(AbstractLLMBackend):
             self._reachable = True
 
             models = resp.json().get("data", [])
-            model_ids = {m.get("id", "") for m in models}
+            model_ids = [m.get("id", "") for m in models if m.get("id")]
+
             if self._model_name in model_ids:
                 self._model_available = True
                 log.info("Model '%s' is available", self._model_name)
+            elif model_ids:
+                from tokenpal.config.toml_writer import canon_server_url
+
+                key = canon_server_url(url)
+                per_model: dict[str, str] = self._config.get("per_server_models") or {}
+                if key not in per_model:
+                    old = self._model_name
+                    self._model_name = model_ids[0]
+                    self._model_available = True
+                    log.info(
+                        "Server advertises '%s' (was '%s') -- auto-adopted",
+                        self._model_name, old,
+                    )
+                else:
+                    log.warning(
+                        "Model '%s' not found on server. Available: %s",
+                        self._model_name, ", ".join(model_ids),
+                    )
             else:
-                log.warning(
-                    "Model '%s' not found. Run: ollama pull %s",
-                    self._model_name,
-                    self._model_name,
-                )
+                log.warning("No models found on server at %s", url)
             return True
         except httpx.HTTPError:
             return False
