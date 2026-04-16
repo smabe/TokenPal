@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
 from tokenpal.senses.world_awareness.hn_client import fetch_top_story
@@ -42,7 +42,7 @@ class WorldAwarenessSense(AbstractSense):
         if story is None:
             return None
 
-        if contains_sensitive_term(story.title):
+        if contains_sensitive_content_term(story.title):
             log.debug("HN story dropped (sensitive term): %s", story.title[:_TITLE_MAX_CHARS])
             return None
 

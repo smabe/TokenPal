@@ -346,7 +346,7 @@ def main() -> None:
         def _run_ask() -> None:
             from rich.markup import escape as _esc
 
-            from tokenpal.brain.personality import contains_sensitive_term
+            from tokenpal.brain.personality import contains_sensitive_content_term
             from tokenpal.senses.web_search.client import LOG_TRUNCATE_CHARS, search
 
             try:
@@ -373,8 +373,8 @@ def main() -> None:
                 return
 
             if (
-                contains_sensitive_term(result.text)
-                or contains_sensitive_term(result.title)
+                contains_sensitive_content_term(result.text)
+                or contains_sensitive_content_term(result.title)
             ):
                 log.debug(
                     "/ask result filtered (sensitive term) for query: %s",

@@ -13,7 +13,7 @@ from typing import Any, ClassVar, get_args
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
-from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.senses.web_search.client import BackendName, search
 
@@ -62,7 +62,10 @@ class SearchWebAction(AbstractAction):
                 output=f"search_web: no result for '{query[:80]}'",
                 success=False,
             )
-        if contains_sensitive_term(result.text) or contains_sensitive_term(result.title):
+        if (
+            contains_sensitive_content_term(result.text)
+            or contains_sensitive_content_term(result.title)
+        ):
             log.debug("search_web: result filtered (sensitive) for %s", query[:80])
             return ActionResult(
                 output="search_web: result filtered (sensitive term)",

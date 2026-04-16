@@ -189,7 +189,25 @@ SENSITIVE_APPS: list[str] = [
     "messages", "signal", "whatsapp", "telegram",
 ]
 
+# Strict subset for filtering external/untrusted content (search results,
+# fetched articles, HN titles). Wellness apps drop out because an article
+# mentioning "fitbit" or "health" is talking about consumer products, not
+# a privacy-critical interaction — filtering them breaks research on any
+# fitness/wellness topic. Banking, password managers, and messaging
+# remain because those names in external content can anchor real data
+# leaks or prompt injection.
+SENSITIVE_CONTENT_TERMS: list[str] = [
+    "1password", "bitwarden", "lastpass", "keychain", "dashlane",
+    "keeper", "nordpass",
+    "chase", "wells fargo", "bank of america", "capital one", "venmo",
+    "paypal", "schwab", "fidelity", "robinhood", "coinbase",
+    "messages", "signal", "whatsapp", "telegram",
+]
+
 _SENSITIVE_APPS_LOWER: tuple[str, ...] = tuple(app.lower() for app in SENSITIVE_APPS)
+_SENSITIVE_CONTENT_LOWER: tuple[str, ...] = tuple(
+    t.lower() for t in SENSITIVE_CONTENT_TERMS
+)
 
 
 def contains_sensitive_term(text: str | None) -> bool:
@@ -198,6 +216,19 @@ def contains_sensitive_term(text: str | None) -> bool:
         return False
     lower = text.lower()
     return any(term in lower for term in _SENSITIVE_APPS_LOWER)
+
+
+def contains_sensitive_content_term(text: str | None) -> bool:
+    """True if text contains an identity-critical term.
+
+    Use this for filtering untrusted external content where wellness-app
+    mentions are benign but banking/password/messaging app names should
+    still trigger the scrub. Broader-scoped than contains_sensitive_term.
+    """
+    if not text:
+        return False
+    lower = text.lower()
+    return any(term in lower for term in _SENSITIVE_CONTENT_LOWER)
 
 # ---------------------------------------------------------------------------
 # Mood system
