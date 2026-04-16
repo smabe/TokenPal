@@ -100,7 +100,7 @@ if ($Url) {
     }
     $dest = "$ModelsDir\$Name"
     Write-Host "Downloading $Name..." -ForegroundColor Cyan
-    & curl.exe -fSL -o $dest --connect-timeout 15 -H "Connection: close" $Url
+    & curl.exe -fSL --no-keepalive -o $dest --connect-timeout 15 $Url
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Download failed." -ForegroundColor Red
         exit 1
@@ -172,7 +172,7 @@ if ($Url) {
         Write-Host "Downloading $chosenFile (~$($chosen.SizeGB) GB)..." -ForegroundColor Cyan
         Write-Host "From: $chosenUrl" -ForegroundColor DarkGray
         Write-Host ""
-        & curl.exe -fSL -o $chosenDest --connect-timeout 15 -H "Connection: close" $chosenUrl
+        & curl.exe -fSL --no-keepalive -o $chosenDest --connect-timeout 15 $chosenUrl
         if ($LASTEXITCODE -ne 0) {
             Write-Host "Download failed." -ForegroundColor Red
             Write-Host "URL: $chosenUrl" -ForegroundColor Yellow
