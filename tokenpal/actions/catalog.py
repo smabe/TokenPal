@@ -234,6 +234,12 @@ RESEARCH_SECTION = CatalogSection(
             consent_category="web_fetches",
         ),
         CatalogEntry(
+            "research",
+            "Deep research: plans queries, searches, reads, cites sources.",
+            kind="research",
+            consent_category="research_mode",
+        ),
+        CatalogEntry(
             "fetch_url",
             "Fetch a URL and extract clean article text (no JS).",
             kind="research",

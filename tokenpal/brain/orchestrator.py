@@ -386,6 +386,10 @@ class Brain:
                 action._scheduler = self._proactive  # type: ignore[attr-defined]
             if hasattr(action, "_memory") and getattr(action, "_memory") is None:
                 action._memory = self._memory  # type: ignore[attr-defined]
+            if hasattr(action, "_llm") and getattr(action, "_llm") is None:
+                action._llm = self._llm  # type: ignore[attr-defined]
+            if hasattr(action, "_research_config") and getattr(action, "_research_config") is None:
+                action._research_config = self._research.config  # type: ignore[attr-defined]
             if hasattr(action, "_ui_callback"):
                 current = getattr(action, "_ui_callback", None)
                 # Replace the no-op stub from action init with the real cb.
