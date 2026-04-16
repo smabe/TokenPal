@@ -24,8 +24,10 @@ log = logging.getLogger(__name__)
 class SearchWebAction(AbstractAction):
     action_name = "search_web"
     description = (
-        "Search the web (DuckDuckGo or Wikipedia) for a single query. "
-        "Returns one summary + source URL or an error."
+        "Single-query web lookup for one fact or one page. Returns one "
+        "snippet + source URL. Use ONLY for one-shot factual lookups "
+        "(dates, definitions, addresses). Do NOT use for comparisons, "
+        "recommendations, or 'best X' questions — call research instead."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

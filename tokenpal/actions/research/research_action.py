@@ -26,10 +26,12 @@ log = logging.getLogger(__name__)
 class ResearchAction(AbstractAction):
     action_name = "research"
     description = (
-        "Deep research: plans search queries, searches multiple sources, "
-        "reads pages, and synthesizes a cited answer. Use for questions "
-        "needing thorough investigation. For quick single-fact lookups, "
-        "prefer search_web instead."
+        "Deep research for comparison, recommendation, or 'best of' "
+        "questions. Plans multiple search queries, reads several pages, "
+        "and returns a synthesized answer with numbered citations. "
+        "Always use this for questions like 'best X', 'which X should I "
+        "buy', 'compare X vs Y', or anything that needs weighing "
+        "multiple sources."
     )
     parameters: ClassVar[dict[str, Any]] = {
         "type": "object",

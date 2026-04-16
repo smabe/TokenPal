@@ -902,7 +902,9 @@ class PersonalityEngine:
             f"6. You have tools: {joined}. When the user asks you to "
             "look something up or calculate something, CALL the tool "
             "— never say 'let me search' without actually calling it. "
-            "For casual chat, just answer.\n\n"
+            "For 'best X', 'which X should I buy', or any comparison "
+            "question, call `research` — do NOT chain multiple "
+            "`search_web` calls. For casual chat, just answer.\n\n"
         )
 
     def build_context_injection(self, context_snapshot: str) -> str:
