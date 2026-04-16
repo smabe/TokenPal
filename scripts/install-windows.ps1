@@ -25,6 +25,32 @@ $RepoDir   = if ($env:TOKENPAL_DIR) { $env:TOKENPAL_DIR } else { "$env:USERPROFI
 $Port      = if ($env:TOKENPAL_PORT) { $env:TOKENPAL_PORT } else { "8585" }
 $Model     = if ($env:TOKENPAL_MODEL) { $env:TOKENPAL_MODEL } else { "gemma4" }
 
+# lemonade-sdk llamacpp-rocm release pin. Bump as a maintenance PR when we
+# bless a newer nightly. Override with TOKENPAL_LEMONADE_TAG for testing.
+$LemonadeTag = if ($env:TOKENPAL_LEMONADE_TAG) { $env:TOKENPAL_LEMONADE_TAG } else { "b1240" }
+$LlamacppDir = "$env:LOCALAPPDATA\TokenPal\llamacpp-rocm"
+$ModelsDir   = "$env:LOCALAPPDATA\TokenPal\models"
+
+function Get-AmdGpuVramGB {
+    # Returns VRAM in GB for the largest AMD GPU, or 0 if none / unreadable.
+    # Reads HardwareInformation.qwMemorySize (UINT64) from the video class
+    # registry key. Win32_VideoController.AdapterRAM is UINT32 and caps at
+    # 4 GB, so it is useless on any modern dGPU.
+    $gpuClass = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+    $maxBytes = 0L
+    if (Test-Path $gpuClass) {
+        Get-ChildItem $gpuClass -ErrorAction SilentlyContinue | ForEach-Object {
+            $props = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+            if ($props -and $props.ProviderName -match "AMD|Advanced Micro|ATI") {
+                $qwm = $props."HardwareInformation.qwMemorySize"
+                if ($qwm -and [int64]$qwm -gt $maxBytes) { $maxBytes = [int64]$qwm }
+            }
+        }
+    }
+    if ($maxBytes -gt 0) { return [math]::Floor($maxBytes / 1GB) }
+    return 0
+}
+
 # ── Header ──────────────────────────────────────────────────────────────────
 
 Write-Host ""
@@ -200,6 +226,10 @@ Write-Host ""
 Write-Host "[5/9] Checking for AMD GPU..." -ForegroundColor Yellow
 
 $amdGpu = $false
+$amdDGpu = $false
+$useLlamacpp = $false
+$amdVramGB = 0
+
 try {
     $gpus = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
     foreach ($gpu in $gpus) {
@@ -212,25 +242,130 @@ try {
 } catch {}
 
 if ($amdGpu) {
+    # iGPU vs dGPU: integrated graphics share system RAM and rarely show
+    # qwMemorySize >= 6 GB in the video class registry. Anything above that
+    # threshold is safe to treat as discrete for install-time decisions.
+    $amdVramGB = Get-AmdGpuVramGB
+    if ($amdVramGB -ge 6) {
+        $amdDGpu = $true
+        Write-Host "  Discrete AMD GPU with ~${amdVramGB} GB VRAM" -ForegroundColor Cyan
+    } else {
+        Write-Host "  AMD iGPU (VRAM <6 GB): Vulkan path is correct for RDNA 2/3 iGPUs" -ForegroundColor DarkGray
+    }
+}
+
+if ($amdDGpu -and $InstallServer) {
+    Write-Host ""
+    Write-Host "  Ollama's Vulkan backend has known correctness issues on RDNA 4 (gfx1201)." -ForegroundColor Yellow
+    Write-Host "  The llama.cpp-direct path uses native ROCm 7 kernels via lemonade-sdk." -ForegroundColor Yellow
+    if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
+        $amdChoice = Read-Host "  Install llama-server instead of Ollama? [Y/n] (default Y)"
+        $amdChoice = $amdChoice.Trim().ToLower()
+        if (-not $amdChoice -or $amdChoice -eq "y" -or $amdChoice -eq "yes") {
+            $useLlamacpp = $true
+        }
+    } else {
+        # Non-interactive on an AMD dGPU: pick the correct path by default.
+        $useLlamacpp = $true
+    }
+    if ($useLlamacpp) {
+        Write-Host "  Chose llama.cpp-direct path (no Ollama install)." -ForegroundColor Green
+    } else {
+        Write-Host "  Keeping Ollama+Vulkan. If outputs look wrong, rerun and choose Y." -ForegroundColor Yellow
+    }
+}
+
+if ($amdGpu -and -not $useLlamacpp) {
     Write-Host "  Setting Vulkan environment variables (recommended for AMD)..."
     [System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
     [System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
     $env:OLLAMA_VULKAN = "1"
     $env:GGML_VK_VISIBLE_DEVICES = "0"
     Write-Host "  OLLAMA_VULKAN=1 and GGML_VK_VISIBLE_DEVICES=0 set as persistent User env vars"
-    Write-Host "  NOTE: Vulkan is the recommended inference path for AMD GPUs." -ForegroundColor Cyan
-} else {
+} elseif (-not $amdGpu) {
     Write-Host "  No AMD GPU detected (NVIDIA/Intel will be auto-detected by Ollama)"
 }
 
-# ── Phase 6: Ollama + Model ────────────────────────────────────────────────
+# ── Phase 6: Inference engine (Ollama or llama.cpp-direct) ────────────────
 
 Write-Host ""
-Write-Host "[6/9] Setting up Ollama..." -ForegroundColor Yellow
+if ($useLlamacpp) {
+    Write-Host "[6/9] Setting up llama.cpp-direct (lemonade $LemonadeTag)..." -ForegroundColor Yellow
+} else {
+    Write-Host "[6/9] Setting up Ollama..." -ForegroundColor Yellow
+}
 
 if (-not $InstallServer -and $InstallClient) {
-    Write-Host "  Client mode: skipping local Ollama install (inference happens on remote server)" -ForegroundColor Green
+    Write-Host "  Client mode: skipping local inference install (inference happens on remote server)" -ForegroundColor Green
     Write-Host "  If you want a local fallback, install later with: winget install Ollama.Ollama" -ForegroundColor DarkGray
+} elseif ($useLlamacpp) {
+    # ── llama.cpp-direct branch ────────────────────────────────────────────
+    if (-not (Test-Path $LlamacppDir)) {
+        New-Item -ItemType Directory -Path $LlamacppDir -Force | Out-Null
+    }
+    if (-not (Test-Path $ModelsDir)) {
+        New-Item -ItemType Directory -Path $ModelsDir -Force | Out-Null
+    }
+
+    $zipName = "llama-$LemonadeTag-bin-windows-rocm-gfx120X-x64.zip"
+    $zipUrl  = "https://github.com/lemonade-sdk/llamacpp-rocm/releases/download/$LemonadeTag/$zipName"
+    $zipPath = "$env:TEMP\$zipName"
+
+    $serverExeCheck = Get-ChildItem -Path $LlamacppDir -Recurse -Filter "llama-server.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($serverExeCheck) {
+        Write-Host "  llama-server.exe already present at $($serverExeCheck.FullName)" -ForegroundColor Green
+    } else {
+        Write-Host "  Downloading $zipName (~400 MB)..."
+        try {
+            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+        } catch {
+            Write-Host "  ERROR: Download failed from $zipUrl" -ForegroundColor Red
+            Write-Host "  Verify the release tag exists at https://github.com/lemonade-sdk/llamacpp-rocm/releases" -ForegroundColor Yellow
+            Write-Host "  or override with: `$env:TOKENPAL_LEMONADE_TAG = '<tag>'" -ForegroundColor Yellow
+            exit 1
+        }
+        Write-Host "  Extracting to $LlamacppDir..."
+        Expand-Archive -Path $zipPath -DestinationPath $LlamacppDir -Force
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    }
+
+    $serverExe = Get-ChildItem -Path $LlamacppDir -Recurse -Filter "llama-server.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $serverExe) {
+        Write-Host "  ERROR: llama-server.exe not found after extract." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "  llama-server: $($serverExe.FullName)" -ForegroundColor Green
+
+    # GGUFs on this path are not auto-downloaded. Pinning a HF repo+file
+    # pair from a Mac risks a 404 at install time on Windows, and the user
+    # may want a different quant. Point them at docs/amd-dgpu-setup.md.
+    $existingGguf = Get-ChildItem -Path $ModelsDir -Filter "*.gguf" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($existingGguf) {
+        Write-Host "  GGUF already present: $($existingGguf.Name)" -ForegroundColor Green
+        $script:LlamacppGgufPath = $existingGguf.FullName
+    } else {
+        Write-Host ""
+        Write-Host "  No GGUF found in $ModelsDir." -ForegroundColor Yellow
+        Write-Host "  Download a gfx1201-compatible GGUF into that folder before launching." -ForegroundColor Yellow
+        Write-Host "  Known-good on a 16 GB RX 9070 XT: gemma-4-E4B-it-Q4_K_M.gguf (4.62 GiB)" -ForegroundColor Cyan
+        Write-Host "  See docs/amd-dgpu-setup.md for the current recommended repo + file." -ForegroundColor Cyan
+        $script:LlamacppGgufPath = ""
+    }
+
+    # Firewall rule for port 11434 (llama-server binds the same port Ollama
+    # uses so the TokenPal client proxy is byte-transparent).
+    $llmRule = "TokenPal llama-server (TCP 11434)"
+    if (-not (Get-NetFirewallRule -DisplayName $llmRule -ErrorAction SilentlyContinue)) {
+        try {
+            New-NetFirewallRule -DisplayName $llmRule `
+                -Direction Inbound -Protocol TCP -LocalPort 11434 `
+                -Action Allow -Profile Private | Out-Null
+            Write-Host "  Firewall rule added for TCP 11434" -ForegroundColor Green
+        } catch {
+            Write-Host "  WARNING: Could not add firewall rule for 11434 (need admin)." -ForegroundColor Yellow
+        }
+    }
+    $script:LlamacppServerExe = $serverExe.FullName
 } else {
 
 $ollamaExe = $null
@@ -421,10 +556,38 @@ if ($InstallServer) {
         Write-Host "  Firewall rule already exists"
     }
 
-    # start-server.bat
-    $vulkanLine = if ($amdGpu) { "set OLLAMA_VULKAN=1" } else { "rem set OLLAMA_VULKAN=1  (uncomment for AMD GPU)" }
-    $batPath = "$RepoDir\start-server.bat"
-    @"
+    # start-*.bat: branch on inference engine
+    if ($useLlamacpp) {
+        $batPath = "$RepoDir\start-llamaserver.bat"
+        $llamaExe = $script:LlamacppServerExe
+        $ggufPath = if ($script:LlamacppGgufPath) { $script:LlamacppGgufPath } else { "$ModelsDir\<your-model>.gguf" }
+        @"
+@echo off
+cd /d $RepoDir
+
+rem llama-server binds 11434 so TokenPal's proxy is byte-transparent.
+rem -ngl 99 offloads every layer to the GPU; drop the value if VRAM is tight.
+netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
+if errorlevel 1 (
+    echo Starting llama-server...
+    start "" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99
+    timeout /t 5 /nobreak >nul
+) else (
+    echo llama-server is already running.
+)
+
+call .venv\Scripts\activate.bat
+tokenpal-server --host 0.0.0.0 --port $Port
+pause
+"@ | Set-Content -Path $batPath -Encoding ASCII
+        Write-Host "  Created $batPath" -ForegroundColor Green
+        if (-not $script:LlamacppGgufPath) {
+            Write-Host "  NOTE: drop a GGUF into $ModelsDir and edit the -m path in $batPath before launching." -ForegroundColor Yellow
+        }
+    } else {
+        $vulkanLine = if ($amdGpu) { "set OLLAMA_VULKAN=1" } else { "rem set OLLAMA_VULKAN=1  (uncomment for AMD GPU)" }
+        $batPath = "$RepoDir\start-server.bat"
+        @"
 @echo off
 cd /d $RepoDir
 $vulkanLine
@@ -446,7 +609,8 @@ call .venv\Scripts\activate.bat
 tokenpal-server --host 0.0.0.0 --port $Port
 pause
 "@ | Set-Content -Path $batPath -Encoding ASCII
-    Write-Host "  Created $batPath" -ForegroundColor Green
+        Write-Host "  Created $batPath" -ForegroundColor Green
+    }
 
     # Optional Windows Startup shortcut
     if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
@@ -502,6 +666,31 @@ if (Test-Path $configPath) {
     Write-Host "  Created config.toml from defaults" -ForegroundColor Green
 } else {
     Write-Host "  WARNING: config.default.toml not found — config setup skipped" -ForegroundColor Yellow
+}
+
+# If the user picked the llama.cpp-direct path, write [llm] inference_engine.
+# Use tomli_w from the venv so we don't corrupt comment-heavy TOML by
+# string-patching. Also flip [llm] model_path so the backend knows which
+# GGUF llama-server is serving (informational; llama-server binds the model).
+if ($useLlamacpp -and (Test-Path $configPath)) {
+    $pyScript = @"
+import pathlib, sys, tomllib
+import tomli_w
+path, gguf = sys.argv[1], sys.argv[2]
+p = pathlib.Path(path)
+data = tomllib.loads(p.read_text())
+data.setdefault('llm', {})['inference_engine'] = 'llamacpp'
+if gguf:
+    data['llm']['model_path'] = gguf
+p.write_text(tomli_w.dumps(data))
+"@
+    $ggufArg = if ($script:LlamacppGgufPath) { $script:LlamacppGgufPath } else { "" }
+    try {
+        $pyScript | & "$VenvDir\Scripts\python.exe" - $configPath $ggufArg 2>$null
+        Write-Host "  Wrote [llm] inference_engine = llamacpp to config.toml" -ForegroundColor Green
+    } catch {
+        Write-Host "  WARNING: Could not set inference_engine. Add [llm] inference_engine = `"llamacpp`" manually." -ForegroundColor Yellow
+    }
 }
 
 # Client mode: ask which remote inference server to connect to
