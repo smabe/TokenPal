@@ -618,7 +618,7 @@ rem   --reasoning off  route all tokens to content, not reasoning_content
 netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
 if errorlevel 1 (
     echo Starting llama-server...
-    start "" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99 -c 8192 --no-mmap --jinja --reasoning off
+    start "llama-server" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99 -c 8192 --no-mmap --jinja --reasoning off
     timeout /t 8 /nobreak >nul
 ) else (
     echo llama-server is already running.
@@ -626,7 +626,10 @@ if errorlevel 1 (
 
 call .venv\Scripts\activate.bat
 tokenpal-server --host 0.0.0.0 --port $Port
-pause
+
+rem When tokenpal-server exits (Ctrl+C or window close), kill llama-server.
+echo Shutting down llama-server...
+taskkill /IM llama-server.exe /F >nul 2>&1
 "@ | Set-Content -Path $batPath -Encoding ASCII
         Write-Host "  Created $batPath" -ForegroundColor Green
         if (-not $script:LlamacppGgufPath) {
