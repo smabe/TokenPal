@@ -98,7 +98,10 @@ verdict, or `kind=factual` with answer + citations). The call uses:
   valid object anywhere in the text; prose-fallback path handles
   genuine parse failures.
 - Max tokens 1800 with thinking on (thinking eats token budget, don't
-  let it truncate the JSON), 700 otherwise.
+  let it truncate the JSON), 700 otherwise. When `finish_reason=="length"`
+  the synth logs `warning: synth hit max_tokens (N)` to the session log
+  and `log.warning` so the downstream prose-fallback path is traceable
+  instead of a silent parse failure.
 
 The synth prompt explicitly instructs the model: if fewer than 2
 product names actually appear in the source excerpts, DO NOT invent
