@@ -1,9 +1,14 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-Swap Ollama's bundled HIP 6 runtime with the system HIP 7 SDK to unlock gfx1201
-(RX 9070 XT / RDNA 4) support. Hack — see plans/llamacpp-direct-amd-dgpu.md for
-the real fix.
+Swap Ollama's bundled HIP 6 runtime with the system HIP 7 SDK. Intended for
+RDNA 3 (gfx1100/gfx1101/gfx1102) where Ollama bundles outdated HIP 6 kernels.
+
+DOES NOT WORK ON RDNA 4 (gfx1200/gfx1201). Tested 2026-04-15: HIP 7 DLLs have
+the kernels, but Ollama's HSA discovery still hangs / returns empty on gfx1201
+regardless of which HIP runtime is loaded. Root cause tracked upstream in
+ROCm#5812 and ollama#9812 / #10430 / #12573 / #13908 / #14686 / #14927.
+For RDNA 4, use docs/amd-dgpu-setup.md (llama.cpp-direct via lemonade-sdk).
 
 .DESCRIPTION
 Ollama ships HIP 6 DLLs without gfx1200/1201 kernels. This script backs up the

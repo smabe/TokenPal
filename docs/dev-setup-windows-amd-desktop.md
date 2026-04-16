@@ -2,9 +2,9 @@
 
 Target: AMD Ryzen 7 9800X3D (no NPU), Radeon RX 9070 XT (16 GB VRAM, RDNA 4). Desktop.
 
-**Primary inference target: RX 9070 XT via Vulkan (Ollama).** No NPU on this chip. The 16 GB VRAM makes this your most capable inference machine — runs gemma4:26b MoE comfortably.
+**Primary inference target: RX 9070 XT via `llama-server` from lemonade-sdk/llamacpp-rocm.** No NPU on this chip. The 16 GB VRAM makes this your most capable inference machine.
 
-> **Status (April 2026):** Ollama Vulkan backend works out of the box. HIP SDK 7.1.1 installs but Ollama doesn't detect it — use Vulkan. Set `OLLAMA_VULKAN=1` and `GGML_VK_VISIBLE_DEVICES=0` (disables iGPU, uses only the discrete 9070 XT) as persistent user environment variables.
+> **Status (April 2026):** Ollama does not work correctly on RDNA 4. Vulkan backend produces wrong numerics on dense gemma-4 models; ROCm backend fails to enumerate the card. Use the llama.cpp-direct setup in [docs/amd-dgpu-setup.md](amd-dgpu-setup.md) instead - ships its own ROCm 7 runtime with native gfx120X kernels, ~106 tok/s on gemma-4 E4B dense and ~102 tok/s on gemma-4 26B MoE (IQ3_S). The rest of this doc still applies for Windows/Python/training-side setup; only the inference-backend section is superseded.
 
 ---
 
