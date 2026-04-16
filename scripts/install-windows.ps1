@@ -316,7 +316,7 @@ if (-not $InstallServer -and $InstallClient) {
         Write-Host "  llama-server.exe already present at $($serverExeCheck.FullName)" -ForegroundColor Green
     } else {
         Write-Host "  Downloading $zipName (~400 MB)..."
-        & curl.exe -fSL -o $zipPath $zipUrl
+        & curl.exe -fSL -o $zipPath --connect-timeout 15 -H "Connection: close" $zipUrl
         if ($LASTEXITCODE -ne 0) {
             Write-Host "  ERROR: Download failed from $zipUrl" -ForegroundColor Red
             Write-Host "  Verify the release tag exists at https://github.com/lemonade-sdk/llamacpp-rocm/releases" -ForegroundColor Yellow
@@ -379,7 +379,7 @@ if (-not $InstallServer -and $InstallClient) {
 
         if ($ggufFile) {
             Write-Host "  Downloading $ggufFile (this may take several minutes)..."
-            & curl.exe -fSL -o $ggufDest $ggufUrl
+            & curl.exe -fSL -o $ggufDest --connect-timeout 15 -H "Connection: close" $ggufUrl
             if ($LASTEXITCODE -eq 0) {
                 Write-Host "  GGUF downloaded: $ggufDest" -ForegroundColor Green
                 $script:LlamacppGgufPath = $ggufDest
