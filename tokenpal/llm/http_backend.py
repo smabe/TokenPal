@@ -55,12 +55,13 @@ class HttpBackend(AbstractLLMBackend):
         self._model_available: bool = False
         self._using_fallback: bool = False
 
-    async def _try_connect(self, url: str) -> bool:
+    async def _try_connect(self, url: str, *, allow_adopt: bool = True) -> bool:
         """Try connecting to an API endpoint. Returns True on success.
 
-        Auto-adopts the server's first advertised model when the client has
-        no per-server override, so model swaps on the server propagate to
-        all clients without manual config edits.
+        When *allow_adopt* is True and the configured model_name is not in the
+        server's model list, auto-adopt the first advertised model so clients
+        track server-side model swaps without manual config edits. Disabled on
+        the fallback path to avoid adopting random local Ollama models.
         """
         assert self._client is not None
         try:
@@ -75,7 +76,7 @@ class HttpBackend(AbstractLLMBackend):
             if self._model_name in model_ids:
                 self._model_available = True
                 log.info("Model '%s' is available", self._model_name)
-            elif model_ids:
+            elif model_ids and allow_adopt:
                 from tokenpal.config.toml_writer import canon_server_url
 
                 key = canon_server_url(url)
@@ -93,6 +94,11 @@ class HttpBackend(AbstractLLMBackend):
                         "Model '%s' not found on server. Available: %s",
                         self._model_name, ", ".join(model_ids),
                     )
+            elif model_ids:
+                log.warning(
+                    "Model '%s' not found on fallback. Available: %s",
+                    self._model_name, ", ".join(model_ids),
+                )
             else:
                 log.warning("No models found on server at %s", url)
             return True
@@ -117,7 +123,7 @@ class HttpBackend(AbstractLLMBackend):
             log.warning(
                 "Cannot reach %s — trying local Ollama fallback...", self._api_url,
             )
-            if await self._try_connect(self._FALLBACK_URL):
+            if await self._try_connect(self._FALLBACK_URL, allow_adopt=False):
                 self._using_fallback = True
                 log.info(
                     "Using local Ollama fallback at %s (remote unreachable)",

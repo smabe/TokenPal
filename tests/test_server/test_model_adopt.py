@@ -78,3 +78,19 @@ async def test_handles_empty_model_list():
 
     assert result is True
     assert backend._model_name == "gemma4"
+
+
+@pytest.mark.asyncio
+async def test_no_adopt_on_fallback_path():
+    """Fallback to local Ollama should not auto-adopt random models."""
+    _, backend = _make_backend(model_name="gemma4")
+    backend._client = httpx.AsyncClient(
+        transport=_mock_transport(["tokenpal-bmo:latest"]),
+    )
+
+    await backend._try_connect(
+        "http://localhost:11434/v1", allow_adopt=False,
+    )
+
+    assert backend._model_name == "gemma4"
+    assert backend._model_available is False
