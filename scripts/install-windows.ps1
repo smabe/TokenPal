@@ -854,6 +854,14 @@ if ([System.Environment]::UserInteractive -and $Host.UI.RawUI) {
         & $clientExe
         exit $LASTEXITCODE
     } elseif ($launchChoice -eq "server" -and (Test-Path $serverExe)) {
+        # On the llamacpp path, start llama-server first (the bat does this +
+        # launches tokenpal-server). On the Ollama path, Ollama is already
+        # running from Phase 6 so we can launch the proxy directly.
+        if ($useLlamacpp -and (Test-Path $batPath)) {
+            Write-Host "Launching via $batPath (Ctrl-C to stop)..." -ForegroundColor Cyan
+            & cmd.exe /c $batPath
+            exit $LASTEXITCODE
+        }
         Write-Host "Launching tokenpal-server (Ctrl-C to stop)..." -ForegroundColor Cyan
         & $serverExe --host 0.0.0.0
         exit $LASTEXITCODE
