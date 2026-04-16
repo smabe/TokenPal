@@ -618,7 +618,7 @@ rem   --reasoning off  route all tokens to content, not reasoning_content
 netstat -ano | findstr ":11434" | findstr "LISTENING" >nul
 if errorlevel 1 (
     echo Starting llama-server...
-    start "llama-server" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99 -c 8192 --no-mmap --jinja --reasoning off
+    start "llama-server" /B "$llamaExe" -m "$ggufPath" --host 0.0.0.0 --port 11434 -ngl 99 -c 8192 -np 1 --no-mmap --jinja --reasoning off
     timeout /t 8 /nobreak >nul
 ) else (
     echo llama-server is already running.
