@@ -32,7 +32,9 @@ curl -fsSL https://raw.githubusercontent.com/smabe/TokenPal/main/install.sh | ba
 iwr -useb https://raw.githubusercontent.com/smabe/TokenPal/main/install.ps1 | iex
 ```
 
-The installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**, then recommends a model based on your detected VRAM:
+The installer asks whether you want **Client** (run the buddy), **Server** (serve LLM inference), or **Both**, then recommends a model based on your detected VRAM.
+
+### Ollama path (NVIDIA / Apple Silicon / RDNA 2-3)
 
 | VRAM  | Model                     | Size    |
 |-------|---------------------------|---------|
@@ -42,7 +44,26 @@ The installer asks whether you want **Client** (run the buddy), **Server** (serv
 | ≥6GB  | `gemma4` (9B)             | ~6 GB   |
 | <6GB  | `gemma2:2b`               | ~2 GB   |
 
-Override via `TOKENPAL_MODEL=<model>` env var before running the installer, or pull a different model manually and edit `~/.tokenpal/config.toml`.
+### llama.cpp-direct path (AMD RDNA 4 discrete GPUs)
+
+Auto-selected when the installer detects an AMD dGPU with ≥6 GB VRAM. Downloads GGUFs directly from HuggingFace instead of using Ollama's registry.
+
+| VRAM   | Model                           | On-card  | Notes |
+|--------|---------------------------------|----------|-------|
+| ≥24 GB | gemma-4 26B MoE Q4_K_M          | ~17 GB   | Best quality MoE quant |
+| ≥12 GB | gemma-4 26B MoE IQ3_S           | ~13.5 GB | Default on 9070 XT, ~102 tok/s |
+| ≥6 GB  | gemma-4 E4B dense Q4_K_M        | ~5 GB    | Fast dense, ~106 tok/s |
+| <6 GB  | gemma-4 E2B dense Q4_K_M        | ~2.5 GB  | Tiny fallback |
+
+Swap models anytime with the interactive picker:
+
+```powershell
+.\scripts\download-model.ps1
+```
+
+Includes additional tested models beyond gemma-4: Qwen3 14B, Llama 3.1 8B, Phi-4. Downloads the GGUF, updates `config.toml` and `start-llamaserver.bat` automatically.
+
+Override the installer's GGUF pick via `TOKENPAL_MODEL` env var, or pull a different model manually and edit `config.toml`.
 
 To skip the prompt, pass a mode:
 
