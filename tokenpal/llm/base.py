@@ -109,23 +109,44 @@ class AbstractLLMBackend(abc.ABC):
         """Load model / connect to server."""
 
     @abc.abstractmethod
-    async def generate(self, prompt: str, max_tokens: int | None = None) -> LLMResponse:
-        """Single-shot generation. ``max_tokens=None`` uses the backend's configured default."""
+    async def generate(
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> LLMResponse:
+        """Single-shot generation.
+
+        ``max_tokens=None`` uses the backend's configured default.
+        ``enable_thinking=None`` uses the backend default (driven by
+        ``LLMConfig.disable_reasoning``). True/False forces thinking on or off
+        for this call. Backends that wire to llama.cpp translate to
+        ``chat_template_kwargs.enable_thinking``; Ollama maps to
+        ``reasoning_effort``.
+        """
 
     async def generate_with_tools(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
     ) -> LLMResponse:
         """Chat completion with tool definitions. Default: fall back to generate()."""
-        # Fallback for backends that don't support tools — just use the last user message
         prompt = messages[-1].get("content", "") if messages else ""
-        return await self.generate(prompt, max_tokens)
+        return await self.generate(prompt, max_tokens, enable_thinking=enable_thinking)
 
-    async def stream(self, prompt: str, max_tokens: int | None = None) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> AsyncIterator[str]:
         """Yield tokens as they arrive. Default: fall back to generate()."""
-        response = await self.generate(prompt, max_tokens)
+        response = await self.generate(prompt, max_tokens, enable_thinking=enable_thinking)
         yield response.text
 
     async def supports_vision(self) -> bool:

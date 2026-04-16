@@ -30,7 +30,9 @@ class _ScriptedLLM(AbstractLLMBackend):
     async def setup(self) -> None: ...
     async def teardown(self) -> None: ...
 
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
+    async def generate(
+        self, prompt: str, max_tokens: int = 256, **_: Any
+    ) -> LLMResponse:
         return await self.generate_with_tools(
             [{"role": "user", "content": prompt}], [], max_tokens
         )
@@ -40,6 +42,7 @@ class _ScriptedLLM(AbstractLLMBackend):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int = 256,
+        **_: Any,
     ) -> LLMResponse:
         self.calls.append((list(messages), list(tools)))
         if not self._responses:

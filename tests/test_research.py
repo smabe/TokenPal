@@ -35,13 +35,15 @@ class _ScriptedLLM(AbstractLLMBackend):
     async def setup(self) -> None: ...
     async def teardown(self) -> None: ...
 
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
+    async def generate(
+        self, prompt: str, max_tokens: int = 256, **_: Any
+    ) -> LLMResponse:
         self.prompts.append(prompt)
         if not self._responses:
             return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
         return self._responses.pop(0)
 
-    async def generate_with_tools(self, messages, tools, max_tokens=256):
+    async def generate_with_tools(self, messages, tools, max_tokens=256, **_: Any):
         raise AssertionError("research path must not use generate_with_tools")
 
 

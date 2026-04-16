@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from tokenpal.config.schema import InferenceEngine
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.llm.registry import register_backend
 
@@ -32,6 +33,7 @@ class HttpBackend(AbstractLLMBackend):
         self._model_name = config.get("model_name", "phi3:mini")
         self._temperature = config.get("temperature", 0.8)
         self._disable_reasoning = config.get("disable_reasoning", True)
+        self._inference_engine: InferenceEngine = config.get("inference_engine", "ollama")
         self._server_mode = config.get("server_mode", "auto")
         self._initial_max_tokens: int = int(config.get("max_tokens", 256))
         self._max_tokens: int = self._initial_max_tokens
@@ -137,7 +139,37 @@ class HttpBackend(AbstractLLMBackend):
             self._api_url,
         )
 
-    async def generate(self, prompt: str, max_tokens: int | None = None) -> LLMResponse:
+    def _apply_thinking_controls(
+        self, body: dict[str, Any], enable_thinking: bool | None
+    ) -> None:
+        """Write the per-engine thinking controls into the request body.
+
+        `reasoning_effort` is inert on Qwen3 via llama-server; the real knob is
+        `chat_template_kwargs.enable_thinking` (server-side merge lets it win
+        over the `--reasoning off` startup default). `reasoning_format=deepseek`
+        routes thinking tokens to a separate `reasoning_content` response field
+        so callers that request JSON get a clean `content`.
+        """
+        effective = (
+            enable_thinking
+            if enable_thinking is not None
+            else not self._disable_reasoning
+        )
+        if self._inference_engine == "llamacpp":
+            body["chat_template_kwargs"] = {
+                "enable_thinking": "true" if effective else "false"
+            }
+            body["reasoning_format"] = "deepseek"
+        else:
+            body["reasoning_effort"] = "high" if effective else "none"
+
+    async def generate(
+        self,
+        prompt: str,
+        max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
+    ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
         start = time.monotonic()
@@ -148,9 +180,7 @@ class HttpBackend(AbstractLLMBackend):
             "max_tokens": effective_max,
             "temperature": self._temperature,
         }
-        # Disable thinking for models that support it — we want fast, short quips
-        if self._disable_reasoning:
-            body["reasoning_effort"] = "none"
+        self._apply_thinking_controls(body, enable_thinking)
 
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",
@@ -178,6 +208,8 @@ class HttpBackend(AbstractLLMBackend):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
+        *,
+        enable_thinking: bool | None = None,
     ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
@@ -191,8 +223,7 @@ class HttpBackend(AbstractLLMBackend):
         }
         if tools:
             body["tools"] = tools
-        if self._disable_reasoning:
-            body["reasoning_effort"] = "none"
+        self._apply_thinking_controls(body, enable_thinking)
 
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",

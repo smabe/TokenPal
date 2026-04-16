@@ -50,7 +50,9 @@ class _MockLLM(AbstractLLMBackend):
     async def setup(self) -> None:
         pass
 
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
+    async def generate(
+        self, prompt: str, max_tokens: int = 256, **_: Any
+    ) -> LLMResponse:
         return self._responses.pop(0)
 
     async def generate_with_tools(
@@ -58,6 +60,7 @@ class _MockLLM(AbstractLLMBackend):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int = 256,
+        **_: Any,
     ) -> LLMResponse:
         self.calls.append({"messages": messages, "tools": tools})
         return self._responses.pop(0)

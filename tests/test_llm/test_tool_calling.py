@@ -21,7 +21,9 @@ class _MockBackend(AbstractLLMBackend):
     async def setup(self) -> None:
         pass
 
-    async def generate(self, prompt: str, max_tokens: int = 256) -> LLMResponse:
+    async def generate(
+        self, prompt: str, max_tokens: int = 256, **_: Any
+    ) -> LLMResponse:
         self._call_log.append({"method": "generate", "prompt": prompt})
         return self._responses.pop(0)
 

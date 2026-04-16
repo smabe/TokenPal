@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+InferenceEngine = Literal["ollama", "llamacpp"]
+
 
 @dataclass
 class SensesConfig:
@@ -64,7 +66,7 @@ class LLMConfig:
     # plumbing (training VRAM unload, model registration) and disables Ollama
     # registry slash commands (/model pull|browse) for AMD dGPUs that need
     # llama.cpp-direct with native gfx120X kernels. See docs/amd-dgpu-setup.md.
-    inference_engine: Literal["ollama", "llamacpp"] = "ollama"
+    inference_engine: InferenceEngine = "ollama"
     model_path: str = ""
     api_url: str = "http://localhost:11434/v1"
     model_name: str = "gemma4"

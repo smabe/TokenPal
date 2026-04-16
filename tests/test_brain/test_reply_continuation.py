@@ -37,7 +37,9 @@ class _ScriptedLLM(AbstractLLMBackend):
     async def teardown(self) -> None:
         pass
 
-    async def generate(self, prompt: str, max_tokens: int | None = None) -> LLMResponse:
+    async def generate(
+        self, prompt: str, max_tokens: int | None = None, **_: Any
+    ) -> LLMResponse:
         raise NotImplementedError
 
     async def generate_with_tools(
@@ -45,6 +47,7 @@ class _ScriptedLLM(AbstractLLMBackend):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int | None = None,
+        **_: Any,
     ) -> LLMResponse:
         self.calls.append({"messages": list(messages), "max_tokens": max_tokens})
         text, reason = self._script.pop(0)
