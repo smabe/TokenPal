@@ -72,14 +72,9 @@ bash scripts/install-linux.sh --mode server
 bash scripts/install-macos.sh --mode server
 ```
 
-Installs Python, Ollama, pulls the right model for your VRAM, configures firewall, sets up auto-start (systemd/launchd/Windows Startup). Prints the URL when done.
+Installs Python, pulls the right model for your VRAM, configures firewall, sets up auto-start (systemd/launchd/Windows Startup). Prints the URL when done.
 
-**AMD GPU (RX 9070 XT / RDNA 4):** Set Vulkan env vars before first run:
-```powershell
-[System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
-[System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
-# Reopen terminal after setting these
-```
+**AMD discrete GPU (RX 9070 XT / RDNA 4):** The installer auto-detects your card and offers [llama.cpp-direct](docs/amd-dgpu-setup.md) instead of Ollama. This sidesteps Ollama's Vulkan correctness bug on gfx1201 by using lemonade-sdk's llama.cpp build with native ROCm 7 kernels. Just say Y at the prompt -- everything else (binary download, GGUF pull, config, launch script) is handled automatically. Swap models later with `scripts\download-model.ps1`.
 
 **On your client**, switch from inside TokenPal:
 ```
