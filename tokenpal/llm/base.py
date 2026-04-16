@@ -115,6 +115,7 @@ class AbstractLLMBackend(abc.ABC):
         max_tokens: int | None = None,
         *,
         enable_thinking: bool | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Single-shot generation.
 
@@ -124,6 +125,9 @@ class AbstractLLMBackend(abc.ABC):
         for this call. Backends that wire to llama.cpp translate to
         ``chat_template_kwargs.enable_thinking``; Ollama maps to
         ``reasoning_effort``.
+        ``response_format`` passes through to the OpenAI-compat request body
+        (e.g. ``{"type": "json_schema", "schema": {...}}``). Grammar-constrained
+        on llama-server, advisory on Ollama.
         """
 
     async def generate_with_tools(
@@ -133,10 +137,16 @@ class AbstractLLMBackend(abc.ABC):
         max_tokens: int | None = None,
         *,
         enable_thinking: bool | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
         """Chat completion with tool definitions. Default: fall back to generate()."""
         prompt = messages[-1].get("content", "") if messages else ""
-        return await self.generate(prompt, max_tokens, enable_thinking=enable_thinking)
+        return await self.generate(
+            prompt,
+            max_tokens,
+            enable_thinking=enable_thinking,
+            response_format=response_format,
+        )
 
     async def stream(
         self,

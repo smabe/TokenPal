@@ -106,3 +106,42 @@ def test_ollama_default_engine_when_unset():
     backend._apply_thinking_controls(body, enable_thinking=None)
     assert "reasoning_effort" in body
     assert "chat_template_kwargs" not in body
+
+
+@pytest.mark.asyncio
+async def test_generate_passes_response_format_to_body(monkeypatch):
+    """response_format kwarg is forwarded to the OpenAI-compat request body."""
+    import httpx
+
+    backend = HttpBackend({
+        "api_url": "http://localhost:11434/v1",
+        "inference_engine": "llamacpp",
+    })
+    captured: dict = {}
+
+    class _FakeResponse:
+        def raise_for_status(self): pass
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+                "usage": {"total_tokens": 1},
+            }
+
+    class _FakeClient:
+        async def post(self, url, json):
+            captured["body"] = json
+            return _FakeResponse()
+        async def aclose(self): pass
+
+    backend._client = _FakeClient()  # type: ignore[assignment]
+    schema = {"type": "object", "properties": {"k": {"type": "string"}}}
+    await backend.generate(
+        "hello",
+        max_tokens=10,
+        response_format={"type": "json_schema", "schema": schema},
+    )
+    assert captured["body"]["response_format"] == {
+        "type": "json_schema",
+        "schema": schema,
+    }
+    _ = httpx  # silence unused-import linter if enabled

@@ -7,13 +7,19 @@ from typing import Any
 import pytest
 
 from tokenpal.brain.research import (
+    Pick,
     PlannedQuery,
     ResearchRunner,
     ResearchSession,
     ResearchStopReason,
     Source,
+    SynthResult,
+    Verdict,
     _parse_planner_output,
+    _parse_synth_json,
+    _render_synth_result,
     _strip_dangling_markers,
+    _validate_picks,
 )
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
 from tokenpal.senses.web_search.client import SearchResult
@@ -31,14 +37,16 @@ class _ScriptedLLM(AbstractLLMBackend):
         super().__init__({})
         self._responses = list(responses)
         self.prompts: list[str] = []
+        self.call_kwargs: list[dict[str, Any]] = []
 
     async def setup(self) -> None: ...
     async def teardown(self) -> None: ...
 
     async def generate(
-        self, prompt: str, max_tokens: int = 256, **_: Any
+        self, prompt: str, max_tokens: int = 256, **kwargs: Any
     ) -> LLMResponse:
         self.prompts.append(prompt)
+        self.call_kwargs.append(kwargs)
         if not self._responses:
             return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
         return self._responses.pop(0)
@@ -316,3 +324,314 @@ def test_planned_query_and_source_shape() -> None:
     assert q.query == "x" and q.intent == "why"
     s = Source(number=1, url="u", title="t", excerpt="e", backend="duckduckgo")
     assert s.number == 1
+
+
+# ---------------------------------------------------------------------------
+# Synth JSON parsing
+# ---------------------------------------------------------------------------
+
+
+def test_parse_synth_json_comparison() -> None:
+    raw = (
+        '{"kind": "comparison", '
+        '"picks": [{"name": "Garmin Forerunner 165", "reason": "battery", "citation": 1}, '
+        '{"name": "Fitbit Versa 4", "reason": "iOS app", "citation": 3}], '
+        '"verdict": {"text": "Forerunner for training", "citation": 1}}'
+    )
+    result = _parse_synth_json(raw)
+    assert result is not None
+    assert result.kind == "comparison"
+    assert [p.name for p in result.picks] == ["Garmin Forerunner 165", "Fitbit Versa 4"]
+    assert result.verdict is not None
+    assert result.verdict.text == "Forerunner for training"
+
+
+def test_parse_synth_json_factual() -> None:
+    raw = '{"kind": "factual", "answer": "Apollo 11 in 1969.", "citations": [1, 2]}'
+    result = _parse_synth_json(raw)
+    assert result is not None
+    assert result.kind == "factual"
+    assert result.answer == "Apollo 11 in 1969."
+    assert result.citations == [1, 2]
+
+
+def test_parse_synth_json_tolerates_pre_post_chatter() -> None:
+    raw = (
+        "Sure, here's the result:\n"
+        '{"kind": "factual", "answer": "Because X.", "citations": [1]}\n'
+        "Let me know if you need more."
+    )
+    result = _parse_synth_json(raw)
+    assert result is not None
+    assert result.kind == "factual"
+
+
+def test_parse_synth_json_returns_none_for_invalid() -> None:
+    assert _parse_synth_json("") is None
+    assert _parse_synth_json("not json at all") is None
+    assert _parse_synth_json('{"kind": "comparison"}') is not None  # empty picks ok, runner downgrades
+
+
+def test_parse_synth_json_skips_unrelated_objects() -> None:
+    raw = '{"wrong": "shape"} {"kind": "factual", "answer": "A.", "citations": []}'
+    result = _parse_synth_json(raw)
+    assert result is not None
+    assert result.answer == "A."
+
+
+# ---------------------------------------------------------------------------
+# Pick validation
+# ---------------------------------------------------------------------------
+
+
+def _src(number: int, excerpt: str) -> Source:
+    return Source(number=number, url=f"u{number}", title="t", excerpt=excerpt)
+
+
+def test_validate_picks_keeps_names_in_excerpt() -> None:
+    sources = [_src(1, "The Garmin Forerunner 165 has 25-day battery.")]
+    picks = [Pick(name="Garmin Forerunner 165", reason="battery", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == picks and dropped == []
+
+
+def test_validate_picks_drops_names_not_in_excerpt() -> None:
+    sources = [_src(1, "The Garmin Forerunner 165 has 25-day battery.")]
+    picks = [Pick(name="Apple Watch Series 9", reason="fabricated", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == [] and dropped == picks
+
+
+def test_validate_picks_drops_unknown_citation() -> None:
+    sources = [_src(1, "Garmin Forerunner 165")]
+    picks = [Pick(name="Garmin Forerunner 165", reason="x", citation=99)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == [] and dropped == picks
+
+
+def test_validate_picks_case_insensitive() -> None:
+    sources = [_src(1, "garmin forerunner 165 has gps")]
+    picks = [Pick(name="GARMIN FORERUNNER 165", reason="gps", citation=1)]
+    kept, _ = _validate_picks(picks, sources)
+    assert kept == picks
+
+
+# ---------------------------------------------------------------------------
+# Render
+# ---------------------------------------------------------------------------
+
+
+def test_render_synth_result_comparison() -> None:
+    result = SynthResult(
+        kind="comparison",
+        picks=[
+            Pick(name="A", reason="fast", citation=1),
+            Pick(name="B", reason="cheap", citation=2),
+        ],
+        verdict=Verdict(text="pick A", citation=1),
+    )
+    rendered = _render_synth_result(result)
+    assert "- A: fast [1]" in rendered
+    assert "- B: cheap [2]" in rendered
+    assert "Verdict: pick A [1]." in rendered
+
+
+def test_render_synth_result_factual() -> None:
+    result = SynthResult(kind="factual", answer="Because X.", citations=[1, 2])
+    assert _render_synth_result(result) == "Because X. [1] [2]"
+
+
+def test_render_synth_result_factual_no_citations() -> None:
+    result = SynthResult(kind="factual", answer="Plain answer.")
+    assert _render_synth_result(result) == "Plain answer."
+
+
+# ---------------------------------------------------------------------------
+# Runner end-to-end with JSON synth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_runner_json_synth_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    synth_json = (
+        '{"kind": "comparison", "picks": ['
+        '{"name": "Garmin Forerunner 165", "reason": "25-day battery", "citation": 1}, '
+        '{"name": "Fitbit Versa 4", "reason": "iOS app", "citation": 2}], '
+        '"verdict": {"text": "Forerunner wins", "citation": 1}}'
+    )
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok(synth_json, tokens=200),
+    ])
+
+    def fake_search(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
+        return [
+            _hit(
+                "https://a.example",
+                "Forbes",
+                "The Garmin Forerunner 165 has 25-day battery life.",
+                "duckduckgo",
+            ),
+            _hit(
+                "https://b.example",
+                "PCMag",
+                "Fitbit Versa 4 ships the best iOS app in the category.",
+                "wikipedia",
+            ),
+        ]
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=3,
+    )
+    session = await runner.run("best fitness tracker for iPhone 17")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "Garmin Forerunner 165" in session.answer
+    assert "Fitbit Versa 4" in session.answer
+    assert "Verdict: Forerunner wins [1]." in session.answer
+    assert "[1]" in session.answer and "[2]" in session.answer
+
+
+@pytest.mark.asyncio
+async def test_runner_drops_uncited_pick_and_downgrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Synth fabricates one pick not in sources — runner drops it and,
+    with only 1 valid pick left, downgrades to 'not enough picks'."""
+    synth_json = (
+        '{"kind": "comparison", "picks": ['
+        '{"name": "Real Watch", "reason": "in source", "citation": 1}, '
+        '{"name": "Made-Up Watch 9000", "reason": "hallucinated", "citation": 1}], '
+        '"verdict": {"text": "Real Watch", "citation": 1}}'
+    )
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok(synth_json, tokens=200),
+    ])
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "The Real Watch has features.", "duckduckgo"),
+        ],
+    )
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1)
+    session = await runner.run("best")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "enough verifiable picks" in session.answer
+    assert any("dropped as uncited" in line for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_runner_malformed_json_falls_back_to_prose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When synth returns unparseable text, runner strips dangling markers
+    and uses the raw prose as answer."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok("Free-form prose answer [1] with an out-of-range [99].", tokens=100),
+    ])
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet", "duckduckgo"),
+        ],
+    )
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1)
+    session = await runner.run("anything")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "Free-form prose answer [1]" in session.answer
+    assert "[99]" not in session.answer
+
+
+@pytest.mark.asyncio
+async def test_runner_synth_call_requests_thinking_and_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Synth stage must pass enable_thinking=True (default) and the JSON
+    schema response_format, so the plumbing carries through the backend."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "A.", "citations": [1]}', tokens=50),
+    ])
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet", "duckduckgo"),
+        ],
+    )
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1)
+    await runner.run("q")
+
+    synth_kwargs = llm.call_kwargs[1]
+    assert synth_kwargs.get("enable_thinking") is True
+    fmt = synth_kwargs.get("response_format")
+    assert fmt is not None
+    assert fmt["type"] == "json_schema"
+    assert "schema" in fmt
+
+
+@pytest.mark.asyncio
+async def test_runner_factual_drops_out_of_range_citations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """factual kind: runner drops citations pointing past the source list."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "Answer.", "citations": [1, 99]}', tokens=50),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1)
+    session = await runner.run("q")
+
+    assert "[1]" in session.answer
+    assert "[99]" not in session.answer
+
+
+@pytest.mark.asyncio
+async def test_runner_synth_thinking_flag_off(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "A.", "citations": [1]}', tokens=50),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, synth_thinking=False,
+    )
+    await runner.run("q")
+    assert llm.call_kwargs[1].get("enable_thinking") is False

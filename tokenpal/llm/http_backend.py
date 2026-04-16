@@ -169,6 +169,7 @@ class HttpBackend(AbstractLLMBackend):
         max_tokens: int | None = None,
         *,
         enable_thinking: bool | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
@@ -181,6 +182,8 @@ class HttpBackend(AbstractLLMBackend):
             "temperature": self._temperature,
         }
         self._apply_thinking_controls(body, enable_thinking)
+        if response_format is not None:
+            body["response_format"] = response_format
 
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",
@@ -210,6 +213,7 @@ class HttpBackend(AbstractLLMBackend):
         max_tokens: int | None = None,
         *,
         enable_thinking: bool | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
@@ -224,6 +228,8 @@ class HttpBackend(AbstractLLMBackend):
         if tools:
             body["tools"] = tools
         self._apply_thinking_controls(body, enable_thinking)
+        if response_format is not None:
+            body["response_format"] = response_format
 
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",

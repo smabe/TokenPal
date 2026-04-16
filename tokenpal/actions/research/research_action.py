@@ -82,6 +82,7 @@ class ResearchAction(AbstractAction):
             token_budget=cfg.token_budget,
             per_search_timeout_s=cfg.per_search_timeout_s,
             per_fetch_timeout_s=cfg.per_fetch_timeout_s,
+            synth_thinking=cfg.synth_thinking,
         )
 
         try:

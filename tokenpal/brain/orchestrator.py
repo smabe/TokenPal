@@ -1005,6 +1005,7 @@ class Brain:
             token_budget=self._research.config.token_budget,
             per_search_timeout_s=self._research.config.per_search_timeout_s,
             per_fetch_timeout_s=self._research.config.per_fetch_timeout_s,
+            synth_thinking=self._research.config.synth_thinking,
         )
 
         self._mode = BrainMode.RESEARCH

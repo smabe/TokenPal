@@ -13,8 +13,8 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import Any, Literal
 
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.llm.base import AbstractLLMBackend
@@ -43,6 +43,31 @@ class Source:
     title: str
     excerpt: str
     backend: str = ""
+
+
+@dataclass
+class Pick:
+    name: str
+    reason: str
+    citation: int
+
+
+@dataclass
+class Verdict:
+    text: str
+    citation: int
+
+
+@dataclass
+class SynthResult:
+    """Structured output from the synthesizer. Rendered to session.answer
+    by the runner after citation-substring validation."""
+
+    kind: Literal["comparison", "factual"]
+    picks: list[Pick] = field(default_factory=list)
+    verdict: Verdict | None = None
+    answer: str = ""
+    citations: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -98,6 +123,7 @@ class ResearchRunner:
         token_budget: int = 6000,
         per_search_timeout_s: float = 5.0,
         per_fetch_timeout_s: float = 8.0,
+        synth_thinking: bool = True,
     ) -> None:
         self._llm = llm
         self._fetch = fetch_url
@@ -107,6 +133,7 @@ class ResearchRunner:
         self._token_budget = token_budget
         self._per_search_timeout_s = per_search_timeout_s
         self._per_fetch_timeout_s = per_fetch_timeout_s
+        self._synth_thinking = synth_thinking
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -159,28 +186,57 @@ class ResearchRunner:
             )
 
         try:
-            answer, used = await self._synthesize(question, session.sources)
+            result, raw_text, used = await self._synthesize(question, session.sources)
         except Exception:
             log.exception("Research synthesizer failed")
             session.stopped_reason = ResearchStopReason.CRASHED
             return session
 
         session.tokens_used += used
-        before_markers = len(_DANGLING_MARKER_RE.findall(answer))
-        session.answer = _strip_dangling_markers(answer, len(session.sources))
-        after_markers = len(_DANGLING_MARKER_RE.findall(session.answer))
-        stripped = before_markers - after_markers
-        if stripped:
-            self._log(
-                f"  citations: {after_markers} kept, {stripped} stripped "
-                f"(out-of-range — possible hallucination)"
-            )
-            log.info(
-                "Research stripped %d out-of-range citation markers "
-                "(synthesizer may have fabricated)", stripped,
-            )
+        session.answer = self._finalize_answer(result, raw_text, session.sources)
         session.stopped_reason = ResearchStopReason.COMPLETE
         return session
+
+    def _finalize_answer(
+        self,
+        result: SynthResult | None,
+        raw_text: str,
+        sources: list[Source],
+    ) -> str:
+        max_n = len(sources)
+        if result is None:
+            self._log(
+                "  synth: JSON parse failed, falling back to prose + marker strip"
+            )
+            log.warning("research synth returned invalid JSON, using prose fallback")
+            all_markers = _DANGLING_MARKER_RE.findall(raw_text)
+            stripped_text = _strip_dangling_markers(raw_text, max_n)
+            stripped_count = sum(1 for n in all_markers if not 1 <= int(n) <= max_n)
+            if stripped_count:
+                kept_count = len(all_markers) - stripped_count
+                self._log(
+                    f"  citations: {kept_count} kept, {stripped_count} stripped "
+                    f"(out-of-range, possible hallucination)"
+                )
+            return stripped_text
+
+        if result.kind == "comparison":
+            kept, dropped = _validate_picks(result.picks, sources)
+            if dropped:
+                self._log(
+                    f"  picks: {len(result.picks)} generated, "
+                    f"{len(dropped)} dropped as uncited"
+                )
+                log.info(
+                    "research dropped %d uncited picks out of %d",
+                    len(dropped), len(result.picks),
+                )
+            if len(kept) < 2:
+                return "Sources don't name enough verifiable picks."
+            return _render_synth_result(replace(result, picks=kept))
+
+        valid_citations = [c for c in result.citations if 1 <= c <= max_n]
+        return _render_synth_result(replace(result, citations=valid_citations))
 
     # ---- Stage 1: planner -------------------------------------------------
 
@@ -283,7 +339,7 @@ class ResearchRunner:
 
     async def _synthesize(
         self, question: str, sources: list[Source]
-    ) -> tuple[str, int]:
+    ) -> tuple[SynthResult | None, str, int]:
         sources_block = "\n\n".join(
             f"[{s.number}] {s.url}\n{s.excerpt}" for s in sources
         )
@@ -293,8 +349,15 @@ class ResearchRunner:
             question=question,
             marker_range=marker_range,
         )
-        response = await self._llm.generate(prompt, max_tokens=600)
-        return response.text.strip(), response.tokens_used
+        response = await self._llm.generate(
+            prompt,
+            max_tokens=600,
+            enable_thinking=self._synth_thinking,
+            response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
+        )
+        raw_text = response.text.strip()
+        result = _parse_synth_json(raw_text)
+        return result, raw_text, response.tokens_used
 
 
 _JSON_ARRAY_RE = re.compile(r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]", re.DOTALL)
@@ -346,6 +409,147 @@ def _strip_dangling_markers(text: str, max_n: int) -> str:
     return _DANGLING_MARKER_RE.sub(_repl, text)
 
 
+# JSON schema for the synth response. Sent as response_format on
+# grammar-constrained backends (llama-server) and as a hint on others
+# (Ollama). The parser validates shape regardless of backend honoring.
+SYNTH_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["comparison", "factual"]},
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "citation": {"type": "integer"},
+                },
+                "required": ["name", "reason", "citation"],
+            },
+        },
+        "verdict": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "citation": {"type": "integer"},
+            },
+            "required": ["text", "citation"],
+        },
+        "answer": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["kind"],
+}
+
+
+def _parse_synth_json(text: str) -> SynthResult | None:
+    """Scan for the first valid top-level JSON object that matches the synth
+    shape. Uses ``raw_decode`` so nested objects inside ``picks``/``verdict``
+    work without a custom balanced-brace regex. Returns None on parse failure
+    so the runner can fall back to the prose path."""
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    cursor = 0
+    while True:
+        start = text.find("{", cursor)
+        if start == -1:
+            return None
+        try:
+            parsed, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        cursor = start + 1
+        if not isinstance(parsed, dict):
+            continue
+        result = _build_synth_result(parsed)
+        if result is not None:
+            return result
+
+
+def _build_synth_result(parsed: dict[str, Any]) -> SynthResult | None:
+    kind = parsed.get("kind")
+    if kind == "comparison":
+        picks = [
+            Pick(
+                name=str(item["name"]),
+                reason=str(item["reason"]),
+                citation=int(item["citation"]),
+            )
+            for item in parsed.get("picks") or []
+            if _has_pick_fields(item)
+        ]
+        verdict_raw = parsed.get("verdict")
+        verdict: Verdict | None = None
+        if isinstance(verdict_raw, dict) and _has_verdict_fields(verdict_raw):
+            verdict = Verdict(
+                text=str(verdict_raw["text"]),
+                citation=int(verdict_raw["citation"]),
+            )
+        return SynthResult(kind="comparison", picks=picks, verdict=verdict)
+    if kind == "factual":
+        answer = str(parsed.get("answer") or "").strip()
+        if not answer:
+            return None
+        citations = [
+            int(c) for c in parsed.get("citations") or [] if isinstance(c, (int, float))
+        ]
+        return SynthResult(kind="factual", answer=answer, citations=citations)
+    return None
+
+
+def _has_pick_fields(item: Any) -> bool:
+    return (
+        isinstance(item, dict)
+        and isinstance(item.get("name"), str)
+        and isinstance(item.get("reason"), str)
+        and isinstance(item.get("citation"), (int, float))
+    )
+
+
+def _has_verdict_fields(item: dict[str, Any]) -> bool:
+    return isinstance(item.get("text"), str) and isinstance(
+        item.get("citation"), (int, float)
+    )
+
+
+def _validate_picks(
+    picks: list[Pick], sources: list[Source]
+) -> tuple[list[Pick], list[Pick]]:
+    """A pick is valid iff its lowercased ``name`` appears as a substring in
+    the cited source's lowercased excerpt. Drops picks that cite out-of-range
+    sources or whose name doesn't appear at all; these are the claims the
+    old range-only strip couldn't catch."""
+    excerpts_lower = {s.number: s.excerpt.lower() for s in sources}
+    kept: list[Pick] = []
+    dropped: list[Pick] = []
+    for pick in picks:
+        haystack = excerpts_lower.get(pick.citation)
+        if haystack is None or pick.name.lower() not in haystack:
+            dropped.append(pick)
+        else:
+            kept.append(pick)
+    return kept, dropped
+
+
+def _render_synth_result(result: SynthResult) -> str:
+    if result.kind == "comparison":
+        lines = [
+            f"- {pick.name}: {pick.reason} [{pick.citation}]"
+            for pick in result.picks
+        ]
+        body = "\n".join(lines)
+        if result.verdict:
+            body += (
+                f"\nVerdict: {result.verdict.text} [{result.verdict.citation}]."
+            )
+        return body
+    citations = " ".join(f"[{c}]" for c in result.citations)
+    return f"{result.answer} {citations}".strip() if citations else result.answer
+
+
 _PLANNER_PROMPT = """You decompose a research question into 1-{max_queries} web search queries.
 
 The current year is {current_year}.
@@ -388,24 +592,30 @@ _SYNTH_PROMPT = """You answer the user's question using ONLY the numbered source
 Sources:
 {sources_block}
 
-Citation rules:
-- Cite every factual claim with a bracketed marker like [1] or [3].
-- Only use markers in the range {marker_range}. Unknown markers will be stripped.
-- If the sources disagree or don't cover the claim, say so plainly — do NOT fabricate.
+Output STRICT JSON ONLY. No prose, no markdown fences, no commentary.
 
-Answer style:
-- For "best X" / "which X should I buy" / comparison questions: name 2-4
-  SPECIFIC products/options by brand and model, each with a one-line reason
-  and a citation marker [N]. End with a one-line verdict picking a winner
-  (also cited). Do NOT just tell the reader "refer to source X for reviews"
-  — pull the actual names out of the sources.
-- Every product name MUST have a citation [N]. If no source names a
-  specific product, say "Sources don't name specific picks" instead of
-  guessing from training data. Uncited products get stripped.
-- For factual / explanatory questions: keep the answer under 6 sentences.
+Two response shapes:
+
+For comparison / "best X" / "which X should I buy" questions, emit:
+{{
+  "kind": "comparison",
+  "picks": [
+    {{"name": "<brand + model>", "reason": "<one-line why>", "citation": <N>}}
+  ],
+  "verdict": {{"text": "<one-line winner>", "citation": <N>}}
+}}
+
+Use 2-4 picks. Pull names VERBATIM from source text; each "name" must appear
+in the cited source's excerpt. Do NOT invent picks from training data.
+Uncited or fabricated picks will be dropped.
+
+For factual / explanatory questions, emit:
+{{"kind": "factual", "answer": "<under 6 sentences>", "citations": [<N>, ...]}}
+
+Rules:
+- Use only citation markers in the range {marker_range}.
+- If sources don't name specific options, emit a "factual" response with
+  answer "Sources don't name specific picks." and cite the sources you read.
 
 Question: {question}
-
-Remember: cite every claim with a bracketed marker in the range {marker_range}.
-Unsupported claims get stripped.
 """

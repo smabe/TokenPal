@@ -200,6 +200,11 @@ class ResearchConfig:
     token_budget: int = 6000
     per_search_timeout_s: float = 5.0
     per_fetch_timeout_s: float = 8.0
+    # Turn model thinking back ON for the synthesizer call only, overriding
+    # LLMConfig.disable_reasoning. Thinking improves claim fidelity at a
+    # ~5-10s latency cost per research run. Disable if your model doesn't
+    # support thinking or if latency is unacceptable.
+    synth_thinking: bool = True
     # Identical questions within this window return the previous synthesis
     # instead of re-searching. Zero disables the cache.
     cache_ttl_s: float = 86400.0
