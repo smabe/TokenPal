@@ -402,11 +402,14 @@ def test_validate_picks_drops_names_not_in_excerpt() -> None:
     assert kept == [] and dropped == picks
 
 
-def test_validate_picks_drops_unknown_citation() -> None:
+def test_validate_picks_repairs_unknown_citation() -> None:
+    """Out-of-range citation but name is in a real source. Repair citation
+    rather than drop (the name is still grounded)."""
     sources = [_src(1, "Garmin Forerunner 165")]
     picks = [Pick(name="Garmin Forerunner 165", reason="x", citation=99)]
     kept, dropped = _validate_picks(picks, sources)
-    assert kept == [] and dropped == picks
+    assert dropped == []
+    assert len(kept) == 1 and kept[0].citation == 1
 
 
 def test_validate_picks_case_insensitive() -> None:
@@ -429,6 +432,32 @@ def test_validate_picks_token_fallback_rejects_partial() -> None:
     """Missing any token of the name means the pick is still dropped."""
     sources = [_src(1, "The Fitbit Versa ships with a great display.")]
     picks = [Pick(name="Fitbit Versa 4", reason="display", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert kept == [] and dropped == picks
+
+
+def test_validate_picks_repairs_wrong_citation() -> None:
+    """Name is in source 2's excerpt but synth cited source 1. Citation gets
+    repaired to 2 rather than dropping the pick."""
+    sources = [
+        _src(1, "Generic intro paragraph about fitness."),
+        _src(2, "The Apple Watch Series 10 ships with ECG and fall detection."),
+    ]
+    picks = [Pick(name="Apple Watch Series 10", reason="ecg", citation=1)]
+    kept, dropped = _validate_picks(picks, sources)
+    assert dropped == []
+    assert len(kept) == 1
+    assert kept[0].citation == 2
+    assert kept[0].name == "Apple Watch Series 10"
+
+
+def test_validate_picks_drops_when_no_source_contains_name() -> None:
+    """Pure hallucination: name appears in NO excerpt. Drop, don't repair."""
+    sources = [
+        _src(1, "Apple Watch Series 10 review."),
+        _src(2, "Garmin Forerunner 265 review."),
+    ]
+    picks = [Pick(name="Made-Up Tracker 9000", reason="fake", citation=1)]
     kept, dropped = _validate_picks(picks, sources)
     assert kept == [] and dropped == picks
 
@@ -548,7 +577,7 @@ async def test_runner_drops_uncited_pick_and_downgrades(
 
     assert session.stopped_reason == ResearchStopReason.COMPLETE
     assert "enough verifiable picks" in session.answer
-    assert any("dropped as uncited" in line for line in logs)
+    assert any("Made-Up Watch 9000" in line for line in logs)
 
 
 @pytest.mark.asyncio

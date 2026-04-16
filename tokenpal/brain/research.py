@@ -223,13 +223,14 @@ class ResearchRunner:
         if result.kind == "comparison":
             kept, dropped = _validate_picks(result.picks, sources)
             if dropped:
+                names = "; ".join(p.name for p in dropped)
                 self._log(
                     f"  picks: {len(result.picks)} generated, "
-                    f"{len(dropped)} dropped as uncited"
+                    f"{len(dropped)} dropped (not in any source): {names}"
                 )
                 log.info(
-                    "research dropped %d uncited picks out of %d",
-                    len(dropped), len(result.picks),
+                    "research dropped %d of %d picks: %s",
+                    len(dropped), len(result.picks), names,
                 )
             if len(kept) < 2:
                 return "Sources don't name enough verifiable picks."
@@ -536,22 +537,41 @@ def _pick_name_in_excerpt(name: str, excerpt_lower: str) -> bool:
 def _validate_picks(
     picks: list[Pick], sources: list[Source]
 ) -> tuple[list[Pick], list[Pick]]:
-    """Drop picks whose name can't be grounded in the cited source's excerpt
-    (either as a substring or via all-tokens-present match). Out-of-range
-    citations are also dropped."""
+    """Keep a pick if its name is grounded in ANY source's excerpt.
+
+    If the synth cited the wrong source number but the name appears
+    elsewhere in the pool, repair the citation rather than drop; only pure
+    hallucinations (name nowhere in any excerpt) get dropped. Qwen3 is
+    often right about the pick and sloppy about which [N] to attach.
+    """
     excerpts_lower = {s.number: s.excerpt.lower() for s in sources}
+    numbers = [s.number for s in sources]
     kept: list[Pick] = []
     dropped: list[Pick] = []
     for pick in picks:
-        haystack = excerpts_lower.get(pick.citation)
-        if haystack is None or not _pick_name_in_excerpt(pick.name, haystack):
-            dropped.append(pick)
+        cited = excerpts_lower.get(pick.citation)
+        if cited is not None and _pick_name_in_excerpt(pick.name, cited):
+            kept.append(pick)
+            continue
+        repaired: Pick | None = None
+        for num in numbers:
+            if num == pick.citation:
+                continue
+            if _pick_name_in_excerpt(pick.name, excerpts_lower[num]):
+                repaired = replace(pick, citation=num)
+                break
+        if repaired is not None:
+            log.debug(
+                "research: pick repaired (name=%r [%d] -> [%d])",
+                pick.name, pick.citation, repaired.citation,
+            )
+            kept.append(repaired)
+        else:
             log.debug(
                 "research: pick dropped (name=%r cited=[%d])",
                 pick.name, pick.citation,
             )
-        else:
-            kept.append(pick)
+            dropped.append(pick)
     return kept, dropped
 
 
