@@ -317,7 +317,9 @@ if (-not $InstallServer -and $InstallClient) {
     } else {
         Write-Host "  Downloading $zipName (~400 MB)..."
         try {
+            $oldPref = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
             Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+            $ProgressPreference = $oldPref
         } catch {
             Write-Host "  ERROR: Download failed from $zipUrl" -ForegroundColor Red
             Write-Host "  Verify the release tag exists at https://github.com/lemonade-sdk/llamacpp-rocm/releases" -ForegroundColor Yellow
@@ -381,7 +383,9 @@ if (-not $InstallServer -and $InstallClient) {
         if ($ggufFile) {
             Write-Host "  Downloading $ggufFile (this may take several minutes)..."
             try {
+                $oldPref = $ProgressPreference; $ProgressPreference = "SilentlyContinue"
                 Invoke-WebRequest -Uri $ggufUrl -OutFile $ggufDest -UseBasicParsing
+                $ProgressPreference = $oldPref
                 Write-Host "  GGUF downloaded: $ggufDest" -ForegroundColor Green
                 $script:LlamacppGgufPath = $ggufDest
             } catch {
