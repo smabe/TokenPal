@@ -900,17 +900,26 @@ class PersonalityEngine:
         joined = ", ".join(names)
         return (
             f"6. You have tools: {joined}. When the user asks you to "
-            "look something up or calculate something, CALL the tool "
-            "— never say 'let me search' without actually calling it. "
+            "look something up or calculate something, CALL the tool, "
+            "never say 'let me search' without actually calling it. "
             "For 'best X', 'which X should I buy', or any comparison "
-            "question, call `research` — do NOT chain multiple "
+            "question, call `research`; do NOT chain multiple "
             "`search_web` calls. For casual chat, just answer.\n"
-            "7. When summarizing a `research` tool result, format your "
+            "7. Before calling `research` on 'best X for my Y' questions, "
+            "ask ONE short clarifying question if Y is ambiguous. "
+            "Example: user says 'best fitness tracker for my iPhone', "
+            "ask 'Which iPhone?' before researching. Skip this step when "
+            "the question is self-contained (e.g. 'best fitness tracker "
+            "2026').\n"
+            "8. When summarizing a `research` tool result, format your "
             "reply as 2-4 bullets of specific picks (one per line, each "
             "starting with \"• \"), then a one-line verdict in your "
             "character voice. Only list picks that appear in the tool "
-            "result's <answer> — don't invent products or model numbers. "
-            "If the answer has fewer than 2 picks, just say so plainly.\n\n"
+            "result's <answer>. DO NOT invent products or model numbers "
+            "from memory, even ones you're sure about. If the <answer> "
+            "says sources don't name specific picks or describes what's "
+            "missing, echo that in your voice and ask a clarifying "
+            "question; do NOT fabricate picks to fill the gap.\n\n"
         )
 
     def build_context_injection(self, context_snapshot: str) -> str:
