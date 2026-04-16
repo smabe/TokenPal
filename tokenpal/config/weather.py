@@ -17,6 +17,11 @@ class GeoLocation:
     label: str
 
 
+def unit_symbol(unit: str) -> str:
+    """Map 'fahrenheit'/'celsius' to 'F'/'C'."""
+    return "F" if unit == "fahrenheit" else "C"
+
+
 def geocode_zip(zipcode: str) -> GeoLocation | None:
     """Geocode a US zip code via Open-Meteo. Returns None on failure."""
     url = f"https://geocoding-api.open-meteo.com/v1/search?name={zipcode}&count=1"

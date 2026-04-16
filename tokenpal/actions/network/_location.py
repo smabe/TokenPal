@@ -19,3 +19,9 @@ def get_lat_lon() -> tuple[float, float] | None:
         return None
     # Already rounded to 1 decimal in schema use, but enforce here too.
     return round(lat, 1), round(lon, 1)
+
+
+def get_temperature_unit() -> str:
+    return load_config().weather.temperature_unit
+
+

@@ -7,6 +7,7 @@ import logging
 import urllib.request
 from typing import Any
 
+from tokenpal.config.weather import unit_symbol
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
 
@@ -100,11 +101,11 @@ class OpenMeteoWeather(AbstractSense):
         wind = current.get("wind_speed_10m", 0)
         humidity = current.get("relative_humidity_2m", 0)
         condition = _WMO_CODES.get(code, "unknown")
-        unit_symbol = "F" if unit_param == "fahrenheit" else "C"
+        unit_sym = unit_symbol(unit_param)
 
         return {
             "temperature": temp,
-            "unit": unit_symbol,
+            "unit": unit_sym,
             "weather_code": code,
             "condition": condition,
             "wind_speed_mph": wind,
