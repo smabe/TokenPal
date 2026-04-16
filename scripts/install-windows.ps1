@@ -359,7 +359,7 @@ if (-not $InstallServer -and $InstallClient) {
         try {
             New-NetFirewallRule -DisplayName $llmRule `
                 -Direction Inbound -Protocol TCP -LocalPort 11434 `
-                -Action Allow -Profile Private | Out-Null
+                -Action Allow -Profile Private -ErrorAction Stop | Out-Null
             Write-Host "  Firewall rule added for TCP 11434" -ForegroundColor Green
         } catch {
             Write-Host "  WARNING: Could not add firewall rule for 11434 (need admin)." -ForegroundColor Yellow
@@ -817,7 +817,8 @@ if ($InstallClient) {
 if ($InstallServer) {
     $hostname = [System.Net.Dns]::GetHostName()
     Write-Host "  --- Server ---" -ForegroundColor Cyan
-    Write-Host "  Start server:  $RepoDir\start-server.bat"
+    $serverBat = if ($useLlamacpp) { "start-llamaserver.bat" } else { "start-server.bat" }
+    Write-Host "  Start server:  $RepoDir\$serverBat"
     Write-Host ""
     Write-Host "  Client config.toml:" -ForegroundColor White
     Write-Host "    [llm]"

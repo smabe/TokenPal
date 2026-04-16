@@ -74,28 +74,31 @@ def run_check(config_path: Path | None = None) -> int:
     return asyncio.run(_check(config_path))
 
 
-async def _check_ollama(config: object) -> int:
-    """Check Ollama connectivity and model availability. Returns problem count."""
+async def _check_inference(config: object) -> int:
+    """Check inference-engine connectivity and model availability. Returns problem count."""
     problems = 0
     api_url = config.llm.api_url
     model_name = config.llm.model_name
+    engine = getattr(config.llm, "inference_engine", "ollama")
+    label = "llama-server" if engine == "llamacpp" else "Ollama"
+    hint = "start-llamaserver.bat" if engine == "llamacpp" else "ollama serve"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"{api_url}/models")
             resp.raise_for_status()
-            print(f"  {_CHECK} Ollama reachable at {api_url}")
+            print(f"  {_CHECK} {label} reachable at {api_url}")
 
             models = resp.json().get("data", [])
             model_ids = {m.get("id", "") for m in models}
-            if model_name in model_ids:
+            if engine == "llamacpp" or model_name in model_ids:
                 print(f"  {_CHECK} Model '{model_name}' available")
             else:
                 print(f"  {_WARN} Model '{model_name}' not found")
                 print(f"      Run: ollama pull {model_name}")
                 problems += 1
     except httpx.HTTPError:
-        print(f"  {_FAIL} Cannot reach Ollama at {api_url}")
-        print("      Start it with: ollama serve")
+        print(f"  {_FAIL} Cannot reach {label} at {api_url}")
+        print(f"      Start it with: {hint}")
         problems += 1
     return problems
 
@@ -172,7 +175,7 @@ async def _check(config_path: Path | None) -> int:
     config = load_config(config_path=config_path)
     print(f"  {_CHECK} Config loaded")
 
-    problems += await _check_ollama(config)
+    problems += await _check_inference(config)
     problems += _check_senses(config)
     _check_actions(config)
 
@@ -226,9 +229,9 @@ async def _validate(config_path: Path | None) -> int:
         print(f"  {_WARN} git not found — git sense will not work")
         problems += 1
 
-    # 4. Ollama + model
+    # 4. Inference engine + model
     config = load_config(config_path=config_path)
-    problems += await _check_ollama(config)
+    problems += await _check_inference(config)
 
     # 5. Config
     print(f"  {_CHECK} Config loaded")
