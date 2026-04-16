@@ -138,8 +138,8 @@ def _extract(html: str, url: str) -> str:
             return str(extracted).strip()
     except ImportError:
         log.debug("trafilatura not installed; trying readability-lxml")
-    except Exception:
-        log.exception("trafilatura extract failed for %s", url)
+    except Exception as e:
+        log.debug("trafilatura extract failed for %s: %s", url, e)
 
     try:
         from readability import Document
@@ -152,6 +152,6 @@ def _extract(html: str, url: str) -> str:
     except ImportError:
         log.warning("readability-lxml not installed; returning empty extraction")
         return ""
-    except Exception:
-        log.exception("readability extract failed for %s", url)
+    except Exception as e:
+        log.debug("readability extract failed for %s: %s", url, e)
         return ""
