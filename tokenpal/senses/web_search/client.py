@@ -88,9 +88,8 @@ def _strip_html(s: str) -> str:
     return html.unescape(_HTML_TAG_RE.sub("", s)).strip()
 
 
-def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
-    """Return (title, snippet, url) of the first DDG Lite result, or None."""
-    # DDG Lite requires POST with form-urlencoded body; GET returns the search form.
+def _ddg_lite_fetch_body(query: str) -> str | None:
+    """POST the query to DDG Lite and return the raw HTML body, or None."""
     data = urllib.parse.urlencode({"q": query}).encode("utf-8")
     try:
         req = urllib.request.Request(
@@ -99,12 +98,22 @@ def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
             headers={"User-Agent": _USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            body = resp.read(_MAX_HTML_BYTES).decode("utf-8", errors="replace")
+            return resp.read(_MAX_HTML_BYTES).decode("utf-8", errors="replace")
     except Exception as e:  # noqa: BLE001
         log.debug("DDG lite fetch failed: %s", e)
         return None
 
-    if "result-link" not in body:
+
+def _ddg_unwrap_redirect(href: str) -> str:
+    """DDG Lite wraps outbound URLs in /l/?uddg=<target>. Unwrap to the real URL."""
+    uddg = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [""])[0]
+    return uddg or href
+
+
+def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
+    """Return (title, snippet, url) of the first DDG Lite result, or None."""
+    body = _ddg_lite_fetch_body(query)
+    if not body or "result-link" not in body:
         return None
 
     link = _DDG_LITE_LINK_RE.search(body)
@@ -116,15 +125,31 @@ def _ddg_lite_first_result(query: str) -> tuple[str, str, str] | None:
     snippet = _strip_html(snip.group(1))
     if not title or not snippet:
         return None
+    return title, snippet, _ddg_unwrap_redirect(link.group(1))
 
-    # DDG Lite wraps outbound URLs in a redirect like /l/?uddg=<target>.
-    # parse_qs already URL-decodes the value.
-    href = link.group(1)
-    uddg = urllib.parse.parse_qs(urllib.parse.urlparse(href).query).get("uddg", [""])[0]
-    if uddg:
-        href = uddg
 
-    return title, snippet, href
+def _ddg_lite_all_results(query: str, limit: int) -> list[tuple[str, str, str]]:
+    """Return up to `limit` (title, snippet, url) tuples from DDG Lite.
+
+    Links and snippets appear in the HTML in matched order, so we zip by
+    position. Skips rows where either half is empty.
+    """
+    body = _ddg_lite_fetch_body(query)
+    if not body or "result-link" not in body:
+        return []
+
+    links = _DDG_LITE_LINK_RE.findall(body)
+    snips = _DDG_LITE_SNIPPET_RE.findall(body)
+    out: list[tuple[str, str, str]] = []
+    for (href, raw_title), raw_snip in zip(links, snips):
+        if len(out) >= limit:
+            break
+        title = _strip_html(raw_title)
+        snippet = _strip_html(raw_snip)
+        if not title or not snippet:
+            continue
+        out.append((title, snippet, _ddg_unwrap_redirect(href)))
+    return out
 
 
 class DuckDuckGoBackend(SearchBackend):
@@ -259,3 +284,42 @@ def search(
     except Exception as e:  # noqa: BLE001
         log.debug("Wikipedia fallback error: %s", e)
         return None
+
+
+def search_many(
+    query: str,
+    backend: str = "duckduckgo",
+    limit: int = 5,
+) -> list[SearchResult]:
+    """Return up to `limit` results for a query. Only the DuckDuckGo Lite
+    backend returns multiple; Wikipedia's summary endpoint is inherently
+    1:1 and wraps its single result (or nothing) in a list.
+    NEVER raises on network errors — returns an empty list.
+    """
+    query = (query or "").strip()
+    if not query or limit <= 0:
+        return []
+
+    name = (backend or "duckduckgo").lower()
+
+    if name == "duckduckgo":
+        try:
+            hits = _ddg_lite_all_results(query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.debug("DuckDuckGo multi-result error: %s", e)
+            return []
+        return [
+            SearchResult(
+                query=query,
+                backend="duckduckgo",
+                title=title,
+                text=_truncate(snippet),
+                source_url=url,
+            )
+            for title, snippet, url in hits
+            if url
+        ]
+
+    # Single-result backends wrap their 0-or-1 result.
+    one = search(query, backend=name)
+    return [one] if one is not None else []

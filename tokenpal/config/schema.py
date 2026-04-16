@@ -194,7 +194,7 @@ class ResearchConfig:
     synth_model: str = ""
     reader_model: str = ""
     max_queries: int = 3
-    max_fetches: int = 5
+    max_fetches: int = 8
     token_budget: int = 6000
     per_search_timeout_s: float = 5.0
     per_fetch_timeout_s: float = 8.0

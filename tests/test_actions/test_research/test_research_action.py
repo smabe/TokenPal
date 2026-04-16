@@ -107,16 +107,20 @@ async def test_llm_not_injected_errors(grant_all_consent) -> None:
 async def test_happy_path_returns_cited_answer(
     monkeypatch: pytest.MonkeyPatch, grant_all_consent,
 ) -> None:
-    def fake_search(query: str, backend: str = "duckduckgo", **_: Any) -> SearchResult:
-        return SearchResult(
-            query=query,
-            backend=backend,  # type: ignore[arg-type]
-            title=f"Title for {query}",
-            text=f"Snippet about {query}",
-            source_url=f"https://example.com/{backend}",
-        )
+    def fake_search(
+        query: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
+        return [
+            SearchResult(
+                query=query,
+                backend=backend,  # type: ignore[arg-type]
+                title=f"Title for {query}",
+                text=f"Snippet about {query}",
+                source_url=f"https://example.com/{backend}",
+            )
+        ]
 
-    monkeypatch.setattr("tokenpal.brain.research.search", fake_search)
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search)
 
     async def fake_fetch(url: str, **_: Any) -> str | None:
         return f"Full article text from {url}"
@@ -152,7 +156,7 @@ async def test_failed_pipeline_returns_failure(
     monkeypatch: pytest.MonkeyPatch, grant_all_consent,
 ) -> None:
     monkeypatch.setattr(
-        "tokenpal.brain.research.search", lambda *_a, **_kw: None,
+        "tokenpal.brain.research.search_many", lambda *_a, **_kw: [],
     )
 
     llm = _ScriptedLLM([

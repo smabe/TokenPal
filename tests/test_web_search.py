@@ -275,3 +275,90 @@ def test_search_brave_backend_raises_not_implemented(monkeypatch: pytest.MonkeyP
     monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
     with pytest.raises(NotImplementedError):
         search("anything", backend="brave", brave_api_key="k")
+
+
+# ---------------------------------------------------------------------------
+# search_many — multi-result DDG Lite scraping
+# ---------------------------------------------------------------------------
+
+
+_DDG_LITE_MULTI_HTML = b"""
+<html><body>
+<table>
+<tr><td class="result-link"></td></tr>
+<tr><td><a href="/l/?uddg=https%3A%2F%2Fsite-a.com%2Fpage" class="result-link">Site A Title</a></td></tr>
+<tr><td class="result-snippet">Snippet about site A.</td></tr>
+<tr><td><a href="/l/?uddg=https%3A%2F%2Fsite-b.com%2Fpage" class="result-link">Site B Title</a></td></tr>
+<tr><td class="result-snippet">Snippet about site B.</td></tr>
+<tr><td><a href="/l/?uddg=https%3A%2F%2Fsite-c.com%2Fpage" class="result-link">Site C Title</a></td></tr>
+<tr><td class="result-snippet">Snippet about site C.</td></tr>
+</table>
+</body></html>
+"""
+
+
+def _urlopen_returning_body(body: bytes) -> MagicMock:
+    resp = MagicMock()
+    resp.read.return_value = body
+    cm = MagicMock()
+    cm.__enter__.return_value = resp
+    cm.__exit__.return_value = False
+    return MagicMock(return_value=cm)
+
+
+def test_search_many_ddg_returns_multiple_results():
+    from tokenpal.senses.web_search.client import search_many
+
+    with patch.object(
+        client_mod.urllib.request, "urlopen",
+        _urlopen_returning_body(_DDG_LITE_MULTI_HTML),
+    ):
+        results = search_many("best widgets", backend="duckduckgo", limit=5)
+
+    assert len(results) == 3
+    assert results[0].title == "Site A Title"
+    assert results[0].source_url == "https://site-a.com/page"
+    assert "site A" in results[0].text
+    assert results[2].source_url == "https://site-c.com/page"
+    assert all(r.backend == "duckduckgo" for r in results)
+
+
+def test_search_many_ddg_honors_limit():
+    from tokenpal.senses.web_search.client import search_many
+
+    with patch.object(
+        client_mod.urllib.request, "urlopen",
+        _urlopen_returning_body(_DDG_LITE_MULTI_HTML),
+    ):
+        results = search_many("best widgets", backend="duckduckgo", limit=2)
+
+    assert len(results) == 2
+
+
+def test_search_many_empty_query_returns_empty_list():
+    from tokenpal.senses.web_search.client import search_many
+
+    assert search_many("", backend="duckduckgo") == []
+    assert search_many("  ", backend="duckduckgo") == []
+
+
+def test_search_many_wikipedia_wraps_single_result():
+    from tokenpal.senses.web_search.client import search_many
+
+    wiki_result = SearchResult(
+        query="q", backend="wikipedia",
+        title="Wiki", text="body", source_url="https://wiki",
+    )
+    with patch.object(WikipediaBackend, "search", return_value=wiki_result):
+        results = search_many("q", backend="wikipedia")
+
+    assert results == [wiki_result]
+
+
+def test_search_many_wikipedia_empty_returns_empty_list():
+    from tokenpal.senses.web_search.client import search_many
+
+    with patch.object(WikipediaBackend, "search", return_value=None):
+        results = search_many("q", backend="wikipedia")
+
+    assert results == []

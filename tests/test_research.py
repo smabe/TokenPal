@@ -141,14 +141,16 @@ async def test_runner_planner_search_synthesize(monkeypatch: pytest.MonkeyPatch)
         _ok("Answer summarizing [1] and [2].", tokens=100),     # synthesizer
     ])
 
-    def fake_search(q: str, backend: str = "duckduckgo", **_: Any) -> SearchResult | None:
+    def fake_search_many(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
         if backend == "duckduckgo":
-            return _hit(f"https://ddg.example/{q}", "DDG title", "ddg summary", "duckduckgo")
+            return [_hit(f"https://ddg.example/{q}", "DDG title", "ddg summary", "duckduckgo")]
         if backend == "wikipedia":
-            return _hit(f"https://wiki.example/{q}", "Wiki title", "wiki summary", "wikipedia")
-        return None
+            return [_hit(f"https://wiki.example/{q}", "Wiki title", "wiki summary", "wikipedia")]
+        return []
 
-    monkeypatch.setattr("tokenpal.brain.research.search", fake_search)
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
 
     logs, log_cb = _logs()
     runner = ResearchRunner(
@@ -193,10 +195,12 @@ async def test_runner_no_sources_stops_before_synthesis(
 ) -> None:
     llm = _ScriptedLLM([_ok('[{"query": "q1"}]', tokens=30)])
 
-    def empty_search(q: str, backend: str = "duckduckgo", **_: Any) -> SearchResult | None:
-        return None
+    def empty_search(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
+        return []
 
-    monkeypatch.setattr("tokenpal.brain.research.search", empty_search)
+    monkeypatch.setattr("tokenpal.brain.research.search_many", empty_search)
 
     logs, log_cb = _logs()
     runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb)
@@ -208,10 +212,10 @@ async def test_runner_no_sources_stops_before_synthesis(
 async def test_runner_token_budget_skips_search(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = _ScriptedLLM([_ok('[{"query": "q1"}]', tokens=9999)])
 
-    def fake_search(q: str, **_: Any) -> SearchResult | None:
+    def fake_search(q: str, **_: Any) -> list[SearchResult]:
         raise AssertionError("search must not run after token budget trips")
 
-    monkeypatch.setattr("tokenpal.brain.research.search", fake_search)
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search)
 
     logs, log_cb = _logs()
     runner = ResearchRunner(
@@ -232,16 +236,18 @@ async def test_runner_search_timeout_survives_gather(
 
     call_count = {"n": 0}
 
-    def sometimes_hanging(q: str, backend: str = "duckduckgo", **_: Any) -> SearchResult | None:
+    def sometimes_hanging(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
         call_count["n"] += 1
         if backend == "duckduckgo":
             # Simulate a backend that hangs — asyncio.to_thread + wait_for trips.
             import time as _time
             _time.sleep(0.2)
-            return None
-        return _hit(f"https://wiki.example/{q}", "Wiki", "wiki snippet", "wikipedia")
+            return []
+        return [_hit(f"https://wiki.example/{q}", "Wiki", "wiki snippet", "wikipedia")]
 
-    monkeypatch.setattr("tokenpal.brain.research.search", sometimes_hanging)
+    monkeypatch.setattr("tokenpal.brain.research.search_many", sometimes_hanging)
 
     logs, log_cb = _logs()
     runner = ResearchRunner(
@@ -270,10 +276,10 @@ async def test_fetch_replaces_snippet_with_article_text(
         _ok("Answer [1].", tokens=30),
     ])
     monkeypatch.setattr(
-        "tokenpal.brain.research.search",
-        lambda q, backend="duckduckgo", **_: _hit(
-            "https://example.com", "Title", "short snippet", "duckduckgo"
-        ),
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://example.com", "Title", "short snippet", "duckduckgo")
+        ],
     )
 
     async def fake_fetch(_url: str) -> str:

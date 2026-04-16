@@ -18,7 +18,11 @@ from typing import Any
 
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.llm.base import AbstractLLMBackend
-from tokenpal.senses.web_search.client import BackendName, SearchResult, search
+from tokenpal.senses.web_search.client import (
+    BackendName,
+    SearchResult,
+    search_many,
+)
 
 log = logging.getLogger(__name__)
 
@@ -170,38 +174,40 @@ class ResearchRunner:
     async def _search_all(
         self, queries: list[PlannedQuery]
     ) -> list[SearchResult]:
-        tasks = [self._one_search(q.query, "duckduckgo") for q in queries]
-        tasks += [self._one_search(q.query, "wikipedia") for q in queries]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        tasks = [self._search_many(q.query, "duckduckgo") for q in queries]
+        tasks += [self._search_many(q.query, "wikipedia", limit=1) for q in queries]
+        batches = await asyncio.gather(*tasks, return_exceptions=True)
 
         collected: list[SearchResult] = []
         seen: set[str] = set()
-        for r in results:
-            if isinstance(r, SearchResult) and r.source_url and r.source_url not in seen:
-                collected.append(r)
-                seen.add(r.source_url)
-            elif isinstance(r, Exception):
-                log.debug("search sub-task failed: %s", r)
+        for batch in batches:
+            if isinstance(batch, Exception):
+                log.debug("search sub-task failed: %s", batch)
+                continue
+            for hit in batch:
+                if hit.source_url and hit.source_url not in seen:
+                    collected.append(hit)
+                    seen.add(hit.source_url)
         return collected
 
-    async def _one_search(
-        self, query: str, backend: BackendName
-    ) -> SearchResult | None:
+    async def _search_many(
+        self, query: str, backend: BackendName, limit: int = 5,
+    ) -> list[SearchResult]:
         sem = self._semaphores.get(backend)
         if sem is None:
-            return None
+            return []
         async with sem:
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(search, query, backend=backend),
+                    asyncio.to_thread(search_many, query, backend, limit),
                     timeout=self._per_search_timeout_s,
                 )
             except TimeoutError:
-                log.debug("search timeout: %s (%s)", query, backend)
-                return None
+                log.debug("search_many timeout: %s (%s)", query, backend)
+                return []
             except Exception:
-                log.exception("search backend %s crashed", backend)
-                return None
+                log.exception("search_many backend %s crashed", backend)
+                return []
 
     # ---- Stage 3: read ----------------------------------------------------
 
