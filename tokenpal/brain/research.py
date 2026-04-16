@@ -675,17 +675,30 @@ For comparison / "best X" / "which X should I buy" questions, emit:
   "verdict": {{"text": "<one-line winner>", "citation": <N>}}
 }}
 
-Use 2-4 picks. Pull names VERBATIM from source text; each "name" must appear
-in the cited source's excerpt. Do NOT invent picks from training data.
-Uncited or fabricated picks will be dropped.
+Rules for comparison:
+- Use 2-4 picks. Every "name" MUST appear verbatim in some source's excerpt.
+- BEFORE picking, scan the excerpts for product names. If fewer than 2
+  specific product names actually appear in the text, DO NOT invent picks
+  from memory. Use the factual shape instead.
 
-For factual / explanatory questions, emit:
+For factual / explanatory questions OR when sources lack the specifics the
+question asks for, emit:
 {{"kind": "factual", "answer": "<under 6 sentences>", "citations": [<N>, ...]}}
+
+Use the factual shape when:
+- The question assumes context the sources don't address (e.g. a specific
+  device model, version, or budget that no source mentions).
+- The sources cover the topic generally but not the specific angle asked.
+
+When emitting factual for a "best X" question where sources are too general,
+describe what the sources DO cover, note what's missing, and suggest what
+the user could clarify (e.g. "Sources cover 2026 fitness trackers in
+general but none mention iPhone 17 compatibility specifically; clarify
+which iOS features matter to you.").
 
 Rules:
 - Use only citation markers in the range {marker_range}.
-- If sources don't name specific options, emit a "factual" response with
-  answer "Sources don't name specific picks." and cite the sources you read.
+- Every answer MUST cite at least one source.
 
 Question: {question}
 """
