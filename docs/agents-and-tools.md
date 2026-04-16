@@ -260,10 +260,14 @@ A Claude-style research pipeline with citations.
 
 ### Pipeline
 
-1. **Planner** (LLM call 1, temp ≤ 0.3) — decompose the question into 1–5 search queries. Few-shot prompted to avoid over-decomposition (single-hop ≠ 5 queries). The current year is injected into the prompt so "best X" queries get stamped with the right year and results favor recent sources.
-2. **Search** (parallel, no LLM) — `asyncio.gather(..., return_exceptions=True)` across DuckDuckGo Lite (up to 5 results per query via HTML scraping; see `search_many` in `senses/web_search/client.py`) and Wikipedia REST. Per-backend `asyncio.Semaphore` prevents spurious 429s. Results deduped by URL. Typical run: 3 planned queries × 5 DDG results + 3 Wiki attempts = up to ~18 candidates before dedup.
-3. **Read** (no LLM) — for each promising hit, fetch full page via `fetch_url` (trafilatura → readability-lxml fallback). 500KB raw cap, sensitive-term filter, 4000 chars per-source excerpt handed to the synthesizer. No JS. Failures are silenced to DEBUG — a thin-pool warning fires if fewer than 3 sources survive.
-4. **Synthesize** (LLM call 2) — sources rendered as numbered list `[1] <url>\n<excerpt>` placed *before* the question in the user turn (recency bias favors citation fidelity). Prompt style-switches between "2-4 specific picks + verdict, every pick cited" for comparison questions and "under 6 sentences" for factual questions. Post-hoc regex validation strips dangling `[N]` markers that don't match any source; any stripping is logged as a hallucination signal.
+See `docs/research-architecture.md` for the full design, invariants, and
+extension points. Quick summary:
+
+1. **Planner** (LLM call 1) — decompose the question into 1-3 search queries. Year injected into the prompt so "best X" queries favor recent sources.
+2. **Search** (parallel, no LLM) — `asyncio.gather` across DuckDuckGo Lite only. Wikipedia's summary endpoint needs exact article titles and planner queries never match, so Wikipedia isn't in the research fan-out (it stays on `/ask`).
+3. **Read** (no LLM) — two-stage fetch: newspaper4k with its own fetcher (primary, gets past TLS/header fingerprint gates on modern product-review sites), aiohttp + multi-extractor chain (fallback). 2MB read cap, 300-char minimum extraction, narrow identity-critical content filter, 4000-char excerpts handed to the synthesizer.
+4. **Synthesize** (LLM call 2, thinking ON) — demands strict JSON matching `SYNTH_SCHEMA` (comparison kind with picks+verdict, or factual kind with answer+citations). Grammar-constrained on llama-server via `response_format: {"type":"json_schema",...}`, advisory on Ollama with prose fallback.
+5. **Validate + render** — every pick's name must appear in the cited source's excerpt (substring or all-tokens-present, case-insensitive). Wrong citations repair to a matching source rather than drop. Thresholds: 0 verified → downgrade, 1 → single-pick render with "more context would help" caveat, 2+ → full comparison render.
 
 ### 24h cache
 

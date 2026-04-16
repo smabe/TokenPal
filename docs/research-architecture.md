@@ -33,9 +33,16 @@ Model is *not* asked to think on this stage. Fast is the goal.
 
 ### 2. Search
 
-`_search_all` fans out across backends (DuckDuckGo + Wikipedia) via
-`asyncio.gather` with per-backend semaphores (rate-limit protection).
-Duplicate URLs are collapsed. Cap is `max_fetches` (default 8).
+`_search_all` fans queries out to DuckDuckGo Lite via `asyncio.gather`
+with a per-backend semaphore (rate-limit protection). Duplicate URLs
+are collapsed. Cap is `max_fetches` (default 8).
+
+Wikipedia is deliberately NOT in the fan-out. Its REST
+`/page/summary/` endpoint requires exact article titles, while the
+planner emits search-engine phrasings ("best X for Y 2026") which are
+never article slugs. Every Wikipedia call 404'd. The `/ask` tool still
+uses Wikipedia for factual one-shot lookups where the query IS a
+title ("Apollo 11", "Mazda MX-5").
 
 ### 3. Read (fetch + extract)
 
