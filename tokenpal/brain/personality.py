@@ -904,7 +904,12 @@ class PersonalityEngine:
             "— never say 'let me search' without actually calling it. "
             "For 'best X', 'which X should I buy', or any comparison "
             "question, call `research` — do NOT chain multiple "
-            "`search_web` calls. For casual chat, just answer.\n\n"
+            "`search_web` calls. For casual chat, just answer.\n"
+            "7. When summarizing a `research` tool result, format your "
+            "reply as 1-3 bullets of specific picks (one per line, each "
+            "starting with \"• \"), then a one-line verdict in your "
+            "character voice. Pull out the actual product/option names "
+            "from the answer — don't just paraphrase the whole thing.\n\n"
         )
 
     def build_context_injection(self, context_snapshot: str) -> str:
