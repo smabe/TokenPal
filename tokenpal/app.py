@@ -237,7 +237,7 @@ def main() -> None:
 
     def _cmd_model(args: str) -> CommandResult:
         prev_model = llm.model_name
-        result = _handle_model_command(args, llm, overlay, brain)
+        result = _handle_model_command(args, llm, overlay, brain, config)
         if llm.model_name != prev_model:
             brain.reset_conversation()
         return result
@@ -970,6 +970,7 @@ def _handle_model_command(
     llm: AbstractLLMBackend,
     overlay: AbstractOverlay,
     brain: Brain | None = None,
+    config: TokenPalConfig | None = None,
 ) -> CommandResult:
     """Handle /model subcommands."""
     import json
@@ -977,11 +978,19 @@ def _handle_model_command(
 
     parts = args.strip().split(maxsplit=1)
     subcmd = parts[0].lower() if parts else ""
+    inference_engine = (
+        config.llm.inference_engine if config is not None else "ollama"
+    )
     subargs = parts[1].strip() if len(parts) > 1 else ""
 
     # No args → show current model
     if not subcmd:
         return CommandResult(f"Current model: {llm.model_name}")
+
+    if subcmd in ("list", "pull", "browse") and inference_engine == "llamacpp":
+        return CommandResult(
+            "llama-server manages GGUFs manually — see docs/amd-dgpu-setup.md"
+        )
 
     if subcmd == "list":
         try:

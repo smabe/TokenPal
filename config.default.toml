@@ -20,6 +20,9 @@ filesystem_pulse = false     # activity bursts in watched folders (default: Down
 
 [llm]
 backend = "http"
+# inference_engine = "ollama"   # "ollama" | "llamacpp" — set "llamacpp" on AMD
+                                # dGPUs using the llama.cpp-direct path (RDNA 4).
+                                # See docs/amd-dgpu-setup.md.
 api_url = "http://localhost:11434/v1"
 model_name = "gemma4"           # global default, used when the active server has no remembered model
 max_tokens = 60                 # global default, used when the active server has no remembered cap

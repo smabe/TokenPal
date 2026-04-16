@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tokenpal.server.models import TrainingJob, TrainingStatus
-from tokenpal.server.worker import _run_pipeline
+from tokenpal.server.worker import _run_pipeline, _unload_llamaserver
 
 # Patch targets: the source modules where the functions are defined,
 # because worker.py imports them lazily inside _run_pipeline().
@@ -109,3 +109,59 @@ def test_pipeline_updates_progress(tmp_path):
     assert any("Training" in msg for msg in job.progress)
     assert any("Merging" in msg for msg in job.progress)
     assert any("Done" in msg for msg in job.progress)
+
+
+def test_pipeline_llamacpp_raises_at_registration(tmp_path):
+    """llamacpp backend must fail loudly at registration until M4 lands."""
+    job = _make_job()
+
+    with (
+        patch(_WIKI, return_value=_mock_profile()),
+        patch(_PREP, return_value=(tmp_path / "t.jsonl", tmp_path / "v.jsonl")),
+        patch(_CHECK_GPU, return_value=True),
+        patch(_COUNT, return_value=40),
+        patch(_AUTO_TUNE, side_effect=lambda c, n: c),
+        patch(_SETUP, return_value=(MagicMock(), MagicMock())),
+        patch(_TRAIN, return_value=tmp_path / "adapter"),
+        patch(_MERGE),
+        patch(_REGISTER, return_value=True),
+        patch(_SYS_PROMPT, return_value="prompt"),
+        patch("tokenpal.server.worker._unload_llamaserver") as m_unload,
+        pytest.raises(NotImplementedError, match="M4"),
+    ):
+        _run_pipeline(
+            job, tmp_path / "data", tmp_path / "output",
+            inference_engine="llamacpp",
+        )
+
+    m_unload.assert_called_once()
+
+
+def test_pipeline_ollama_path_skips_llamaserver_kill(tmp_path):
+    """Default ollama backend must not call the llama-server kill helper."""
+    job = _make_job()
+
+    with (
+        patch(_WIKI, return_value=_mock_profile()),
+        patch(_PREP, return_value=(tmp_path / "t.jsonl", tmp_path / "v.jsonl")),
+        patch(_CHECK_GPU, return_value=True),
+        patch(_COUNT, return_value=40),
+        patch(_AUTO_TUNE, side_effect=lambda c, n: c),
+        patch(_SETUP, return_value=(MagicMock(), MagicMock())),
+        patch(_TRAIN, return_value=tmp_path / "adapter"),
+        patch(_MERGE),
+        patch(_REGISTER, return_value=True),
+        patch(_SYS_PROMPT, return_value="prompt"),
+        patch("tokenpal.server.worker._unload_llamaserver") as m_unload,
+    ):
+        _run_pipeline(job, tmp_path / "data", tmp_path / "output")
+
+    m_unload.assert_not_called()
+
+
+def test_unload_llamaserver_is_best_effort():
+    """taskkill failures must not propagate — training should OOM loudly later."""
+    msgs: list[str] = []
+    with patch("subprocess.run", side_effect=OSError("no such binary")):
+        _unload_llamaserver(msgs.append)
+    assert any("llama-server" in m for m in msgs)

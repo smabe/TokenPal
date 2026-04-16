@@ -59,6 +59,12 @@ class WebSearchConfig:
 @dataclass
 class LLMConfig:
     backend: str = "http"
+    # Inference engine running behind api_url. "ollama" is the default across
+    # NVIDIA/Apple/RDNA3 boxes. "llamacpp" switches TokenPal's server-side
+    # plumbing (training VRAM unload, model registration) and disables Ollama
+    # registry slash commands (/model pull|browse) for AMD dGPUs that need
+    # llama.cpp-direct with native gfx120X kernels. See docs/amd-dgpu-setup.md.
+    inference_engine: Literal["ollama", "llamacpp"] = "ollama"
     model_path: str = ""
     api_url: str = "http://localhost:11434/v1"
     model_name: str = "gemma4"

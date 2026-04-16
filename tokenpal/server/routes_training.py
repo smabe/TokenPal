@@ -17,6 +17,7 @@ async def start_training(req: TrainRequest, request: Request) -> TrainResponse:
     Raises 409 if a training job is already running.
     """
     store = request.app.state.job_store
+    inference_engine = getattr(request.app.state, "inference_engine", "ollama")
 
     try:
         job = await submit_training_job(
@@ -24,6 +25,7 @@ async def start_training(req: TrainRequest, request: Request) -> TrainResponse:
             character=req.character,
             base_model=req.base_model,
             store=store,
+            inference_engine=inference_engine,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))

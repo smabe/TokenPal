@@ -34,8 +34,12 @@ class TokenPalServerError(Exception):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Startup: shared httpx client, job store, Ollama health check."""
-    ollama_url = getattr(app.state, "ollama_url", "http://localhost:11434")
+    """Startup: shared httpx client, job store, inference-engine health check."""
+    inference_url = getattr(
+        app.state, "inference_url",
+        getattr(app.state, "ollama_url", "http://localhost:11434"),
+    )
+    engine = getattr(app.state, "inference_engine", "ollama")
 
     app.state.ollama_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0),
@@ -46,17 +50,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.job_store = JsonFileJobStore(jobs_dir)
     app.state.job_store.recover_stale_jobs()
 
-    # Quick Ollama health check (non-fatal)
+    # Quick inference-engine health check (non-fatal)
     try:
-        resp = await app.state.ollama_client.get(f"{ollama_url}/")
+        resp = await app.state.ollama_client.get(f"{inference_url}/")
         app.state.ollama_healthy = resp.status_code == 200
         if app.state.ollama_healthy:
-            log.info("Ollama reachable at %s", ollama_url)
+            log.info("%s reachable at %s", engine, inference_url)
         else:
-            log.warning("Ollama returned %d at %s", resp.status_code, ollama_url)
+            log.warning("%s returned %d at %s", engine, resp.status_code, inference_url)
     except httpx.HTTPError:
         app.state.ollama_healthy = False
-        log.warning("Ollama not reachable at %s — start with: ollama serve", ollama_url)
+        hint = "ollama serve" if engine == "ollama" else "start-llamaserver.bat"
+        log.warning(
+            "%s not reachable at %s — start with: %s", engine, inference_url, hint,
+        )
 
     yield
 
@@ -64,16 +71,27 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 def create_app(
-    ollama_url: str = "http://localhost:11434",
+    inference_url: str | None = None,
     host: str = "127.0.0.1",
+    inference_engine: str = "ollama",
+    ollama_url: str | None = None,  # deprecated alias; remove next release
 ) -> FastAPI:
-    """Create the FastAPI application."""
+    """Create the FastAPI application.
+
+    ``ollama_url`` is a deprecated alias for ``inference_url`` kept for one
+    release so external callers (tests, embedders) don't break on the rename.
+    """
+    if inference_url is None:
+        inference_url = ollama_url if ollama_url is not None else "http://localhost:11434"
     app = FastAPI(
         title="TokenPal Server",
         version=__version__,
         lifespan=lifespan,
     )
-    app.state.ollama_url = ollama_url
+    app.state.inference_url = inference_url
+    app.state.inference_engine = inference_engine
+    # Back-compat: routes still read app.state.ollama_url. Dropped next release.
+    app.state.ollama_url = inference_url
 
     # Routes
     app.include_router(inference_router)
@@ -139,7 +157,11 @@ def main() -> None:
     else:
         auth_backend = NoAuth()
 
-    app = create_app(ollama_url=config.server.ollama_url, host=host)
+    app = create_app(
+        inference_url=config.server.ollama_url,
+        host=host,
+        inference_engine=config.llm.inference_engine,
+    )
     app.state.auth_backend = auth_backend
 
     uvicorn.run(app, host=host, port=port, log_level="info")
