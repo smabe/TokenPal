@@ -232,17 +232,28 @@ class ResearchRunner:
                     "research dropped %d of %d picks: %s",
                     len(dropped), len(result.picks), names,
                 )
-            if len(kept) < 2:
+            if len(kept) == 0:
                 self._log(
                     f"  synth: {len(result.picks)} picks generated, "
-                    f"{len(kept)} verified, downgrading"
+                    f"0 verified, downgrading"
                 )
                 log.info(
-                    "research synth produced %d picks, %d verified "
+                    "research synth produced %d picks, 0 verified "
                     "(raw len=%d)",
-                    len(result.picks), len(kept), len(raw_text),
+                    len(result.picks), len(raw_text),
                 )
                 return "Sources don't name enough verifiable picks."
+            if len(kept) == 1:
+                self._log(
+                    f"  synth: {len(result.picks)} picks generated, "
+                    f"only 1 verified, rendering with caveat"
+                )
+                log.info(
+                    "research synth produced %d picks, 1 verified "
+                    "(raw len=%d)",
+                    len(result.picks), len(raw_text),
+                )
+                return _render_single_pick(kept[0])
             return _render_synth_result(replace(result, picks=kept))
 
         valid_citations = [c for c in result.citations if 1 <= c <= max_n]
@@ -602,6 +613,20 @@ def _validate_picks(
                 )
             dropped.append(pick)
     return kept, dropped
+
+
+def _render_single_pick(pick: Pick) -> str:
+    """Render when only one pick is grounded in the source pool.
+
+    Phrased so the conversation LLM reads it as an incomplete answer and
+    naturally asks a clarifying question (per the system prompt rules),
+    rather than padding with fabricated picks from training data.
+    """
+    return (
+        f"Only one pick is grounded in the available sources; "
+        f"more context would help narrow it further.\n"
+        f"- {pick.name}: {pick.reason} [{pick.citation}]"
+    )
 
 
 def _render_synth_result(result: SynthResult) -> str:

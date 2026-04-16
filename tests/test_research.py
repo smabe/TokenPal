@@ -17,6 +17,7 @@ from tokenpal.brain.research import (
     Verdict,
     _parse_planner_output,
     _parse_synth_json,
+    _render_single_pick,
     _render_synth_result,
     _strip_dangling_markers,
     _validate_picks,
@@ -548,11 +549,12 @@ async def test_runner_json_synth_happy_path(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_runner_drops_uncited_pick_and_downgrades(
+async def test_runner_drops_uncited_pick_and_renders_single(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Synth fabricates one pick not in sources — runner drops it and,
-    with only 1 valid pick left, downgrades to 'not enough picks'."""
+    """Synth fabricates one pick not in sources; runner drops it and
+    renders the one verified pick with a 'more context would help'
+    caveat instead of the downgrade (so the user sees a real answer)."""
     synth_json = (
         '{"kind": "comparison", "picks": ['
         '{"name": "Real Watch", "reason": "in source", "citation": 1}, '
@@ -576,8 +578,45 @@ async def test_runner_drops_uncited_pick_and_downgrades(
     session = await runner.run("best")
 
     assert session.stopped_reason == ResearchStopReason.COMPLETE
-    assert "enough verifiable picks" in session.answer
+    assert "Real Watch" in session.answer
+    assert "more context would help" in session.answer.lower()
     assert any("Made-Up Watch 9000" in line for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_runner_zero_verified_still_downgrades(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All picks hallucinated; downgrade stays."""
+    synth_json = (
+        '{"kind": "comparison", "picks": ['
+        '{"name": "Fake One", "reason": "x", "citation": 1}, '
+        '{"name": "Fake Two", "reason": "x", "citation": 1}], '
+        '"verdict": {"text": "Fake One", "citation": 1}}'
+    )
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok(synth_json, tokens=200),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "Nothing matches here.", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1)
+    session = await runner.run("best")
+    assert "enough verifiable picks" in session.answer
+
+
+def test_render_single_pick_includes_caveat() -> None:
+    pick = Pick(name="LG G4 OLED", reason="best for home theater", citation=2)
+    rendered = _render_single_pick(pick)
+    assert "LG G4 OLED" in rendered
+    assert "best for home theater" in rendered
+    assert "[2]" in rendered
+    assert "more context would help" in rendered.lower()
 
 
 @pytest.mark.asyncio

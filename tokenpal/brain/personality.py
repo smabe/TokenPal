@@ -190,18 +190,18 @@ SENSITIVE_APPS: list[str] = [
 ]
 
 # Strict subset for filtering external/untrusted content (search results,
-# fetched articles, HN titles). Wellness apps drop out because an article
-# mentioning "fitbit" or "health" is talking about consumer products, not
-# a privacy-critical interaction — filtering them breaks research on any
-# fitness/wellness topic. Banking, password managers, and messaging
-# remain because those names in external content can anchor real data
-# leaks or prompt injection.
+# fetched articles, HN titles). Keep only unambiguous identity-critical
+# brand names. Anything that's a common English word in some other
+# context drops out: "signal", "messages", "keychain", "chase",
+# "fidelity", "keeper" all substring-match ordinary prose (video signal,
+# audio fidelity, chase scene, that's a keeper) and produce false
+# positives that break research on consumer topics. Fitness/wellness
+# terms also drop out for the same reason.
 SENSITIVE_CONTENT_TERMS: list[str] = [
-    "1password", "bitwarden", "lastpass", "keychain", "dashlane",
-    "keeper", "nordpass",
-    "chase", "wells fargo", "bank of america", "capital one", "venmo",
-    "paypal", "schwab", "fidelity", "robinhood", "coinbase",
-    "messages", "signal", "whatsapp", "telegram",
+    "1password", "bitwarden", "lastpass", "dashlane", "nordpass",
+    "wells fargo", "bank of america", "capital one", "venmo", "paypal",
+    "schwab", "robinhood", "coinbase",
+    "whatsapp", "telegram",
 ]
 
 _SENSITIVE_APPS_LOWER: tuple[str, ...] = tuple(app.lower() for app in SENSITIVE_APPS)

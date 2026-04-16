@@ -47,28 +47,24 @@ _MIN_EXTRACT_CHARS = 300
 
 async def fetch_and_extract(url: str, *, timeout_s: float = _DEFAULT_TIMEOUT_S) -> str | None:
     """Fetch URL and return plain extracted article text. None on any failure,
-    including sensitive-term detection. Callers are responsible for consent."""
+    including sensitive-term detection. Callers are responsible for consent.
+
+    Two-stage: try our aiohttp fetch + multi-extractor chain first. If the
+    result is under _MIN_EXTRACT_CHARS, fall back to newspaper4k's own
+    fetcher, which succeeds on sites that serve thin HTML to aiohttp
+    (cnet, tomsguide, etc. do TLS fingerprinting or header-combo gates).
+    """
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None
 
-    try:
-        raw = await asyncio.wait_for(_fetch(url), timeout=timeout_s)
-    except TimeoutError:
-        log.debug("fetch_url: timeout after %.1fs for %s", timeout_s, url)
-        return None
-    except aiohttp.ClientError as e:
-        log.debug("fetch_url: client error %s for %s", e, url)
-        return None
+    text = await _fetch_via_newspaper(url, timeout_s=timeout_s)
+    if not text or len(text) < _MIN_EXTRACT_CHARS:
+        fallback = await _fetch_via_aiohttp(url, timeout_s=timeout_s)
+        if fallback and len(fallback) > len(text):
+            text = fallback
 
-    if not raw:
-        return None
-
-    text = _extract(raw, url)
     if not text:
-        log.debug(
-            "fetch_url: extraction empty (%d HTML bytes) for %s", len(raw), url
-        )
         return None
     if len(text) < _MIN_EXTRACT_CHARS:
         log.debug(
@@ -80,6 +76,53 @@ async def fetch_and_extract(url: str, *, timeout_s: float = _DEFAULT_TIMEOUT_S) 
         log.debug("fetch_url: content filtered (sensitive) for %s", url)
         return None
     return text[:_MAX_EXTRACT_CHARS]
+
+
+async def _fetch_via_aiohttp(url: str, *, timeout_s: float) -> str:
+    try:
+        raw = await asyncio.wait_for(_fetch(url), timeout=timeout_s)
+    except TimeoutError:
+        log.debug("fetch_url: aiohttp timeout after %.1fs for %s", timeout_s, url)
+        return ""
+    except aiohttp.ClientError as e:
+        log.debug("fetch_url: aiohttp client error %s for %s", e, url)
+        return ""
+    if not raw:
+        return ""
+    text = _extract(raw, url)
+    if not text:
+        log.debug(
+            "fetch_url: extraction empty (%d HTML bytes) for %s", len(raw), url
+        )
+    return text
+
+
+async def _fetch_via_newspaper(url: str, *, timeout_s: float) -> str:
+    """Run newspaper4k's own fetch+parse in a thread. Gets past TLS/header
+    gates that reject aiohttp; returns "" on any failure."""
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_newspaper_blocking_fetch, url),
+            timeout=timeout_s,
+        )
+    except TimeoutError:
+        log.debug("fetch_url: newspaper timeout after %.1fs for %s", timeout_s, url)
+        return ""
+
+
+def _newspaper_blocking_fetch(url: str) -> str:
+    try:
+        import newspaper
+    except ImportError:
+        return ""
+    try:
+        article = newspaper.Article(url)
+        article.download()
+        article.parse()
+        return (article.text or "").strip()
+    except Exception as e:
+        log.debug("newspaper fetch failed for %s: %s", url, e)
+        return ""
 
 
 @register_action
@@ -141,17 +184,32 @@ async def _fetch(url: str) -> str | None:
 
 
 def _extract(html: str, url: str) -> str:
-    """Try trafilatura in three modes before falling back to readability.
+    """Walk extractors in order; return the first result clearing the
+    _MIN_EXTRACT_CHARS threshold, else the longest candidate.
 
-    favor_precision rejects borderline text; on ad-heavy news sites it often
-    returns None where the looser modes would extract the article body. We
-    walk from strictest to most permissive so clean pages stay clean and
-    messy ones still yield something.
+    Different extractors win on different site shapes: trafilatura is best
+    on clean news/long-form, newspaper4k is more aggressive on JS-heavy
+    React/Next sites where trafilatura finds only title/boilerplate,
+    readability is a last-resort tag-stripper. Running all three and
+    picking the largest useful result beats betting on one.
     """
+    candidates: list[str] = []
+    for extractor in (_extract_trafilatura, _extract_newspaper, _extract_readability):
+        result = extractor(html, url)
+        if result and len(result) >= _MIN_EXTRACT_CHARS:
+            return result
+        if result:
+            candidates.append(result)
+    return max(candidates, key=len, default="")
+
+
+def _extract_trafilatura(html: str, url: str) -> str:
     try:
         import trafilatura
-
-        for mode in ({"favor_precision": True}, {"favor_recall": True}, {}):
+    except ImportError:
+        return ""
+    for mode in ({"favor_precision": True}, {"favor_recall": True}, {}):
+        try:
             extracted = trafilatura.extract(
                 html,
                 url=url,
@@ -159,24 +217,40 @@ def _extract(html: str, url: str) -> str:
                 include_tables=False,
                 **mode,
             )
-            if extracted:
-                return str(extracted).strip()
-    except ImportError:
-        log.debug("trafilatura not installed; trying readability-lxml")
-    except Exception as e:
-        log.debug("trafilatura extract failed for %s: %s", url, e)
+        except Exception as e:
+            log.debug("trafilatura extract failed for %s: %s", url, e)
+            return ""
+        if extracted:
+            return str(extracted).strip()
+    return ""
 
+
+def _extract_newspaper(html: str, url: str) -> str:
+    try:
+        import newspaper
+    except ImportError:
+        return ""
+    try:
+        article = newspaper.Article(url)
+        article.download(input_html=html)
+        article.parse()
+        return (article.text or "").strip()
+    except Exception as e:
+        log.debug("newspaper extract failed for %s: %s", url, e)
+        return ""
+
+
+def _extract_readability(html: str, url: str) -> str:
     try:
         from readability import Document
-
+    except ImportError:
+        log.warning("readability-lxml not installed; skipping last-resort extractor")
+        return ""
+    try:
+        import re
         doc = Document(html)
         summary_html = doc.summary(html_partial=True)
-        import re
-
         return re.sub(r"<[^>]+>", " ", summary_html).strip()
-    except ImportError:
-        log.warning("readability-lxml not installed; returning empty extraction")
-        return ""
     except Exception as e:
         log.debug("readability extract failed for %s: %s", url, e)
         return ""
