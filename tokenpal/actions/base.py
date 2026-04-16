@@ -25,6 +25,7 @@ class ActionResult:
 
     output: str
     success: bool = True
+    display_url: str | None = None
 
 
 class AbstractAction(abc.ABC):

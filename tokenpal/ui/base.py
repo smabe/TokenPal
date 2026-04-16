@@ -45,7 +45,9 @@ class AbstractOverlay(abc.ABC):
     def log_user_message(self, text: str) -> None:
         """Append a user message to the chat log. Optional."""
 
-    def log_buddy_message(self, text: str) -> None:
+    def log_buddy_message(
+        self, text: str, *, markup: bool = False, url: str | None = None,
+    ) -> None:
         """Append a buddy message to the chat log. Optional."""
 
     def clear_log(self) -> None:

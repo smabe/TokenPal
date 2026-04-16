@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from rich.markup import escape as _esc_markup
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -61,8 +62,10 @@ class UpdateStatus(Message):
 
 
 class LogBuddyMessage(Message):
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, markup: bool = False, url: str | None = None) -> None:
         self.text = text
+        self.markup = markup
+        self.url = url
         super().__init__()
 
 
@@ -372,6 +375,8 @@ class TokenPalApp(App[None]):
         self._chat_log_user_hidden: bool = False
         self._pending_bubble: SpeechBubble | None = None
         self._last_region_size: tuple[int, int] | None = None
+        self._chat_log_lines: list[str] = []
+        self._link_urls: list[str] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -384,10 +389,12 @@ class TokenPalApp(App[None]):
                 yield Input(placeholder="Type a message or /command...", id="user-input")
                 yield StatusBarWidget()
         with VerticalScroll(id="chat-log"):
-            yield Static(id="chat-log-content")
+            yield Static(id="chat-log-content", markup=True)
 
     def on_mount(self) -> None:
         self._overlay._is_running = True
+        self._chat_log_widget = self.query_one("#chat-log-content", Static)
+        self._chat_log_scroll = self.query_one("#chat-log", VerticalScroll)
         buddy = self.query_one(BuddyWidget)
         if self._overlay._pending_voice_frames:
             buddy.set_custom_frames(self._overlay._pending_voice_frames)
@@ -479,22 +486,39 @@ class TokenPalApp(App[None]):
             if self._overlay._input_callback:
                 self._overlay._input_callback(text)
 
-    def _log_user(self, text: str) -> None:
-        content = self.query_one("#chat-log-content", Static)
-        current = content.render().plain
-        ts = datetime.now().strftime("%I:%M %p")
-        line = f"──────────────────────\n[{ts}]\nYou: {text}"
-        content.update(f"{current}\n{line}" if current else line)
-        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
+    _MAX_CHAT_LOG_LINES = 500
 
-    def _log_buddy(self, text: str) -> None:
-        content = self.query_one("#chat-log-content", Static)
-        current = content.render().plain
+    def _append_log(
+        self, name: str, text: str, *, markup: bool = False, url: str | None = None,
+    ) -> None:
         ts = datetime.now().strftime("%I:%M %p")
+        safe = text if markup else _esc_markup(text)
+        line = f"──────────────────────\n\\[{ts}]\n{_esc_markup(name)}: {safe}"
+        if url:
+            idx = len(self._link_urls)
+            self._link_urls.append(url)
+            line += (
+                f"\n[underline #5599ff][@click=app.open_chat_link(\"{idx}\")]"
+                f"{_esc_markup(url)}[/][/underline #5599ff]"
+            )
+        lines = self._chat_log_lines
+        lines.append(line)
+        if len(lines) > self._MAX_CHAT_LOG_LINES:
+            del lines[: len(lines) - self._MAX_CHAT_LOG_LINES]
+        self._chat_log_widget.update("\n".join(lines))
+        self._chat_log_scroll.scroll_end(animate=False)
+
+    def action_open_chat_link(self, link_id: str) -> None:
+        idx = int(link_id)
+        if 0 <= idx < len(self._link_urls):
+            self.open_url(self._link_urls[idx])
+
+    def _log_user(self, text: str) -> None:
+        self._append_log("You", text)
+
+    def _log_buddy(self, text: str, *, markup: bool = False, url: str | None = None) -> None:
         name = (self._overlay._voice_name or self._overlay._buddy_name).capitalize()
-        line = f"──────────────────────\n[{ts}]\n{name}: {text}"
-        content.update(f"{current}\n{line}" if current else line)
-        self.query_one("#chat-log", VerticalScroll).scroll_end(animate=False)
+        self._append_log(name, text, markup=markup, url=url)
 
     # --- Message handlers (all run on app thread) ---
 
@@ -568,13 +592,15 @@ class TokenPalApp(App[None]):
         self.query_one(StatusBarWidget).set_text(message.text)
 
     def on_log_buddy_message(self, message: LogBuddyMessage) -> None:
-        self._log_buddy(message.text)
+        self._log_buddy(message.text, markup=message.markup, url=message.url)
 
     def on_log_user_message(self, message: LogUserMessage) -> None:
         self._log_user(message.text)
 
     def on_clear_log(self, _message: ClearLog) -> None:
-        self.query_one("#chat-log-content", Static).update("")
+        self._chat_log_lines.clear()
+        self._link_urls.clear()
+        self._chat_log_widget.update("")
 
     def on_toggle_chat_log(self, _message: ToggleChatLog) -> None:
         self.action_toggle_chat_log()
@@ -644,8 +670,10 @@ class TextualOverlay(AbstractOverlay):
     def clear_voice_frames(self) -> None:
         self._post(ClearVoiceFrames())
 
-    def log_buddy_message(self, text: str) -> None:
-        self._post(LogBuddyMessage(text))
+    def log_buddy_message(
+        self, text: str, *, markup: bool = False, url: str | None = None,
+    ) -> None:
+        self._post(LogBuddyMessage(text, markup=markup, url=url))
 
     def log_user_message(self, text: str) -> None:
         self._post(LogUserMessage(text))

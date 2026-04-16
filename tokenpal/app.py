@@ -143,8 +143,14 @@ def main() -> None:
     # Set up the overlay (must happen on main thread)
     overlay.setup()
 
-    def _agent_log(text: str) -> None:
-        overlay.schedule_callback(lambda t=text: overlay.log_buddy_message(t))
+    def _agent_log(
+        text: str, *, markup: bool = False, url: str | None = None,
+    ) -> None:
+        overlay.schedule_callback(
+            lambda t=text, m=markup, u=url: overlay.log_buddy_message(
+                t, markup=m, url=u,
+            )
+        )
 
     async def _agent_confirm(tool_name: str, args: dict[str, Any]) -> bool:
         from tokenpal.brain.agent import fmt_args
@@ -195,6 +201,7 @@ def main() -> None:
             confirm_callback=_agent_confirm,
         ),
         research_bridge=ResearchBridge(config=config.research),
+        log_callback=_agent_log,
     )
 
     # Load voice-specific buddy art into the overlay
@@ -380,8 +387,11 @@ def main() -> None:
                 )
                 return
 
-            raw = f"/ask → {_esc(result.title[:200])}\n{_esc(result.text[:500])}"
-            overlay.schedule_callback(lambda r=raw: overlay.log_buddy_message(r))
+            raw = f"/ask -> {_esc(result.title[:200])}\n{_esc(result.text[:500])}"
+            src = result.source_url
+            overlay.schedule_callback(
+                lambda r=raw, u=src: overlay.log_buddy_message(r, markup=True, url=u)
+            )
 
             # Wrap untrusted text in delimiters — basic prompt-injection mitigation.
             backend_name = result.backend.replace('"', "")

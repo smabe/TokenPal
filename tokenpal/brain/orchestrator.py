@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
-from tokenpal.brain.agent import AgentRunner, AgentSession
+from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
@@ -171,6 +171,7 @@ class Brain:
         conversation: ConversationConfig | None = None,
         agent_bridge: AgentBridge | None = None,
         research_bridge: ResearchBridge | None = None,
+        log_callback: Callable[..., None] | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -180,6 +181,7 @@ class Brain:
         self._senses = senses
         self._llm = llm
         self._ui_callback = ui_callback
+        self._log_callback = log_callback
         self._personality = personality
         self._status_callback = status_callback
         self._memory = memory
@@ -747,12 +749,18 @@ class Brain:
             if not response.tool_calls:
                 return response
 
+            if log.isEnabledFor(logging.DEBUG):
+                for tc in response.tool_calls:
+                    log.debug("Tool round %d: %s(%s)", _round, tc.name, fmt_args(tc.arguments))
+
             messages.append(response.to_assistant_message())
 
             results = await asyncio.gather(
                 *(self._execute_tool_call(tc) for tc in response.tool_calls),
             )
             for tc, result_text in zip(response.tool_calls, results):
+                if log.isEnabledFor(logging.DEBUG):
+                    log.debug("Tool round %d result [%s]: %.200s", _round, tc.name, result_text)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -813,7 +821,13 @@ class Brain:
             return f"Unknown tool '{tc.name}'."
         try:
             result = await action.execute(**tc.arguments)
-            log.info("Action '%s' executed: %s", tc.name, result.output)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug(
+                    "Action '%s'(%s) -> %.200s",
+                    tc.name, fmt_args(tc.arguments), result.output,
+                )
+            if result.display_url and self._log_callback:
+                self._log_callback("Source:", url=result.display_url)
             return result.output
         except Exception as e:
             log.warning("Action '%s' failed: %s", tc.name, e)

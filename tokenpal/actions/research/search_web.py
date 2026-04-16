@@ -73,7 +73,7 @@ class SearchWebAction(AbstractAction):
             f"{result.title}\n{result.text}\n"
             f"</tool_result>"
         )
-        return ActionResult(output=body, success=True)
+        return ActionResult(output=body, success=True, display_url=result.source_url)
 
 
 # Brave lives in BackendName but its backend is stub-only (NotImplementedError),
