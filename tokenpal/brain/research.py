@@ -74,6 +74,10 @@ _BACKEND_CONCURRENCY: dict[BackendName, int] = {
 # token usage bounded across max_fetches sources.
 _PER_SOURCE_EXCERPT_CHARS = 4000
 
+# Fewer sources than this and we warn — synthesis from 1-2 pages tends to
+# produce either training-data hallucinations or single-source bias.
+_THIN_POOL_THRESHOLD = 3
+
 
 class ResearchRunner:
     """Runs a single /research question end-to-end.
@@ -143,6 +147,16 @@ class ResearchRunner:
         if not session.sources:
             session.stopped_reason = ResearchStopReason.NO_SOURCES
             return session
+
+        if len(session.sources) < _THIN_POOL_THRESHOLD:
+            self._log(
+                f"  warning: thin source pool ({len(session.sources)} sources) "
+                f"— answer may be unreliable"
+            )
+            log.warning(
+                "Research returned %d sources (threshold %d) — synthesis "
+                "will be thin", len(session.sources), _THIN_POOL_THRESHOLD,
+            )
 
         try:
             answer, used = await self._synthesize(question, session.sources)
