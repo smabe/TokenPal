@@ -277,8 +277,11 @@ class ResearchRunner:
     async def _search_all(
         self, queries: list[PlannedQuery]
     ) -> list[SearchResult]:
+        # Wikipedia's summary endpoint needs exact article titles, but
+        # planner queries are search-engine phrasings ("best X for Y 2026"),
+        # never article slugs, so every Wikipedia call 404s. /ask still uses
+        # Wikipedia for factual one-shot lookups where the query IS a title.
         tasks = [self._search_many(q.query, "duckduckgo") for q in queries]
-        tasks += [self._search_many(q.query, "wikipedia", limit=1) for q in queries]
         batches = await asyncio.gather(*tasks, return_exceptions=True)
 
         collected: list[SearchResult] = []

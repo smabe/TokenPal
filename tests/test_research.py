@@ -240,23 +240,21 @@ async def test_runner_token_budget_skips_search(monkeypatch: pytest.MonkeyPatch)
 async def test_runner_search_timeout_survives_gather(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """One query's search hangs; the other completes. gather(return_exceptions=True)
+    should keep the fast one's results."""
     llm = _ScriptedLLM([
-        _ok('[{"query": "q1"}]', tokens=10),
+        _ok('[{"query": "q1"}, {"query": "q2"}]', tokens=10),
         _ok("The answer [1].", tokens=30),
     ])
-
-    call_count = {"n": 0}
 
     def sometimes_hanging(
         q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
     ) -> list[SearchResult]:
-        call_count["n"] += 1
-        if backend == "duckduckgo":
-            # Simulate a backend that hangs — asyncio.to_thread + wait_for trips.
+        if q == "q1":
             import time as _time
             _time.sleep(0.2)
             return []
-        return [_hit(f"https://wiki.example/{q}", "Wiki", "wiki snippet", "wikipedia")]
+        return [_hit(f"https://example/{q}", "T", "snippet", "duckduckgo")]
 
     monkeypatch.setattr("tokenpal.brain.research.search_many", sometimes_hanging)
 
