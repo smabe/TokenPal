@@ -316,11 +316,8 @@ if (-not $InstallServer -and $InstallClient) {
         Write-Host "  llama-server.exe already present at $($serverExeCheck.FullName)" -ForegroundColor Green
     } else {
         Write-Host "  Downloading $zipName (~400 MB)..."
-        try {
-            
-            Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-            
-        } catch {
+        & curl.exe -fSL -o $zipPath $zipUrl
+        if ($LASTEXITCODE -ne 0) {
             Write-Host "  ERROR: Download failed from $zipUrl" -ForegroundColor Red
             Write-Host "  Verify the release tag exists at https://github.com/lemonade-sdk/llamacpp-rocm/releases" -ForegroundColor Yellow
             Write-Host "  or override with: `$env:TOKENPAL_LEMONADE_TAG = '<tag>'" -ForegroundColor Yellow
@@ -382,11 +379,11 @@ if (-not $InstallServer -and $InstallClient) {
 
         if ($ggufFile) {
             Write-Host "  Downloading $ggufFile (this may take several minutes)..."
-            try {
-                Invoke-WebRequest -Uri $ggufUrl -OutFile $ggufDest -UseBasicParsing
+            & curl.exe -fSL -o $ggufDest $ggufUrl
+            if ($LASTEXITCODE -eq 0) {
                 Write-Host "  GGUF downloaded: $ggufDest" -ForegroundColor Green
                 $script:LlamacppGgufPath = $ggufDest
-            } catch {
+            } else {
                 Write-Host "  ERROR: Download failed from $ggufUrl" -ForegroundColor Red
                 Write-Host "  Download manually and place in $ModelsDir" -ForegroundColor Yellow
                 Write-Host "  See docs/amd-dgpu-setup.md for alternatives." -ForegroundColor Yellow
