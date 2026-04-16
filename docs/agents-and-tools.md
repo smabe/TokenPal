@@ -1,12 +1,13 @@
 # Agents, Research, and the Tool Registry
 
-TokenPal ships three layers of LLM-driven action on top of the observation buddy:
+TokenPal ships four layers of LLM-driven action on top of the observation buddy:
 
 1. **Tools** — single-shot LLM-callable actions. Registry-backed, opt-in via a Textual picker, consent-gated for anything that touches the network.
-2. **Agent mode** (`/agent <goal>`) — multi-step tool-calling loop with a confirm gate, step cap, and token budget.
-3. **Research mode** (`/research <question>`) — Claude-style plan → search → read → synthesize pipeline with citations and a 24h cache.
+2. **Inline research in conversation** — when you ask the buddy a "best X" / comparison / look-it-up question, it automatically calls `search_web` or the deeper `research` tool mid-conversation. No slash command, just ask naturally.
+3. **Agent mode** (`/agent <goal>`) — multi-step tool-calling loop with a confirm gate, step cap, and token budget.
+4. **Research mode** (`/research <question>`) — Claude-style plan → search → read → synthesize pipeline with citations and a 24h cache.
 
-This doc covers each layer end-to-end: how to enable them, the command surface, what's new in Phase 6 (tool discovery, rate limits, caches, usage stats), and the extension points for adding your own action.
+This doc covers each layer end-to-end: how to enable them, the command surface, how the conversation model routes to the right tool, rate limits, caches, usage stats, and the extension points for adding your own action.
 
 ---
 
@@ -65,7 +66,7 @@ The catalog (`tokenpal/actions/catalog.py`) groups tools into six sections. Ever
 | **Utilities** | `convert`, `timezone`, `sunrise_sunset`, `moon_phase`, `currency`, `weather_forecast_week`, `pollen_count`, `air_quality`, `random_fact`, `joke_of_the_day`, `word_of_the_day`, `on_this_day`, `random_recipe`, `trivia_question`, `sports_score`, `crypto_price`, `book_suggestion` | opt-in + `web_fetches` for network ones |
 | **Focus** | `pomodoro`, `stretch_reminder`, `water_reminder`, `eye_break`, `bedtime_wind_down`, `hydration_log`, `habit_streak`, `mood_check` | opt-in |
 | **Agent** | `agent_mode` flag | opt-in |
-| **Research** | `research_mode` flag, `search_web`, `fetch_url` | opt-in + `research_mode` consent |
+| **Research** | `research_mode` flag, `search_web`, `fetch_url`, `research` | opt-in + `research_mode` consent |
 
 ### Rate limits
 
@@ -98,6 +99,100 @@ print(m.tool_usage_counts(since_days=7))
 ```
 
 Future polish: surface these stats back to the buddy so it can riff on which tools you lean on. (Parked.)
+
+---
+
+## Inline research in conversation
+
+The buddy can call tools mid-conversation without a slash command. Ask a question naturally and it routes to the right tool:
+
+```
+You: what's 47 * 83?
+Buddy: [calls do_math(expr="47 * 83")] → 3901
+
+You: hey what's on hacker news?
+Buddy: [calls search_web(query="...")] → one snippet + clickable source link
+
+You: hey what's the best fitness tracker for iPhone 17?
+Buddy: [calls research(question="...")] → plans 3 queries, searches, reads 5 pages,
+                                            synthesizes a cited bullet list + verdict
+```
+
+### How it picks the right tool
+
+Three signals in the conversation system prompt (`PersonalityEngine.build_conversation_system_message`) steer the model:
+
+- **Rule 6** lists the actual tool names loaded for the user (`research`, `search_web`, `do_math`, …) and says: "for 'best X' or comparison questions, call `research` — do NOT chain multiple `search_web` calls. For casual chat, just answer."
+- **Tool descriptions** carry the narrower guidance:
+  - `search_web`: "Single-query web lookup for ONE fact or ONE page. Do NOT use for comparisons or 'best X' questions."
+  - `research`: "Deep research for comparison, recommendation, or 'best of' questions. Always use for 'best X', 'compare X vs Y', or anything that needs weighing multiple sources."
+- **Rule 7** governs the reply format after `research` returns: 2-4 bullets of specific picks + a one-line verdict in the buddy's character voice.
+
+### The `research` tool
+
+A thin wrapper around `ResearchRunner` (the same pipeline `/research` uses), exposed as an LLM-callable action with a single `question` parameter.
+
+```python
+@register_action
+class ResearchAction(AbstractAction):
+    action_name = "research"
+    parameters = {"type": "object", "properties": {"question": {"type": "string"}},
+                  "required": ["question"]}
+    rate_limit = RateLimit(max_calls=2, window_s=120.0)   # prevents loops
+```
+
+When called, it runs the full plan → search → fetch → synthesize pipeline and returns:
+
+```xml
+<tool_result tool="research" status="complete">
+<answer>
+- Garmin Forerunner 165 — 25-day battery, GPS [1]
+- Fitbit Versa 4 — best iOS app [3]
+Verdict: Forerunner 165 for marathon training [1].
+</answer>
+<sources>
+[1] https://forbes.com/... - Article Title
+[3] https://tomsguide.com/... - Another Title
+</sources>
+</tool_result>
+```
+
+The conversation model then paraphrases this into bullets + verdict in character, and the source URLs render as clickable links under the reply (via `ActionResult.display_urls`).
+
+### Grounding guards
+
+The synthesizer is prompted to cite every product with a `[N]` marker; post-hoc, `_strip_dangling_markers` drops any `[N]` that doesn't point to a real source. Any stripping emits a trace log:
+
+```
+  citations: 3 kept, 1 stripped (out-of-range — possible hallucination)
+```
+
+If fewer than `_THIN_POOL_THRESHOLD = 3` sources make it through fetching, the runner emits:
+
+```
+  warning: thin source pool (2 sources) — answer may be unreliable
+```
+
+### Enabling
+
+```
+/tools       # enable: research, search_web, fetch_url (all opt-in, in the Research section)
+/consent     # grant: research_mode, web_fetches
+# restart
+```
+
+Tool selection + links + citation guards work automatically once the tools are loaded and consent is granted. No other config required.
+
+### Differences from `/research`
+
+| | inline `research` tool | `/research` command |
+|---|---|---|
+| Entry point | buddy calls it mid-conversation | user types `/research <question>` |
+| Output | paraphrased in character by the conversation model, ≤4 bullets + verdict | raw synthesized answer rendered verbatim |
+| Model | conversation model handles planner + synthesizer | can swap to dedicated `planner_model` / `synth_model` in config |
+| Cache | no (the conversation turn itself may vary in phrasing) | 24h question-hash cache in `memory.db` |
+| Rate limit | 2 calls / 120s (per-session) | one at a time (`research_running` guard) |
+| Best for | casual "hey buddy, what's the best X?" | deliberate deep-dive research questions |
 
 ---
 
@@ -165,10 +260,10 @@ A Claude-style research pipeline with citations.
 
 ### Pipeline
 
-1. **Planner** (LLM call 1, temp ≤ 0.3) — decompose the question into 1–5 search queries. Few-shot prompted to avoid over-decomposition (single-hop ≠ 5 queries).
-2. **Search** (parallel, no LLM) — `asyncio.gather(..., return_exceptions=True)` across DuckDuckGo IA, Wikipedia REST, and optional Brave. Per-backend `asyncio.Semaphore` prevents spurious 429s. Results deduped by URL.
-3. **Read** (LLM call 2, optional) — for each promising hit, fetch full page via `fetch_url` (trafilatura → readability-lxml fallback). 500KB size cap, sensitive-term filter. No JS.
-4. **Synthesize** (LLM call 3) — sources rendered as numbered list `[1] <url>\n<excerpt>` placed *before* the question in the user turn (recency bias favors citation fidelity). Post-hoc regex validation strips dangling `[N]` markers that don't match any source.
+1. **Planner** (LLM call 1, temp ≤ 0.3) — decompose the question into 1–5 search queries. Few-shot prompted to avoid over-decomposition (single-hop ≠ 5 queries). The current year is injected into the prompt so "best X" queries get stamped with the right year and results favor recent sources.
+2. **Search** (parallel, no LLM) — `asyncio.gather(..., return_exceptions=True)` across DuckDuckGo Lite (up to 5 results per query via HTML scraping; see `search_many` in `senses/web_search/client.py`) and Wikipedia REST. Per-backend `asyncio.Semaphore` prevents spurious 429s. Results deduped by URL. Typical run: 3 planned queries × 5 DDG results + 3 Wiki attempts = up to ~18 candidates before dedup.
+3. **Read** (no LLM) — for each promising hit, fetch full page via `fetch_url` (trafilatura → readability-lxml fallback). 500KB raw cap, sensitive-term filter, 4000 chars per-source excerpt handed to the synthesizer. No JS. Failures are silenced to DEBUG — a thin-pool warning fires if fewer than 3 sources survive.
+4. **Synthesize** (LLM call 2) — sources rendered as numbered list `[1] <url>\n<excerpt>` placed *before* the question in the user turn (recency bias favors citation fidelity). Prompt style-switches between "2-4 specific picks + verdict, every pick cited" for comparison questions and "under 6 sentences" for factual questions. Post-hoc regex validation strips dangling `[N]` markers that don't match any source; any stripping is logged as a hallucination signal.
 
 ### 24h cache
 
@@ -184,7 +279,7 @@ planner_model = ""              # empty = reuse [llm] model_name
 synth_model = ""                # both can use deepseek-r1:32b — no tool calls, no <think>-tag problem
 reader_model = ""               # reader stays on qwen2.5:32b or similar (no reasoning benefit)
 max_queries = 3
-max_fetches = 5
+max_fetches = 8
 token_budget = 6000
 per_search_timeout_s = 5.0
 per_fetch_timeout_s = 8.0
@@ -263,10 +358,11 @@ Backends are `tokenpal/senses/web_search/client.py` — `BackendName` Literal + 
 
 | mode | min viable | recommended | notes |
 |---|---|---|---|
-| single tool call | `gemma4` | `gemma4` | simple routing, ≤8 tools |
+| single tool call | `gemma4` / `qwen3:8b` | `qwen3:14b` | simple routing, ≤8 tools |
+| inline research (conversation) | `qwen3:8b` | `qwen3:14b` | tool routing + synthesis on the same model |
 | agent loop | `gemma4:26b` | `qwen2.5:32b` | multi-step planning degrades below 26B |
-| research planner/synth | `qwen2.5:32b` | `deepseek-r1:32b` | reasoning helps decomposition + citation fidelity |
-| research reader | `qwen2.5:32b` | `qwen2.5:32b` | reader doesn't benefit from reasoning |
+| research planner/synth | `qwen2.5:32b` / `qwen3:14b` | `deepseek-r1:32b` | reasoning helps decomposition + citation fidelity |
+| research reader | no LLM needed | — | reader is pure HTTP fetch + trafilatura |
 
 Registry size thresholds (BFCL / ToolBench evals through mid-2025):
 
@@ -288,3 +384,6 @@ Phase 2 ships 15+ tools total, past the gemma4 cliff. If you enable the full uti
 - **Research returns an empty answer with sources listed** — synthesizer hit the token budget before writing. Increase `[research] token_budget`, or drop `max_fetches` so fewer excerpts land in the prompt.
 - **Cached research answer is stale after an event you care about** — edit the question to bypass the cache, or set `[research] cache_ttl_s = 0` to disable. The plan logs `> research: ... (cached)` when a hit fires, so you can always tell.
 - **Rate limit tripped inside an agent run** — the invoker's state is per-run, not per-session. Start a new `/agent` to reset, or remove the `rate_limit` ClassVar temporarily.
+- **Buddy says "let me search" but doesn't actually call a tool** — the tool isn't loaded. Check `/tools list` and make sure `search_web` / `research` are enabled, then restart. The conversation system prompt only lists tools actually resolved at startup, so if a tool is absent the model may narrate without calling.
+- **Buddy recommends stale/old products after `research`** — this happens when the synthesizer fills gaps from training data. The log line `citations: N kept, M stripped` is the smoking gun. Workarounds: (a) check for a `thin source pool` warning — if fewer than 3 sources landed, the answer is single-source-biased; (b) try a larger planner/synth model in `[research]`; (c) the JSON-output synthesizer (parked; see recent plan files) is the real fix.
+- **Research returns nothing and logs `NO_SOURCES`** — all fetches failed. Common causes: offline, all five DDG Lite results were JS-heavy SPAs that trafilatura couldn't extract, or the sensitive-term filter tripped on every result. Enable `--verbose` to see per-URL extract failures at DEBUG level.
