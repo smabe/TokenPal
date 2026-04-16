@@ -65,6 +65,11 @@ _BACKEND_CONCURRENCY: dict[BackendName, int] = {
     "brave": 1,
 }
 
+# Per-source excerpt cap handed to the synthesizer. Bigger = better picks
+# list on roundup pages (first ~2K is often intro fluff); capped to keep
+# token usage bounded across max_fetches sources.
+_PER_SOURCE_EXCERPT_CHARS = 4000
+
 
 class ResearchRunner:
     """Runs a single /research question end-to-end.
@@ -230,7 +235,7 @@ class ResearchRunner:
                 log.exception("fetch raised for %s", url)
                 fetched = None
             if fetched:
-                excerpt = str(fetched)[:2000]
+                excerpt = str(fetched)[:_PER_SOURCE_EXCERPT_CHARS]
 
         if not excerpt:
             return None
@@ -355,7 +360,14 @@ Citation rules:
 - Cite every factual claim with a bracketed marker like [1] or [3].
 - Only use markers in the range {marker_range}. Unknown markers will be stripped.
 - If the sources disagree or don't cover the claim, say so plainly — do NOT fabricate.
-- Keep the answer under 6 sentences.
+
+Answer style:
+- For "best X" / "which X should I buy" / comparison questions: name 2-4
+  SPECIFIC products/options by brand and model, each with a one-line reason
+  and citation. End with a one-line verdict picking a winner. Do NOT just
+  tell the reader "refer to source X for reviews" — pull the actual names
+  out of the sources.
+- For factual / explanatory questions: keep the answer under 6 sentences.
 
 Question: {question}
 
