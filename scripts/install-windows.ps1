@@ -534,9 +534,12 @@ if ($ollamaRunning) {
         } elseif ($vramGB -ge 20) {
             $Recommended = "gemma4:26b"
             Write-Host "  Detected ~${vramGB}GB, recommending gemma4:26b (26B, ~19GB, fits entirely in VRAM)" -ForegroundColor Cyan
+        } elseif ($vramGB -ge 12) {
+            $Recommended = "qwen3:14b"
+            Write-Host "  Detected ~${vramGB}GB, recommending qwen3:14b (14B, ~9GB, strong reasoning + tool calling)" -ForegroundColor Cyan
         } elseif ($vramGB -ge 6) {
-            $Recommended = "gemma4"
-            Write-Host "  Detected ~${vramGB}GB, recommending gemma4 (9B, solid default)" -ForegroundColor Cyan
+            $Recommended = "qwen3:8b"
+            Write-Host "  Detected ~${vramGB}GB, recommending qwen3:8b (8B, ~5GB, fits entirely in VRAM)" -ForegroundColor Cyan
         } else {
             $Recommended = "gemma2:2b"
             Write-Host "  Detected ~${vramGB}GB, recommending gemma2:2b (2B, fits small VRAM)" -ForegroundColor Cyan

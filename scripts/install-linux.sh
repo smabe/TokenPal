@@ -303,9 +303,12 @@ if [[ "$MODE" == "server" || "$MODE" == "both" ]]; then
     elif (( vram_gb >= 20 )); then
         RECOMMENDED="gemma4:26b"
         echo "  Recommending gemma4:26b (26B, ~19GB, fits entirely in VRAM for ${vram_gb}GB)"
+    elif (( vram_gb >= 12 )); then
+        RECOMMENDED="qwen3:14b"
+        echo "  Recommending qwen3:14b (14B, ~9GB, strong reasoning + tool calling for ${vram_gb}GB)"
     elif (( vram_gb >= 6 )); then
-        RECOMMENDED="gemma4"
-        echo "  Recommending gemma4 (9B, solid default for ${vram_gb}GB)"
+        RECOMMENDED="qwen3:8b"
+        echo "  Recommending qwen3:8b (8B, ~5GB, fits entirely in VRAM for ${vram_gb}GB)"
     else
         RECOMMENDED="gemma2:2b"
         echo "  Recommending gemma2:2b (2B, fits in ${vram_gb}GB)"

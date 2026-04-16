@@ -40,8 +40,9 @@ The installer asks whether you want **Client** (run the buddy), **Server** (serv
 |-------|---------------------------|---------|
 | ≥48GB | `llama3.3:70b`            | ~40 GB  |
 | ≥32GB | `gemma4:26b-a4b-it-q8_0`  | ~28 GB  |
-| ≥16GB | `gemma4:26b` (Q4_K_M)     | ~20 GB  |
-| ≥6GB  | `gemma4` (9B)             | ~6 GB   |
+| ≥20GB | `gemma4:26b` (Q4_K_M)     | ~20 GB  |
+| ≥12GB | `qwen3:14b`               | ~9 GB   |
+| ≥6GB  | `qwen3:8b`                | ~5 GB   |
 | <6GB  | `gemma2:2b`               | ~2 GB   |
 
 ### llama.cpp-direct path (AMD RDNA 4 discrete GPUs)
