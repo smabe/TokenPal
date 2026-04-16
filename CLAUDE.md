@@ -3,6 +3,7 @@
 Cross-platform AI desktop buddy. ASCII character observes your screen via modular "senses" and generates witty commentary using a local LLM.
 
 ## Architecture
+- Dual inference backend: `[llm] inference_engine = "ollama" | "llamacpp"`. Ollama is default (NVIDIA/Apple/RDNA3). llamacpp gates worker VRAM-unload (taskkill vs API), model registration, and `/model pull|browse` slash commands. See `docs/amd-dgpu-setup.md`
 - Plugin discovery: `@register_sense` / `@register_backend` / `@register_overlay` / `@register_action` decorators + `pkgutil.walk_packages`
 - Config: TOML (`config.default.toml` defaults, `config.toml` user overrides gitignored) → dataclass schema in `tokenpal/config/schema.py`
 - Config loading: location-independent — finds defaults relative to package, searches `~/.tokenpal/config.toml` → project root → cwd
@@ -15,8 +16,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Platform installers: `bash scripts/install-macos.sh`, `powershell scripts/install-windows.ps1`, `bash scripts/install-linux.sh` — standalone fresh-machine setup with interactive client/server/both prompt and VRAM-based model recommendation
 - `python3 setup_tokenpal.py` — lightweight setup for when Python is already installed. `--client` for remote GPU, `--local` for full local
 - `tokenpal` — run the buddy (first-run wizard on fresh install)
-- `tokenpal --check` — quick verify: Ollama, model, senses, actions
-- `tokenpal --validate` — full preflight: Python version, platform deps, git, Ollama, model, config, senses, macOS permissions
+- `tokenpal --check` — quick verify: inference engine, model, senses, actions
+- `tokenpal --validate` — full preflight: Python version, platform deps, git, inference engine, model, config, senses, macOS permissions
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --skip-welcome` — bypass first-run wizard
 - `pytest` — run tests (asyncio_mode=auto)
@@ -123,7 +124,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent`
 - macOS: app awareness uses Quartz `CGWindowListCopyWindowInfo` (NOT `NSWorkspace`)
 - Textual overlay is default (cross-platform including Windows). Console and tkinter as fallbacks
-- `config.toml` is gitignored — each machine has its own
+- `config.toml` is gitignored -- each machine has its own
+- Windows + RDNA 4 (gfx1201): Ollama's Vulkan backend produces wrong numerics on dense models; ROCm backend can't enumerate the card. Use `[llm] inference_engine = "llamacpp"` with lemonade-sdk's llama.cpp-rocm build. See `docs/amd-dgpu-setup.md`
 
 ## Code Style
 - Python 3.12+, strict mypy, ruff for linting

@@ -105,64 +105,27 @@ pip install pytest pytest-asyncio ruff mypy
 
 ---
 
-## 4. LLM Backend — llama.cpp with ROCm HIP (Recommended)
+## 4. LLM Backend
 
-### Option A: Ollama with Vulkan (recommended — tested and working)
+### Option A: llama.cpp-direct via lemonade-sdk (recommended)
+
+This is the only correct+fast path on RDNA 4 as of April 2026. The Windows installer (`scripts/install-windows.ps1 -Mode Server`) handles everything automatically: lemonade zip download, GGUF pull, `start-llamaserver.bat` generation, and `config.toml` setup.
+
+For manual setup or troubleshooting, see [docs/amd-dgpu-setup.md](amd-dgpu-setup.md).
+
+### Option B: Ollama with Vulkan (NOT recommended on RDNA 4)
+
+Ollama's Vulkan backend loads models but produces wrong numerics on dense gemma-4 variants (fails "2+2", rambles on normal prompts). The ROCm backend cannot enumerate gfx1201 at all. **Do not use Ollama on a 9070 XT for inference.** If Ollama ships HIP 7 + gfx1201 kernels in the future, flip `[llm] inference_engine = "ollama"` in config.toml to switch back.
+
 ```powershell
+# Only use if you explicitly want to test Ollama's Vulkan path:
 winget install Ollama.Ollama
-
-# Set persistent env vars for Vulkan GPU support (run once, then reopen terminal):
 [System.Environment]::SetEnvironmentVariable("OLLAMA_VULKAN", "1", "User")
 [System.Environment]::SetEnvironmentVariable("GGML_VK_VISIBLE_DEVICES", "0", "User")
-# GGML_VK_VISIBLE_DEVICES=0 disables the 9800X3D iGPU, uses only the discrete 9070 XT
-
-# Close and reopen terminal, then:
-ollama serve
-# Should show: library=Vulkan description="AMD Radeon RX 9070 XT" total="15.8 GiB"
-
-# Pull models — 16 GB VRAM handles bigger models:
-ollama pull gemma4              # 12B default
-ollama pull gemma4:26b          # 26B MoE (3.8B active params) — sweet spot for 16 GB
-
-# Verify GPU is being used:
-ollama ps
-# Should show the model loaded on GPU, not CPU
+# WARNING: dense model outputs will be numerically wrong on gfx1201.
 ```
 
-> **Note:** `$env:OLLAMA_VULKAN` (per-session) and `set OLLAMA_VULKAN=1` (cmd) don't reliably propagate to child processes on Windows. Always use `[System.Environment]::SetEnvironmentVariable()` for persistent system-wide values, then reopen your terminal.
-
-### Option B: llama-cpp-python with ROCm
-```powershell
-# Install llama-cpp-python with ROCm/HIP support
-# This requires HIP SDK to be installed first
-
-# Check for pre-built ROCm wheels:
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/rocm624
-# Replace rocm624 with your HIP SDK version (rocm630, etc.)
-
-# If no pre-built wheel exists for your version, build from source:
-# CMAKE_ARGS="-DGGML_HIP=ON" pip install llama-cpp-python --no-binary llama-cpp-python
-# (This requires CMake and HIP SDK in PATH)
-
-# Verify:
-python -c "from llama_cpp import Llama; print('OK')"
-```
-
-### Option C: llama.cpp with Vulkan (fallback — no ROCm needed)
-```powershell
-# Vulkan works on any GPU without vendor-specific SDKs
-# Install Vulkan SDK: https://vulkan.lunarg.com/sdk/home
-
-# Build llama-cpp-python with Vulkan:
-# CMAKE_ARGS="-DGGML_VULKAN=ON" pip install llama-cpp-python --no-binary llama-cpp-python
-
-# Or use pre-built Vulkan wheels if available:
-pip install llama-cpp-python --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/vulkan
-```
-
-**Recommendation:** Use Ollama with Vulkan (Option A). HIP SDK 7.1.1 installs on Windows but Ollama 0.20.6 doesn't detect it for the 9070 XT — Vulkan is the proven path. Performance is excellent for inference workloads.
-
-### Option D: PyTorch with ROCm
+### Option C: PyTorch with ROCm
 ```powershell
 # PyTorch ROCm builds for Windows
 pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.3
@@ -261,35 +224,33 @@ LM Studio supports AMD GPUs via Vulkan:
 
 ```powershell
 # 1. AMD driver
-# Device Manager → Display adapters → "AMD Radeon RX 9070 XT"
+# Device Manager -> Display adapters -> "AMD Radeon RX 9070 XT"
 
-# 2. HIP SDK (if using ROCm path)
-hipcc --version
-hipinfo
-
-# 3. Python + venv
+# 2. Python + venv
 python --version                        # 3.12+
 
-# 4. Ollama with GPU
-ollama run phi3:mini "Say hello"
-ollama ps                               # should show GPU usage
+# 3. llama-server (recommended path)
+curl http://localhost:11434/v1/models
+# Should return JSON with your loaded GGUF model
+# If using start-llamaserver.bat, run it first
+
+# 4. TokenPal health check
+tokenpal --validate
+# Should show: llama-server reachable, model available
 
 # 5. PyTorch ROCm (if installed)
 python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
 
-# 6. llama-cpp-python (if installed)
-python -c "from llama_cpp import Llama; print('OK')"
-
-# 7. pywin32
+# 6. pywin32
 python -c "import win32gui; print(win32gui.GetForegroundWindow())"
 
-# 8. psutil
+# 7. psutil
 python -c "import psutil; print(f'CPU: {psutil.cpu_percent()}%, RAM: {psutil.virtual_memory().percent}%')"
 
-# 9. Screen capture
+# 8. Screen capture
 python -c "import mss; sct = mss.mss(); print(sct.monitors)"
 
-# 10. AMD GPU monitoring
+# 9. AMD GPU monitoring
 python -c "
 try:
     import amdsmi
@@ -298,7 +259,7 @@ try:
     print(f'AMD GPUs found: {len(devs)}')
     amdsmi.amdsmi_shut_down()
 except ImportError:
-    print('amdsmi not installed — will use WMI/LibreHardwareMonitor fallback')
+    print('amdsmi not installed -- will use WMI/LibreHardwareMonitor fallback')
 "
 ```
 
@@ -323,13 +284,12 @@ winget install UB-Mannheim.TesseractOCR
 
 ## 11. Known Gotchas
 
-- **ROCm on Windows is less mature than CUDA.** Expect rougher edges. Ollama abstracts most of this away — start there.
-- **HIP SDK version must match.** RDNA 4 (gfx1200) requires HIP SDK 6.3+. Older versions silently fall back to CPU.
-- **Vulkan vs ROCm:** Vulkan is the working path as of April 2026. HIP SDK installs but Ollama doesn't detect it for gfx1201. Vulkan performance is solid for inference — no noticeable bottleneck for TokenPal commentary.
-- **No pynvml.** Don't install it — it'll import but crash when trying to talk to an AMD GPU. Use `amdsmi` or WMI instead.
+- **Ollama is broken on RDNA 4.** Vulkan produces wrong numerics on dense models; ROCm can't enumerate gfx1201. Use the llama.cpp-direct path (Option A). See [docs/amd-dgpu-setup.md](amd-dgpu-setup.md) for the full story.
+- **SmartScreen on first launch.** Downloaded `llama-server.exe` trips Windows SmartScreen. Click "More info -> Run anyway". No codesigned build is available upstream.
+- **No pynvml.** Don't install it -- it'll import but crash when trying to talk to an AMD GPU. Use `amdsmi` or WMI instead.
 - **PyTorch ROCm on Windows:** Works but wheels are larger and less frequently updated than CUDA wheels. Check https://pytorch.org/get-started/locally/ for current availability.
-- **VRAM headroom:** 16 GB sounds generous, but Windows + Adrenalin driver + desktop compositor eat ~1-2 GB. Budget 14 GB for models.
-- **FP8 native support:** The 9070 XT has native FP8 WMMA instructions. If llama.cpp/vLLM support FP8 quantization for RDNA 4, you could run even larger models. Cutting edge — check llama.cpp releases for RDNA 4 FP8 support.
+- **VRAM headroom:** 16 GB sounds generous, but Windows + Adrenalin driver + desktop compositor eat ~1-2 GB. Budget 14 GB for models. See the VRAM tier table in [docs/amd-dgpu-setup.md](amd-dgpu-setup.md).
+- **FP8 native support:** The 9070 XT has native FP8 WMMA instructions. If llama.cpp/vLLM support FP8 quantization for RDNA 4, you could run even larger models. Cutting edge -- check llama.cpp releases for RDNA 4 FP8 support.
 - **No NPU.** The 9800X3D has no neural processor. Don't waste time looking for one. The 9070 XT is your only accelerator.
 - **Desktop thermals are a non-issue** compared to laptops. No throttling to worry about.
 
