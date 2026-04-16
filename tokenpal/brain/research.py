@@ -152,7 +152,19 @@ class ResearchRunner:
             return session
 
         session.tokens_used += used
+        before_markers = len(_DANGLING_MARKER_RE.findall(answer))
         session.answer = _strip_dangling_markers(answer, len(session.sources))
+        after_markers = len(_DANGLING_MARKER_RE.findall(session.answer))
+        stripped = before_markers - after_markers
+        if stripped:
+            self._log(
+                f"  citations: {after_markers} kept, {stripped} stripped "
+                f"(out-of-range — possible hallucination)"
+            )
+            log.info(
+                "Research stripped %d out-of-range citation markers "
+                "(synthesizer may have fabricated)", stripped,
+            )
         session.stopped_reason = ResearchStopReason.COMPLETE
         return session
 
@@ -370,9 +382,12 @@ Citation rules:
 Answer style:
 - For "best X" / "which X should I buy" / comparison questions: name 2-4
   SPECIFIC products/options by brand and model, each with a one-line reason
-  and citation. End with a one-line verdict picking a winner. Do NOT just
-  tell the reader "refer to source X for reviews" — pull the actual names
-  out of the sources.
+  and a citation marker [N]. End with a one-line verdict picking a winner
+  (also cited). Do NOT just tell the reader "refer to source X for reviews"
+  — pull the actual names out of the sources.
+- Every product name MUST have a citation [N]. If no source names a
+  specific product, say "Sources don't name specific picks" instead of
+  guessing from training data. Uncited products get stripped.
 - For factual / explanatory questions: keep the answer under 6 sentences.
 
 Question: {question}
