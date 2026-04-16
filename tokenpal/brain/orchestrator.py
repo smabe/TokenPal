@@ -1115,7 +1115,9 @@ class Brain:
         self._conversation.add_user_turn(user_message)
 
         # Build messages array: [system, history..., context, user]
-        system_msg = self._personality.build_conversation_system_message()
+        system_msg = self._personality.build_conversation_system_message(
+            tool_names=list(self._actions.keys()),
+        )
         context_msg = self._personality.build_context_injection(snapshot)
 
         messages: list[dict[str, Any]] = [

@@ -859,8 +859,11 @@ class PersonalityEngine:
     # Conversation (user-initiated)
     # ------------------------------------------------------------------
 
-    def build_conversation_system_message(self) -> str:
+    def build_conversation_system_message(
+        self, tool_names: list[str] | None = None,
+    ) -> str:
         """Build the system message for multi-turn conversation mode."""
+        tool_rule = self._tool_use_rule(tool_names or [])
         if self.is_finetuned:
             return (
                 "The user is talking to you directly. Respond in character.\n\n"
@@ -870,10 +873,7 @@ class PersonalityEngine:
                 "3. Stay in your character voice — same tone as your observations.\n"
                 "4. Keep casual chat short, but give detailed answers when they ask for help.\n"
                 "5. You can reference things said earlier in this conversation.\n"
-                "6. You have tools (search_web, do_math, etc). When the user "
-                "asks you to look something up or calculate something, CALL "
-                "the tool — never say 'let me search' without actually "
-                "calling it. For casual chat, just answer.\n\n"
+                f"{tool_rule}"
                 f"{self._mood_line()}\n\n"
                 f"{self._recent_comments_block()}"
             )
@@ -887,13 +887,22 @@ class PersonalityEngine:
             "3. Stay in character but don't let personality override helpfulness.\n"
             "4. Keep casual chat short, but give detailed answers when they ask for help.\n"
             "5. You can reference things said earlier in this conversation.\n"
-            "6. You have tools (search_web, do_math, etc). When the user "
-            "asks you to look something up or calculate something, CALL "
-            "the tool — never say 'let me search' without actually "
-            "calling it. For casual chat, just answer.\n\n"
+            f"{tool_rule}"
             f"{self._mood_line()}\n\n"
             f"{self._recent_comments_block()}\n\n"
             f"{self._voice_reminder()}"
+        )
+
+    @staticmethod
+    def _tool_use_rule(names: list[str]) -> str:
+        if not names:
+            return "\n"
+        joined = ", ".join(names)
+        return (
+            f"6. You have tools: {joined}. When the user asks you to "
+            "look something up or calculate something, CALL the tool "
+            "— never say 'let me search' without actually calling it. "
+            "For casual chat, just answer.\n\n"
         )
 
     def build_context_injection(self, context_snapshot: str) -> str:
