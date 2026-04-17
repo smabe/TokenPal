@@ -51,6 +51,7 @@ class ProductivityStats(AbstractSense):
         self._memory: Any = None  # MemoryStore, injected via config
         self._session_start: float = 0.0
         self._prev_summary: str = ""
+        self._prev_buckets: tuple[str, str, str] | None = None
 
     async def setup(self) -> None:
         self._memory = self._config.get("memory_store")
@@ -78,12 +79,41 @@ class ProductivityStats(AbstractSense):
             return None
 
         summary = self._build_summary(stats)
+        buckets = self._bucket_key(stats)
 
-        # Only emit with full confidence if summary changed
-        confidence = 1.0 if summary != self._prev_summary else 0.0
+        # Emit with full confidence only on bucket transition — integer drift
+        # inside the same bucket is structurally boring and causes the topic
+        # roulette to favor productivity forever.
+        confidence = 1.0 if buckets != self._prev_buckets else 0.0
+        self._prev_buckets = buckets
         self._prev_summary = summary
 
         return self._reading(data=stats, summary=summary, confidence=confidence)
+
+    @staticmethod
+    def _bucket_key(stats: dict[str, Any]) -> tuple[str, str, str]:
+        """Hysteresis buckets — changes drive emission, integer drift does not."""
+        time_min = stats["time_in_current_min"]
+        switches = stats["switches_per_hour"]
+        streak = stats["longest_streak_min"]
+
+        if time_min >= 30:
+            time_bucket = "deep_focus"
+        elif time_min >= 10:
+            time_bucket = "settled"
+        else:
+            time_bucket = "just_arrived"
+
+        if switches >= 15:
+            switch_bucket = "restless"
+        elif switches >= 8:
+            switch_bucket = "active"
+        else:
+            switch_bucket = "calm"
+
+        streak_bucket = "long_streak" if streak >= 30 else "none"
+
+        return (time_bucket, switch_bucket, streak_bucket)
 
     def _query_stats(self, session_minutes: int) -> dict[str, Any]:
         """Query MemoryStore for current session productivity metrics."""
@@ -135,31 +165,34 @@ class ProductivityStats(AbstractSense):
         }
 
     def _build_summary(self, stats: dict[str, Any]) -> str:
-        """Build a natural-language summary from computed stats."""
+        """Build a bucketed natural-language summary.
+
+        Integer values are intentionally omitted from the summary string —
+        they drift every poll and would make the topic roulette's
+        change_bonus re-fire endlessly. The LLM still sees the raw numbers
+        via the data dict when needed.
+        """
         parts: list[str] = []
         app = stats["current_app"]
-        time_min = stats["time_in_current_min"]
-        switches = stats["switches_per_hour"]
-        streak = stats["longest_streak_min"]
+        time_bucket, switch_bucket, streak_bucket = self._bucket_key(stats)
 
-        # Don't name sensitive apps
         app_label = app if not _is_sensitive(app) else "a private app"
 
-        if time_min >= 30:
-            parts.append(f"Deep focus: {time_min} minutes in {app_label}")
-        elif time_min >= 10:
-            parts.append(f"Settled into {app_label} for {time_min} minutes")
+        if time_bucket == "deep_focus":
+            parts.append(f"Deep focus in {app_label}")
+        elif time_bucket == "settled":
+            parts.append(f"Settled into {app_label}")
 
-        if switches >= 15:
-            parts.append(f"very restless — {int(switches)} app switches per hour")
-        elif switches >= 8:
-            parts.append(f"active multitasking — {int(switches)} switches per hour")
+        if switch_bucket == "restless":
+            parts.append("very restless — bouncing between apps")
+        elif switch_bucket == "active":
+            parts.append("active multitasking across apps")
 
-        if streak >= 30 and not parts:
-            parts.append(f"Longest focus streak: {streak} minutes")
+        if streak_bucket == "long_streak" and not parts:
+            parts.append("long focus streak")
 
         if not parts:
-            return f"Working for {stats['session_minutes']} minutes, {int(switches)} switches/hour"
+            return "Working, calm pace"
 
         return ", ".join(parts)
 

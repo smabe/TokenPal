@@ -105,6 +105,10 @@ _FORCED_SILENCE_DURATION = 120.0
 # Freeform chance for voices with 50+ example lines
 _FREEFORM_CHANCE_RICH = 0.20
 
+# Near-duplicate guard — reject if char-trigram Jaccard vs. any of last 5
+# outputs meets or exceeds this threshold.
+_NEAR_DUPLICATE_JACCARD = 0.70
+
 class BrainMode(StrEnum):
     """Heavyweight mode of the brain. Conversation isn't a mode because it
     carries history state on ``_conversation`` rather than a flag."""
@@ -217,6 +221,10 @@ class Brain:
 
         # Topic roulette state
         self._recent_topics: deque[str] = deque(maxlen=10)
+
+        # Near-duplicate guard — drops observation/freeform lines that rhyme
+        # too closely with recent output (prevents prompt-cache template lock-in).
+        self._recent_outputs: deque[str] = deque(maxlen=5)
 
         # Conversation session state
         self._conversation: ConversationSession | None = None
@@ -560,6 +568,37 @@ class Brain:
         self._consecutive_comments += 1
         self._comment_timestamps.append(time.monotonic())
 
+    @staticmethod
+    def _trigram_set(text: str) -> set[str]:
+        normalized = "".join(c.lower() for c in text if c.isalnum() or c.isspace())
+        normalized = " ".join(normalized.split())
+        if len(normalized) < 3:
+            return {normalized}
+        return {normalized[i:i + 3] for i in range(len(normalized) - 2)}
+
+    def _is_near_duplicate(self, text: str) -> bool:
+        """True if `text` overlaps ≥ _NEAR_DUPLICATE_JACCARD with recent output."""
+        if not self._recent_outputs:
+            return False
+        new_set = self._trigram_set(text)
+        if not new_set:
+            return False
+        for prior in self._recent_outputs:
+            prior_set = self._trigram_set(prior)
+            if not prior_set:
+                continue
+            union = new_set | prior_set
+            if not union:
+                continue
+            jaccard = len(new_set & prior_set) / len(union)
+            if jaccard >= _NEAR_DUPLICATE_JACCARD:
+                log.debug(
+                    "Gate: near-duplicate suppressed (jaccard=%.2f vs %r)",
+                    jaccard, prior[:60],
+                )
+                return True
+        return False
+
     async def _generate_freeform_comment(self) -> None:
         """Generate an unprompted in-character thought."""
         prompt = self._personality.build_freeform_prompt()
@@ -572,9 +611,14 @@ class Brain:
             self._push_status()
 
             filtered = self._personality.filter_response(response.text)
+            if filtered and self._is_near_duplicate(filtered):
+                log.info("TokenPal (freeform suppressed near-duplicate): %s", filtered)
+                filtered = ""
+
             if filtered:
                 log.info("TokenPal (freeform): %s (%.0fms)", filtered, response.latency_ms)
                 self._emit_comment(filtered)
+                self._recent_outputs.append(filtered)
             else:
                 log.debug("Freeform filtered out: %r", response.text[:80])
 
@@ -680,6 +724,11 @@ class Brain:
                 log.debug("LLM returned empty content (model may need higher max_tokens)")
             filtered = self._personality.filter_response(response.text)
 
+            if filtered and self._is_near_duplicate(filtered):
+                log.info("TokenPal (suppressed near-duplicate): %s", filtered)
+                self._consecutive_comments = 0
+                return
+
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
                 # Re-enable tool specs if they were disabled due to failures
@@ -688,6 +737,7 @@ class Brain:
                     log.info("Re-enabled tool-calling after successful generation")
                 self._consecutive_failures = 0
                 self._emit_comment(filtered, acknowledge=True)
+                self._recent_outputs.append(filtered)
                 self._recent_topics.append(topic)
                 # Record comment milestones
                 if self._memory and self._personality._total_comments % 10 == 0:
