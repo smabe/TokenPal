@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from collections import deque
 
-from tokenpal.brain.orchestrator import _NEAR_DUPLICATE_JACCARD, Brain
+from tokenpal.brain.orchestrator import (
+    _NEAR_DUPLICATE_JACCARD,
+    _PREFIX_LOCK_MIN_MATCHES,
+    Brain,
+)
 
 
 def test_trigram_set_basic() -> None:
@@ -22,7 +26,7 @@ def test_trigram_set_strips_punctuation() -> None:
 def _make_harness() -> Brain:
     """Bare orchestrator instance that exposes just the dedupe ring + helper."""
     obj = Brain.__new__(Brain)
-    obj._recent_outputs = deque(maxlen=5)
+    obj._recent_outputs = deque(maxlen=10)
     return obj
 
 
@@ -51,6 +55,33 @@ def test_unrelated_line_passes() -> None:
 def test_empty_ring_never_duplicate() -> None:
     o = _make_harness()
     assert not o._is_near_duplicate("anything at all goes here")
+
+
+def test_prefix_lock_catches_template_drift() -> None:
+    """The Finn 'Jake, good cop...' lock-in pattern: same lead, different tail."""
+    o = _make_harness()
+    o._recent_outputs.append("Jake, good cop... this keyboard's got more dirt than a dungeon!")
+    o._recent_outputs.append("Jake, good cop... this commit's got more letters than a wizard!")
+    o._recent_outputs.append("Jake, good cop... midnight's creepin' in, bro!")
+    # Fourth time, same lead — should be suppressed.
+    assert o._is_near_duplicate(
+        "Jake, good cop... this app's got more bugs than a witch's hat!"
+    )
+
+
+def test_prefix_lock_leaves_varied_leads_alone() -> None:
+    """Two copies of the same lead is fine, three is the drift bar."""
+    o = _make_harness()
+    o._recent_outputs.append("Jake, good cop... this keyboard's slow!")
+    o._recent_outputs.append("Jake, good cop... this commit's weird!")
+    # Only 2 matches; still below the threshold.
+    assert not o._is_near_duplicate(
+        "The weather outside is absolutely dreadful, Finn."
+    )
+
+
+def test_prefix_lock_threshold_constant_is_sane() -> None:
+    assert 2 <= _PREFIX_LOCK_MIN_MATCHES <= 5
 
 
 def test_threshold_constant_is_sane() -> None:

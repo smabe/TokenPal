@@ -922,13 +922,18 @@ class PersonalityEngine:
 
         Uses actual catchphrases instead of a meta-instruction so the
         model's next-token prediction is primed by character-specific
-        tokens (recency effect).
+        tokens (recency effect). Drops any catchphrase whose leading
+        tokens are already locked in a recent comment — otherwise the
+        sampler keeps re-priming a scaffold phrase ("Jake, good cop...")
+        that the model then regurgitates indefinitely.
         """
         if self._catchphrases:
-            samples = random.sample(
-                self._catchphrases,
-                min(3, len(self._catchphrases)),
-            )
+            locked = self._locked_prefixes()
+            pool = [
+                c for c in self._catchphrases
+                if self._phrase_prefix(c) not in locked
+            ] or list(self._catchphrases)
+            samples = random.sample(pool, min(3, len(pool)))
             examples = ", ".join(f'"{s}"' for s in samples)
             return f"({self._voice_name}'s style: {examples})\n"
         if self._voice_persona:
@@ -937,6 +942,26 @@ class PersonalityEngine:
                 f"Stay in character. No emojis.)\n"
             )
         return ""
+
+    @staticmethod
+    def _phrase_prefix(text: str, n: int = 3) -> str:
+        """Lowercase alnum-token prefix, used for catchphrase/comment matching."""
+        cleaned = "".join(c.lower() if c.isalnum() else " " for c in text)
+        return " ".join(cleaned.split()[:n])
+
+    def _locked_prefixes(self) -> set[str]:
+        """Prefixes that show up in 2+ recent comments — treat as locked in.
+
+        Two hits is enough signal: one echo of a catchphrase is fine, a
+        third iteration is the drift we're trying to break.
+        """
+        counts: dict[str, int] = {}
+        for c in self._recent_comments:
+            p = self._phrase_prefix(c)
+            if not p:
+                continue
+            counts[p] = counts.get(p, 0) + 1
+        return {p for p, n in counts.items() if n >= 2}
 
     def _recent_comments_block(self) -> str:
         if not self._recent_comments:

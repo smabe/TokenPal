@@ -112,9 +112,17 @@ _FORCED_SILENCE_DURATION = 120.0
 # Freeform chance for voices with 50+ example lines
 _FREEFORM_CHANCE_RICH = 0.20
 
-# Near-duplicate guard — reject if char-trigram Jaccard vs. any of last 5
-# outputs meets or exceeds this threshold.
+# Near-duplicate guard — reject if char-trigram Jaccard vs. any recent
+# output meets or exceeds this threshold.
 _NEAR_DUPLICATE_JACCARD = 0.70
+
+# Anchor-phrase lock guard. A candidate is suppressed when its leading
+# N tokens match the leading N tokens of at least M recent outputs. Catches
+# structural template lock-in ("Jake, good cop... X got more Y than Z") that
+# surface-Jaccard misses because the tail varies every time.
+_PREFIX_LOCK_TOKEN_COUNT = 3
+_PREFIX_LOCK_MIN_MATCHES = 3
+_RECENT_OUTPUTS_MAX = 10
 
 class BrainMode(StrEnum):
     """Heavyweight mode of the brain. Conversation isn't a mode because it
@@ -232,7 +240,7 @@ class Brain:
 
         # Near-duplicate guard — drops observation/freeform lines that rhyme
         # too closely with recent output (prevents prompt-cache template lock-in).
-        self._recent_outputs: deque[str] = deque(maxlen=5)
+        self._recent_outputs: deque[str] = deque(maxlen=_RECENT_OUTPUTS_MAX)
 
         # Conversation session state
         self._conversation: ConversationSession | None = None
@@ -643,6 +651,34 @@ class Brain:
                     jaccard, prior[:60],
                 )
                 return True
+        return self._has_recent_prefix_lock(text)
+
+    @staticmethod
+    def _leading_tokens(text: str, n: int = _PREFIX_LOCK_TOKEN_COUNT) -> str:
+        """Lowercase, punctuation-stripped first N word-tokens, space-joined."""
+        cleaned = "".join(c.lower() if c.isalnum() else " " for c in text)
+        return " ".join(cleaned.split()[:n])
+
+    def _has_recent_prefix_lock(self, text: str) -> bool:
+        """True if `text` shares its leading N tokens with M+ recent outputs.
+
+        Catches template drift where a voice anchors on one lead phrase and
+        varies only the tail ('Jake, good cop... this X got more Y than Z').
+        Surface Jaccard misses these because the tail carries most trigrams.
+        """
+        prefix = self._leading_tokens(text)
+        if not prefix:
+            return False
+        matches = sum(
+            1 for prior in self._recent_outputs
+            if self._leading_tokens(prior) == prefix
+        )
+        if matches >= _PREFIX_LOCK_MIN_MATCHES:
+            log.info(
+                "Gate: prefix-lock suppressed %r (%d matches in last %d)",
+                prefix, matches, len(self._recent_outputs),
+            )
+            return True
         return False
 
     async def _generate_freeform_comment(self) -> None:
