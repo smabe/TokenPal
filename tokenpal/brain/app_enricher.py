@@ -152,5 +152,5 @@ class AppEnricher:
             return None
 
         self._memory.put_app_enrichment(app_name, description, success=True)
-        log.info("AppEnricher: cached %r → %s", app_name, description[:60])
+        log.info("AppEnricher: cached %r → %s", app_name, description)
         return description
