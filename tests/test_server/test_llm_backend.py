@@ -53,17 +53,17 @@ def test_llamacpp_dispatch_sends_chat_template_kwargs():
 
     body: dict = {}
     backend._apply_thinking_controls(body, enable_thinking=None)
-    assert body["chat_template_kwargs"] == {"enable_thinking": "false"}
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
     assert body["reasoning_format"] == "deepseek"
     assert "reasoning_effort" not in body
 
     body = {}
     backend._apply_thinking_controls(body, enable_thinking=True)
-    assert body["chat_template_kwargs"] == {"enable_thinking": "true"}
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
 
     body = {}
     backend._apply_thinking_controls(body, enable_thinking=False)
-    assert body["chat_template_kwargs"] == {"enable_thinking": "false"}
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 def test_llamacpp_dispatch_respects_backend_default_when_disable_reasoning_false():
@@ -74,7 +74,7 @@ def test_llamacpp_dispatch_respects_backend_default_when_disable_reasoning_false
     })
     body: dict = {}
     backend._apply_thinking_controls(body, enable_thinking=None)
-    assert body["chat_template_kwargs"] == {"enable_thinking": "true"}
+    assert body["chat_template_kwargs"] == {"enable_thinking": True}
 
 
 def test_llamacpp_cache_hints_set_cache_prompt():

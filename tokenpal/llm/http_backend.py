@@ -177,9 +177,7 @@ class HttpBackend(AbstractLLMBackend):
             else not self._disable_reasoning
         )
         if self._inference_engine == "llamacpp":
-            body["chat_template_kwargs"] = {
-                "enable_thinking": "true" if effective else "false"
-            }
+            body["chat_template_kwargs"] = {"enable_thinking": effective}
             body["reasoning_format"] = "deepseek"
         else:
             body["reasoning_effort"] = "high" if effective else "none"
