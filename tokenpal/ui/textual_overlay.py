@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from rich.errors import MarkupError
 from rich.markup import escape as _esc_markup
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -291,7 +292,24 @@ class BuddyWidget(Static):
         self._is_talking = frame.name == "talking"
         if self._is_talking:
             self._blink_state = False
-        self.update("\n".join(frame.lines))
+        self._render_frame(frame)
+
+    def _render_frame(self, frame: BuddyFrame) -> None:
+        """Update the widget with a frame; fall back to plain text on MarkupError.
+
+        Repair passes in ``ascii_renderer._fix_markup`` run at load time, but a
+        profile generated before those passes landed — or a particularly
+        creative LLM output — can still smuggle malformed markup into
+        ``frame.lines``. Catching here keeps a bad frame from crashing the app.
+        """
+        try:
+            self.update("\n".join(frame.lines))
+        except MarkupError as exc:
+            log.warning(
+                "buddy frame %s has unparseable markup (%s); rendering plain",
+                frame.name, exc,
+            )
+            self.update("\n".join(_esc_markup(line) for line in frame.lines))
 
     def _get_frame(self, name: str) -> BuddyFrame:
         if name in self._custom_frames:
@@ -303,8 +321,7 @@ class BuddyWidget(Static):
             return
         self._blink_state = not self._blink_state
         name = "idle_alt" if self._blink_state else "idle"
-        frame = self._get_frame(name)
-        self.update("\n".join(frame.lines))
+        self._render_frame(self._get_frame(name))
 
     def max_frame_width(self) -> int:
         return self._cached_max_width

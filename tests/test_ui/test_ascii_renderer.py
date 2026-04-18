@@ -38,3 +38,21 @@ def test_fix_markup_mixed_html_and_bracket() -> None:
     assert "[green]" in out[0]
     assert "[/green]" in out[0]
     assert "</u>" not in out[0]
+
+
+def test_fix_markup_heals_dirty_hex_sigil() -> None:
+    # Qwen3 sometimes emits [#$ff6600] — a stray sigil before the hex digits
+    # that makes Textual's markup parser explode. Heal it to [#ff6600].
+    out = _fix_markup(["[#$ff6600]▄▄▄[/]", "[#@00ccff]x[/]"])
+    assert out[0] == "[#ff6600]▄▄▄[/]"
+    assert out[1] == "[#00ccff]x[/]"
+
+
+def test_fix_markup_strips_unparseable_line_as_last_resort() -> None:
+    # An orphan [/] with nothing to open it should not crash the renderer;
+    # the last-resort fallback strips every tag so raw glyphs remain.
+    from rich.text import Text
+    out = _fix_markup(["just text [/] with orphan close"])
+    # Must parse cleanly after fixing.
+    Text.from_markup(out[0])
+    assert "[/]" not in out[0]

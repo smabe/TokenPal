@@ -121,16 +121,26 @@ class TestParseNumberedLines:
 
 class TestFramesUsable:
     def test_accepts_full_frames(self):
-        frame = ["[red]x[/]"] * 10
+        frame = [
+            "[#ff6600]head[/]",
+            "[#ff6600]face[/]",
+            "[#00ccff]torso[/]",
+            "[#00ccff]legs[/]",
+            "[#ffffff]feet[/]",
+        ]
         assert _frames_look_usable(frame, frame, frame)
 
     def test_rejects_all_blank(self):
         assert not _frames_look_usable([""] * 10, [""] * 10, [""] * 10)
 
     def test_rejects_one_short(self):
-        good = ["x"] * 10
-        bad = ["", "", "", "", "", "", "", "", "", ""]
+        good = ["[#ff6600]x[/]", "[#00ccff]y[/]", "[#ffffff]z[/]", "[#111111]w[/]"]
+        bad = [""] * 10
         assert not _frames_look_usable(good, good, bad)
+
+    def test_rejects_monotone(self):
+        mono = ["[#55ff55]│││││││││[/]"] * 10
+        assert not _frames_look_usable(mono, mono, mono)
 
 
 # ---------------------------------------------------------------
@@ -151,9 +161,24 @@ def _blank_profile(**overrides) -> VoiceProfile:
         mood_roles={"default": "HEROIC"},
         default_mood="HEROIC",
         structure_hints=["Respond heroically."],
-        ascii_idle=["X"] * 10,
-        ascii_idle_alt=["X"] * 10,
-        ascii_talking=["X"] * 10,
+        ascii_idle=[
+            "[#ff6600]head[/]",
+            "[#00ccff]torso[/]",
+            "[#ffffff]legs[/]",
+            "[#111111]feet[/]",
+        ],
+        ascii_idle_alt=[
+            "[#ff6600]head[/]",
+            "[#00ccff]torso[/]",
+            "[#ffffff]legs[/]",
+            "[#111111]feet[/]",
+        ],
+        ascii_talking=[
+            "[#ff6600]head[/]",
+            "[#00ccff]torso[/]",
+            "[#ffffff]legs[/]",
+            "[#111111]feet[/]",
+        ],
     )
     base.update(overrides)
     return VoiceProfile(**base)
@@ -216,7 +241,13 @@ def test_regenerate_refreshes_all_llm_fields(tmp_path):
         'VOICE: You yell.\nCATCHPHRASES: "whoa"\nNEVER: whisper\n'
         "WORLDVIEW: heroism"
     )
-    fake_frames = (["[red]X[/]"] * 10, ["[red]X[/]"] * 10, ["[red]X[/]"] * 10)
+    good_frame = [
+        "[#ff6600]head[/]",
+        "[#00ccff]torso[/]",
+        "[#ffffff]legs[/]",
+        "[#111111]feet[/]",
+    ]
+    fake_frames = (good_frame, good_frame, good_frame)
 
     with patch.object(
         train_voice, "_generate_persona", return_value=fake_persona,

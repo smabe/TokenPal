@@ -14,17 +14,19 @@ import json
 import random
 import re
 import sys
-import urllib.request
 import urllib.error
+import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from rich.errors import MarkupError
+from rich.text import Text
+
 from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
-from tokenpal.util.text_guards import is_clean_english
 from tokenpal.tools.voice_profile import (
     FANDOM_NAMES,
     VoiceProfile,
@@ -36,6 +38,10 @@ from tokenpal.tools.voice_profile import (
     save_profile,
     slugify,
 )
+from tokenpal.ui.ascii_skeletons import PALETTE_KEYS, SKELETONS
+from tokenpal.ui.ascii_skeletons import render as _render_skeleton
+from tokenpal.util.text_guards import is_clean_english
+
 
 def _get_model() -> str:
     """Resolve model name from config, with fallback."""
@@ -275,109 +281,200 @@ def _generate_structure_hints(character: str, lines: list[str]) -> list[str]:
         "Match this character's personality.")
 
 
+_HEX_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
+
+
 def _frames_look_usable(
     idle: list[str], idle_alt: list[str], talking: list[str],
 ) -> bool:
-    """A frame set is usable if every frame has >=4 non-empty lines."""
+    """Reject blank, stunted, monotone, or markup-broken frame sets.
+
+    Each frame must have ≥4 non-empty lines, ≥2 distinct hex colors, and
+    every line must parse with ``Text.from_markup``. Skeleton-rendered
+    frames always pass; this guards against legacy v1 profiles audited
+    via ``audit_profile``.
+    """
     for frame in (idle, idle_alt, talking):
         if sum(1 for line in frame if line.strip()) < 4:
             return False
+        colors = {m.group(0).lower() for m in _HEX_COLOR_RE.finditer("\n".join(frame))}
+        if len(colors) < 2:
+            return False
+        for line in frame:
+            try:
+                Text.from_markup(line)
+            except MarkupError:
+                return False
     return True
 
 
+# --- Skeleton-based ASCII generation ---
+# The LLM classifies the character + picks a palette; the actual art
+# comes from hand-drawn skeleton templates in ascii_skeletons.py.
+
+_TALKING_MOUTH: dict[str, str] = {
+    "▽": "◇",
+    "◇": "ᗣ",
+    "◡": "ω",
+    "⌣": "ω",
+    "ω": "ᗣ",
+    "ᗣ": "◇",
+    "─": "◇",
+}
+
+# Safe fallback when LLM classification fails (network error, persistent
+# bad JSON, etc.). Neutral grey humanoid.
+_DEFAULT_CLASSIFICATION: dict = {
+    "skeleton": "humanoid_tall",
+    "palette": {
+        "hair": "#888888",
+        "skin": "#f4d4a8",
+        "outfit": "#4080bf",
+        "accent": "#ffd700",
+        "shadow": "#2a4a6a",
+    },
+    "eye": "●",
+    "mouth": "▽",
+}
+
+
 def _generate_ascii_art(
-    character: str, persona: str,
+    character: str, persona: str, source: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
-    """Generate 3 Rich-markup ASCII art frames for a character.
+    """Classify the character + pick a palette, then render 3 frames.
 
-    Returns (idle, idle_alt, talking) as lists of markup lines. Retries once
-    if the first attempt yields blank frames.
+    ``source`` is the wiki host (e.g. ``adventuretime.fandom.com``) used
+    to derive franchise context so the classifier knows Finn is from
+    Adventure Time. Omit it only for fallback/default generation.
+
+    Returns (idle, idle_alt, talking). Falls back to a neutral placeholder
+    if the LLM can't produce valid classification JSON after two attempts.
     """
-    for temp in (0.8, 0.6):
-        result = _generate_ascii_art_once(character, persona, temp)
-        if _frames_look_usable(*result):
-            return result
-    return result  # return best-effort last try even if short
+    classification = _classify_character_for_skeleton(
+        character, persona, source,
+    )
+    if classification is None:
+        classification = _DEFAULT_CLASSIFICATION
+    return _render_skeleton_frames(classification)
 
 
-def _generate_ascii_art_once(
-    character: str, persona: str, temperature: float,
-) -> tuple[list[str], list[str], list[str]]:
-    text = _ollama_generate(
-        f'You are a pixel artist who creates detailed terminal character art '
-        f'using Unicode and Rich markup.\n\n'
-        f'Create 3 frames of "{character}" for a terminal buddy app.\n\n'
-        f'Character info:\n{persona[:300]}\n\n'
-        f'REQUIREMENTS:\n'
-        f'- Each frame EXACTLY 10 lines tall, 20-24 characters wide '
-        f'(not counting markup tags)\n'
-        f'- Use Rich markup: [#ff6600]text[/], [bold #00ccff]text[/]\n'
-        f'- Colors MUST be hex codes like #ff6600. Do NOT use named '
-        f'colors (silver, gray, red, etc) — they crash the renderer\n'
-        f'- Use 2-3 colors that match the character (hair, outfit, etc)\n'
-        f'- Build the FULL body: head, face, torso, arms, legs\n'
-        f'- Use half-block chars ▄▀ for curves, █░▓▒ for fills, '
-        f'│─┌┐└┘ for edges, ◆○● for eyes\n'
-        f'- Make it DETAILED — fill the space, no empty rectangles\n'
-        f'- Include the character\'s signature features (hat, hair, '
-        f'weapon, outfit details)\n'
-        f'- idle_alt: same as idle but eyes change (blink: ○→─)\n'
-        f'- talking: mouth open or speech indicator\n\n'
-        f'Here is an example of the level of detail expected:\n'
-        f'[#00ccff]    ▄███▄[/]\n'
-        f'[#00ccff]   █[/][#ffffff]○   ○[/][#00ccff]█[/]\n'
-        f'[#00ccff]   █[/][#ffffff]  ▽  [/][#00ccff]█[/]\n'
-        f'[#00ccff]    ▀███▀[/]\n'
-        f'[#ff6600]   ╔═════╗[/]\n'
-        f'[#ff6600]   ║  ◇  ║[/]\n'
-        f'[#ff6600]   ╚══╦══╝[/]\n'
-        f'[#ffffff]    ▄▀ ▀▄[/]\n\n'
-        f'Output EXACTLY this format, nothing else:\n'
-        f'IDLE:\n(10 lines of art)\n'
-        f'IDLE_ALT:\n(10 lines of art)\n'
-        f'TALKING:\n(10 lines of art)',
-        max_tokens=1200,
-        temperature=temperature,
+def _classify_character_for_skeleton(
+    character: str, persona: str, source: str = "",
+) -> dict | None:
+    """Ask the LLM for a skeleton + palette + face glyphs as JSON.
+
+    Retries once at a lower temperature. Returns None on persistent
+    failure so callers can fall back to a default.
+    """
+    franchise = franchise_from_source(source) if source else ""
+    origin = f' from {franchise}' if franchise else ""
+    color_hint = (
+        f'\n{character} is from {franchise}. Use canonical colors from '
+        f'that franchise — hat/hair/skin/outfit colors the character is '
+        f'known for on screen. If unsure, err toward bright, terminal-'
+        f'readable tones (mid-luminance hex, nothing near #000000).\n'
+        if franchise else
+        '\nPick bright, terminal-readable colors (mid-luminance hex, '
+        'nothing near #000000) — dark backgrounds hide dark palettes.\n'
+    )
+    prompt = (
+        f'Pick an ASCII buddy template for "{character}"{origin}.\n'
+        f'{color_hint}\n'
+        f'Persona:\n{persona[:400]}\n\n'
+        f'Templates (pick ONE):\n'
+        f'- humanoid_tall: standard hero/adventurer (Finn, Mordecai)\n'
+        f'- humanoid_stocky: short/wide build (Dexter, Muscle Man)\n'
+        f'- robot_boxy: rectangular robot (BMO, Bender)\n'
+        f'- creature_small: tiny round pet/chibi (Nibbler)\n'
+        f'- mystical_cloaked: wizard/jester in hood or robe (Ice King)\n'
+        f'- ghost_floating: hovering spirit with no legs\n'
+        f'- animal_quadruped: 4-legged pet/creature (Jake dog form)\n'
+        f'- winged: humanoid with wings flared behind shoulders\n\n'
+        f'Pick 5 hex colors that match the character:\n'
+        f'- hair: hair / hat / head-top color\n'
+        f'- skin: face / skin tone\n'
+        f'- outfit: primary clothing\n'
+        f'- accent: secondary trim color (buttons, crowns, gems)\n'
+        f'- shadow: a darker variant for shading\n\n'
+        f'Pick one eye glyph: ● ○ ◉ ◎ ⊙ ◐ ◑\n'
+        f'Pick one mouth glyph: ▽ ◇ ◡ ⌣ ω ᗣ\n\n'
+        f'Output ONLY this JSON, no prose:\n'
+        '{"skeleton":"...","palette":{"hair":"#rrggbb",'
+        '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
+        '"shadow":"#rrggbb"},"eye":"...","mouth":"..."}'
     )
 
+    for temp in (0.5, 0.3):
+        text = _ollama_generate(prompt, max_tokens=400, temperature=temp)
+        parsed = _parse_classification_json(text or "")
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_classification_json(text: str) -> dict | None:
+    """Extract + validate a classification JSON blob from LLM output.
+
+    Tolerates surrounding prose. Returns None if the blob is missing,
+    malformed, uses an unknown skeleton, has a non-hex palette entry,
+    or has multi-character eye/mouth glyphs.
+    """
     if not text:
-        return [], [], []
+        return None
 
-    return _parse_ascii_frames(text)
+    # Strip ``` fences the model likes to add.
+    text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "")
+
+    # Grab the outermost {...} blob.
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+
+    if data.get("skeleton") not in SKELETONS:
+        return None
+
+    palette = data.get("palette")
+    if not isinstance(palette, dict):
+        return None
+    for key in PALETTE_KEYS:
+        value = palette.get(key)
+        if not isinstance(value, str) or not _HEX_COLOR_RE.fullmatch(value):
+            return None
+
+    for glyph_key in ("eye", "mouth"):
+        glyph = data.get(glyph_key)
+        # Single-codepoint string; a "[" open-bracket would sneak markup in.
+        if not isinstance(glyph, str) or len(glyph) != 1 or glyph == "[":
+            return None
+
+    return {
+        "skeleton": data["skeleton"],
+        "palette": {k: palette[k] for k in PALETTE_KEYS},
+        "eye": data["eye"],
+        "mouth": data["mouth"],
+    }
 
 
-def _parse_ascii_frames(text: str) -> tuple[list[str], list[str], list[str]]:
-    """Parse LLM output into three 8-line frames."""
-    # Strip markdown fences
-    text = re.sub(r"```\w*\n?", "", text)
+def _render_skeleton_frames(
+    classification: dict,
+) -> tuple[list[str], list[str], list[str]]:
+    """Render idle / idle_alt / talking from a validated classification."""
+    skeleton = classification["skeleton"]
+    base: dict[str, str] = {
+        k: f"[{classification['palette'][k]}]" for k in PALETTE_KEYS
+    }
+    base["eye"] = classification["eye"]
+    base["mouth"] = classification["mouth"]
+    talking_mouth = _TALKING_MOUTH.get(classification["mouth"], "◇")
 
-    idle: list[str] = []
-    idle_alt: list[str] = []
-    talking: list[str] = []
+    def frame(**overrides: str) -> list[str]:
+        return _render_skeleton(skeleton, base | overrides)
 
-    current: list[str] | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        upper = stripped.upper().rstrip(":")
-        if upper == "IDLE":
-            current = idle
-        elif upper in ("IDLE_ALT", "IDLE ALT"):
-            current = idle_alt
-        elif upper == "TALKING":
-            current = talking
-        elif current is not None and len(current) < 10:
-            current.append(line.rstrip())
-
-    # Pad short frames to 10 lines
-    for frame in (idle, idle_alt, talking):
-        while len(frame) < 10:
-            frame.append("")
-
-    # If idle_alt is empty/identical, copy idle with a minor tweak
-    if idle and not any(idle_alt):
-        idle_alt[:] = list(idle)
-
-    return idle, idle_alt, talking
+    return frame(), frame(eye="─"), frame(mouth=talking_mouth)
 
 
 def _generate_voice_assets(
@@ -414,9 +511,10 @@ def _generate_voice_assets(
     anchor_lines = _extract_anchor_lines(lines, catchphrases)
     banned_names = _derive_banned_names(source, character)
 
-    # Generate ASCII art (needs persona for character description)
+    # Generate ASCII art (needs persona for character description; source
+    # gives the classifier franchise context for canonical colors).
     ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
-        character, persona,
+        character, persona, source,
     )
 
     return (
@@ -684,7 +782,7 @@ def regenerate_voice_assets(
         profile.ascii_idle,
         profile.ascii_idle_alt,
         profile.ascii_talking,
-    ) = _generate_ascii_art(profile.character, persona)
+    ) = _generate_ascii_art(profile.character, persona, profile.source)
 
     profile.version = 2
 
@@ -723,7 +821,9 @@ def regenerate_ascii_art(
         profile.ascii_idle,
         profile.ascii_idle_alt,
         profile.ascii_talking,
-    ) = _generate_ascii_art(profile.character, profile.persona)
+    ) = _generate_ascii_art(
+        profile.character, profile.persona, profile.source,
+    )
 
     out_dir = voices_dir or _get_voices_dir()
     save_profile(profile, out_dir)

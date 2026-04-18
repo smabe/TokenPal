@@ -6,6 +6,9 @@ import re
 import textwrap
 from dataclasses import dataclass
 
+from rich.errors import MarkupError
+from rich.text import Text
+
 BUDDY_IDLE = [
     r"     ▄███████████▄     ",
     r"   ▄█             █▄   ",
@@ -54,6 +57,11 @@ BUDDY_SURPRISED = [
 # LLM-generated art sometimes uses [#namedcolor] which Textual rejects.
 _NAMED_COLOR_RE = re.compile(r"\[#(?![0-9a-fA-F]{6}\])([a-zA-Z]\w*)\]")
 
+# Qwen3 sometimes emits junk-prefixed hex like [#$ff6600] or [#@ff6600].
+# Strip any non-hex chars between `#` and the 6-hex-digit payload so the tag
+# still renders. Applied before _NAMED_COLOR_RE so we don't misclassify.
+_DIRTY_HEX_RE = re.compile(r"\[#[^0-9a-fA-F\]]+([0-9a-fA-F]{6})\]")
+
 # LLMs occasionally leak HTML-style tags (<u>, </u>) into ASCII frames; Textual
 # uses [bracket] markup so angle-bracket tags render as raw characters. Letter-
 # start only so legit ASCII like "<- arrow ->" survives.
@@ -95,11 +103,44 @@ def _remap_rich_only_names(line: str) -> str:
     return _TAG_RE.sub(repl, line)
 
 
+# Permissive: matches any `[...]` that could plausibly be a Rich tag, including
+# bare closers like `[/]`. Only used as a last resort when `_TAG_RE` can't see
+# it as a proper opener but the content is still choking the markup parser.
+_ANY_BRACKET_TAG_RE = re.compile(r"\[/?[^\[\]]*\]")
+
+
+def _strip_markup(line: str) -> str:
+    """Last-resort: remove every bracket tag from a line so raw glyphs remain."""
+    return _ANY_BRACKET_TAG_RE.sub("", line)
+
+
 def _fix_markup(lines: list[str]) -> list[str]:
-    """Fix LLM-generated Rich markup for Textual compatibility."""
-    out = [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in lines]
+    """Fix LLM-generated Rich markup for Textual compatibility.
+
+    Runs four passes:
+    1. Heal junk-prefixed hex tokens (``[#$ff6600]`` → ``[#ff6600]``).
+    2. Drop ``#`` from tokens with a valid named color body (``[#red]`` → ``[red]``).
+    3. Remap Rich-only names (``silver`` → ``#c0c0c0``) so Textual accepts them.
+    4. Strip any stray HTML-style tags.
+
+    After all repairs, verify each line parses with ``Text.from_markup``. If it
+    still raises (a [/] tag with nothing to close, etc.), strip every bracket
+    tag from that line as a last-resort fallback so the renderer can't crash.
+    """
+    out = [_DIRTY_HEX_RE.sub(r"[#\1]", line) for line in lines]
+    out = [_NAMED_COLOR_RE.sub(r"[\1]", line) for line in out]
     out = [_remap_rich_only_names(line) for line in out]
-    return [_HTML_TAG_RE.sub("", line) for line in out]
+    out = [_HTML_TAG_RE.sub("", line) for line in out]
+
+    safe: list[str] = []
+    for line in out:
+        try:
+            Text.from_markup(line)
+        except MarkupError:
+            safe.append(_strip_markup(line))
+        else:
+            safe.append(line)
+    return safe
 
 
 FRAMES: dict[str, list[str]] = {
