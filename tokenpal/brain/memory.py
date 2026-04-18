@@ -76,7 +76,21 @@ CREATE TABLE IF NOT EXISTS app_enrichment (
     fetched_at REAL NOT NULL,
     success INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS llm_throughput_estimators (
+    server_url TEXT NOT NULL,
+    model TEXT NOT NULL,
+    decode_tps REAL NOT NULL,
+    ttft_s REAL NOT NULL,
+    sample_count INTEGER NOT NULL,
+    updated_at REAL NOT NULL,
+    schema_version INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (server_url, model)
+);
 """
+
+# Bump when the estimator math changes in a way that invalidates prior
+# decode_tps / ttft_s readings. Rows with a lower version are ignored.
+LLM_ESTIMATOR_SCHEMA_VERSION = 1
 
 
 class MemoryStore:
@@ -175,6 +189,57 @@ class MemoryStore:
 
     def record_session_start(self) -> None:
         self.record_observation("system", "session_start", "Session started")
+
+    # ------------------------------------------------------------------
+    # LLM throughput estimator persistence — see plans/gpu-scaling.md
+    # ------------------------------------------------------------------
+
+    def get_llm_throughput_estimator(
+        self, server_url: str, model: str
+    ) -> tuple[float, float, int] | None:
+        """Return (decode_tps, ttft_s, sample_count) if a row matches both the
+        key and the current schema_version, else None.
+        """
+        if not self._enabled or not self._conn:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT decode_tps, ttft_s, sample_count FROM llm_throughput_estimators "
+                "WHERE server_url = ? AND model = ? AND schema_version = ?",
+                (server_url, model, LLM_ESTIMATOR_SCHEMA_VERSION),
+            ).fetchone()
+        if row is None:
+            return None
+        return float(row[0]), float(row[1]), int(row[2])
+
+    def save_llm_throughput_estimator(
+        self,
+        server_url: str,
+        model: str,
+        decode_tps: float,
+        ttft_s: float,
+        sample_count: int,
+    ) -> None:
+        """Upsert the current EWMA state for (server_url, model)."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO llm_throughput_estimators "
+                "(server_url, model, decode_tps, ttft_s, sample_count, updated_at, schema_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(server_url, model) DO UPDATE SET "
+                "decode_tps = excluded.decode_tps, "
+                "ttft_s = excluded.ttft_s, "
+                "sample_count = excluded.sample_count, "
+                "updated_at = excluded.updated_at, "
+                "schema_version = excluded.schema_version",
+                (
+                    server_url, model, decode_tps, ttft_s, sample_count,
+                    time.time(), LLM_ESTIMATOR_SCHEMA_VERSION,
+                ),
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Querying

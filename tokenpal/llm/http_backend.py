@@ -28,6 +28,7 @@ class HttpBackend(AbstractLLMBackend):
     # Throughput estimator — see plans/gpu-scaling.md.
     _EWMA_ALPHA = 0.2
     _MIN_SAMPLES_FOR_ESTIMATE = 3
+    _WRITEBACK_MIN_INTERVAL_S = 60.0
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
@@ -70,6 +71,10 @@ class HttpBackend(AbstractLLMBackend):
         # Cross-session toggle: log "measured ≈ X t/s" only once per threshold cross.
         self._logged_measurement_available: bool = False
         self._logged_pin_underuse: bool = False
+        # Optional DI — when present, seed EWMAs on setup and persist updates.
+        # Keep the type loose to avoid a circular import; MemoryStore ducktypes.
+        self._memory_store: Any | None = config.get("memory_store")
+        self._last_writeback_s: float = 0.0
 
     async def _try_connect(self, url: str, *, allow_adopt: bool = True) -> bool:
         """Try connecting to an API endpoint. Returns True on success.
@@ -132,6 +137,7 @@ class HttpBackend(AbstractLLMBackend):
         if await self._try_connect(self._api_url):
             log.info("Connected to LLM API at %s", self._api_url)
             await self._apply_auto_max_tokens()
+            self._seed_estimator_from_store()
             return
 
         is_local = any(h in self._api_url for h in self._LOCAL_HOSTS)
@@ -146,6 +152,7 @@ class HttpBackend(AbstractLLMBackend):
                     self._FALLBACK_URL,
                 )
                 await self._apply_auto_max_tokens()
+                self._seed_estimator_from_store()
                 return
 
         log.warning(
@@ -279,6 +286,7 @@ class HttpBackend(AbstractLLMBackend):
                 self._model_name, self._api_url,
             )
             self._logged_measurement_available = True
+        self._maybe_persist_estimator()
         log.debug(
             "sample: tokens=%d elapsed=%.3fs decode≈%.1f t/s ttft≈%.2fs n=%d",
             completion_tokens, total_elapsed_s,
@@ -298,6 +306,53 @@ class HttpBackend(AbstractLLMBackend):
         self._ttft_ewma_s = None
         self._logged_measurement_available = False
         self._logged_pin_underuse = False
+        self._last_writeback_s = 0.0
+
+    def _seed_estimator_from_store(self) -> None:
+        """Load prior (decode_tps, ttft_s, n) from MemoryStore, if any, so the
+        first call after a known restart doesn't burn the bootstrap window.
+
+        First-time keys (new model/server) leave the estimator empty and we
+        fall back to the static default for the first 3 calls.
+        """
+        if self._memory_store is None:
+            return
+        row = self._memory_store.get_llm_throughput_estimator(
+            self._api_url, self._model_name
+        )
+        if row is None:
+            return
+        decode_tps, ttft_s, n = row
+        self._decode_tps_ewma = decode_tps
+        self._ttft_ewma_s = ttft_s
+        self._sample_count = max(n, self._MIN_SAMPLES_FOR_ESTIMATE)
+        self._logged_measurement_available = True  # skip noisy threshold-cross log
+        log.info(
+            "resuming throughput estimator: %.0f t/s decode, %.2fs TTFT "
+            "(%d prior samples, %s @ %s)",
+            decode_tps, ttft_s, n, self._model_name, self._api_url,
+        )
+
+    def _maybe_persist_estimator(self) -> None:
+        """Throttled writeback — at most once per _WRITEBACK_MIN_INTERVAL_S."""
+        if (
+            self._memory_store is None
+            or not self._estimate_ready
+            or self._decode_tps_ewma is None
+            or self._ttft_ewma_s is None
+        ):
+            return
+        now = time.monotonic()
+        if now - self._last_writeback_s < self._WRITEBACK_MIN_INTERVAL_S:
+            return
+        self._memory_store.save_llm_throughput_estimator(
+            self._api_url,
+            self._model_name,
+            self._decode_tps_ewma,
+            self._ttft_ewma_s,
+            self._sample_count,
+        )
+        self._last_writeback_s = now
 
     @property
     def _estimate_ready(self) -> bool:
@@ -459,8 +514,10 @@ class HttpBackend(AbstractLLMBackend):
         self._derived_max_tokens = None
         self._context_length = None
         # Throughput estimator is also model-specific — a 32B model and a 4B
-        # model on the same server have very different decode_tps.
+        # model on the same server have very different decode_tps. Try a
+        # re-seed from the store under the new key; miss → cold bootstrap.
         self._clear_throughput_estimators()
+        self._seed_estimator_from_store()
         if not self._max_tokens_pinned:
             self._max_tokens = self._initial_max_tokens
         log.info("Model swapped to: %s", model_name)
@@ -497,6 +554,7 @@ class HttpBackend(AbstractLLMBackend):
         self._derived_max_tokens = None
         self._context_length = None
         self._clear_throughput_estimators()
+        self._seed_estimator_from_store()
         # Re-evaluate pin status against the new server's entry in config.
         key = canon_server_url(self._api_url)
         if key in self._per_server_max_tokens:

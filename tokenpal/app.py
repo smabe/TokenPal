@@ -107,6 +107,11 @@ def main() -> None:
 
     llm_config = dataclasses.asdict(config.llm)
     llm_config["server_mode"] = config.server.mode
+    # Backends with a throughput estimator persist their EWMAs keyed by
+    # (api_url, model) so a known rig doesn't burn its 3-call bootstrap
+    # window on every restart. See plans/gpu-scaling.md.
+    if memory:
+        llm_config["memory_store"] = memory
     llm = resolve_backend(llm_config)
 
     ui_config = dataclasses.asdict(config.ui)

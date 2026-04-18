@@ -168,6 +168,99 @@ def test_zero_completion_tokens_skipped() -> None:
     assert b._decode_tps_ewma is None
 
 
+class _FakeMemoryStore:
+    """Minimal stand-in for MemoryStore with just the estimator methods."""
+
+    def __init__(self) -> None:
+        self._rows: dict[tuple[str, str], tuple[float, float, int]] = {}
+        self.save_calls: int = 0
+
+    def get_llm_throughput_estimator(
+        self, server_url: str, model: str
+    ) -> tuple[float, float, int] | None:
+        return self._rows.get((server_url, model))
+
+    def save_llm_throughput_estimator(
+        self,
+        server_url: str,
+        model: str,
+        decode_tps: float,
+        ttft_s: float,
+        sample_count: int,
+    ) -> None:
+        self._rows[(server_url, model)] = (decode_tps, ttft_s, sample_count)
+        self.save_calls += 1
+
+
+def _backend_with_store(
+    store: _FakeMemoryStore, *, target_latency_scaling: bool = True
+) -> HttpBackend:
+    return HttpBackend({
+        "api_url": "http://localhost:11434/v1",
+        "model_name": "gemma4",
+        "max_tokens": 60,
+        "target_latency_scaling": target_latency_scaling,
+        "memory_store": store,
+    })
+
+
+def test_seed_from_store_populates_estimator() -> None:
+    store = _FakeMemoryStore()
+    store._rows[("http://localhost:11434/v1", "gemma4")] = (57.0, 0.8, 142)
+    b = _backend_with_store(store)
+    b._seed_estimator_from_store()
+    assert b._estimate_ready
+    assert b._decode_tps_ewma == 57.0
+    assert b._ttft_ewma_s == 0.8
+    assert b._sample_count == 142
+
+
+def test_seed_missing_row_leaves_cold_bootstrap() -> None:
+    store = _FakeMemoryStore()
+    b = _backend_with_store(store)
+    b._seed_estimator_from_store()
+    assert not b._estimate_ready
+    assert b._decode_tps_ewma is None
+
+
+def test_writeback_throttled_by_interval() -> None:
+    store = _FakeMemoryStore()
+    b = _backend_with_store(store)
+    _seed_estimator(b, decode_tps=50.0, ttft_s=1.0)
+    # First writeback goes through, second inside the interval is throttled.
+    b._maybe_persist_estimator()
+    b._maybe_persist_estimator()
+    assert store.save_calls == 1
+
+
+def test_writeback_fires_after_interval() -> None:
+    store = _FakeMemoryStore()
+    b = _backend_with_store(store)
+    _seed_estimator(b, decode_tps=50.0, ttft_s=1.0)
+    b._maybe_persist_estimator()
+    b._last_writeback_s -= b._WRITEBACK_MIN_INTERVAL_S + 1
+    b._maybe_persist_estimator()
+    assert store.save_calls == 2
+
+
+def test_writeback_noop_when_estimate_not_ready() -> None:
+    store = _FakeMemoryStore()
+    b = _backend_with_store(store)
+    b._maybe_persist_estimator()
+    assert store.save_calls == 0
+
+
+def test_model_swap_reseeds_from_store_if_present() -> None:
+    store = _FakeMemoryStore()
+    store._rows[("http://localhost:11434/v1", "qwen3")] = (30.0, 1.5, 40)
+    b = _backend_with_store(store)
+    _seed_estimator(b, decode_tps=50.0, ttft_s=1.0)  # simulate current gemma4 state
+    b.set_model("qwen3")
+    # New model's stored row kicks in immediately.
+    assert b._decode_tps_ewma == 30.0
+    assert b._ttft_ewma_s == 1.5
+
+
 def test_pin_underuse_logs_once(caplog: pytest.LogCaptureFixture) -> None:
     b = _backend(
         max_tokens=60,

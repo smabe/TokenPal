@@ -386,3 +386,43 @@ class TestResearchCache:
         store._conn.commit()
         assert store.get_research_answer("xyz", max_age_s=5.0) is None
         assert store.get_research_answer("xyz", max_age_s=30.0) is not None
+
+
+# ------------------------------------------------------------------
+# LLM throughput estimator persistence
+# ------------------------------------------------------------------
+
+
+class TestThroughputEstimator:
+    def test_missing_row_returns_none(self, store: MemoryStore) -> None:
+        assert store.get_llm_throughput_estimator("http://x/v1", "gemma4") is None
+
+    def test_save_then_get_roundtrip(self, store: MemoryStore) -> None:
+        store.save_llm_throughput_estimator("http://x/v1", "gemma4", 57.0, 0.8, 50)
+        row = store.get_llm_throughput_estimator("http://x/v1", "gemma4")
+        assert row == (57.0, 0.8, 50)
+
+    def test_upsert_overwrites_prior_row(self, store: MemoryStore) -> None:
+        store.save_llm_throughput_estimator("http://x/v1", "gemma4", 57.0, 0.8, 50)
+        store.save_llm_throughput_estimator("http://x/v1", "gemma4", 62.0, 0.9, 120)
+        row = store.get_llm_throughput_estimator("http://x/v1", "gemma4")
+        assert row == (62.0, 0.9, 120)
+
+    def test_rows_scoped_by_server_and_model(self, store: MemoryStore) -> None:
+        store.save_llm_throughput_estimator("http://x/v1", "gemma4", 57.0, 0.8, 50)
+        store.save_llm_throughput_estimator("http://x/v1", "qwen3", 30.0, 1.5, 40)
+        store.save_llm_throughput_estimator("http://y/v1", "gemma4", 80.0, 0.3, 200)
+        assert store.get_llm_throughput_estimator("http://x/v1", "gemma4") == (57.0, 0.8, 50)
+        assert store.get_llm_throughput_estimator("http://x/v1", "qwen3") == (30.0, 1.5, 40)
+        assert store.get_llm_throughput_estimator("http://y/v1", "gemma4") == (80.0, 0.3, 200)
+
+    def test_stale_schema_version_ignored(self, store: MemoryStore) -> None:
+        assert store._conn is not None
+        store._conn.execute(
+            "INSERT INTO llm_throughput_estimators "
+            "(server_url, model, decode_tps, ttft_s, sample_count, updated_at, schema_version) "
+            "VALUES ('http://x/v1', 'gemma4', 57.0, 0.8, 50, ?, 0)",
+            (time.time(),),
+        )
+        store._conn.commit()
+        assert store.get_llm_throughput_estimator("http://x/v1", "gemma4") is None
