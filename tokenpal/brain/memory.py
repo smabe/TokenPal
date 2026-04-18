@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS research_cache (
     sources_json TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_enrichment (
+    app_name TEXT PRIMARY KEY,
+    description TEXT,
+    fetched_at REAL NOT NULL,
+    success INTEGER NOT NULL
+);
 """
 
 
@@ -689,6 +695,37 @@ class MemoryStore:
         if age > max_age_s:
             return None
         return (answer, sources_json, age)
+
+    def get_app_enrichment(
+        self, app_name: str,
+    ) -> tuple[str | None, float, bool] | None:
+        """Return ``(description, age_s, success)`` for a cached app, else None."""
+        if not self._enabled or not self._conn:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT description, fetched_at, success FROM app_enrichment "
+                "WHERE app_name = ?",
+                (app_name,),
+            ).fetchone()
+        if row is None:
+            return None
+        description, fetched_at, success = row
+        return (description, time.time() - fetched_at, bool(success))
+
+    def put_app_enrichment(
+        self, app_name: str, description: str | None, success: bool,
+    ) -> None:
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO app_enrichment "
+                "(app_name, description, fetched_at, success) "
+                "VALUES (?, ?, ?, ?)",
+                (app_name, description, time.time(), 1 if success else 0),
+            )
+            self._conn.commit()
 
     def log_mood(self, mood: str) -> None:
         """Record a mood-check response."""
