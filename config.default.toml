@@ -14,6 +14,27 @@ process_heat = false         # names the top CPU hog when the machine is pinned 
 typing_cadence = false       # WPM bursts and post-burst silence (counts keypresses only, never key values)
 filesystem_pulse = false     # activity bursts in watched folders (default: Downloads, Desktop, Documents)
 
+[idle_tools]
+# Third emission path: during quiet stretches the buddy rolls a weighted
+# die across contextual rules (word of the day, moon phase, trivia, etc).
+# Network-backed rules silently drop when web_fetches consent is absent;
+# memory_recall is the consent-free floor so the feature still has a pulse.
+enabled = true
+global_cooldown_s = 600      # min seconds between any two rolls
+max_per_hour = 4             # hard rate cap
+
+[idle_tools.rules]
+# Per-rule toggles. Omit a key = use the rule's default (true for all M1 rules).
+# evening_moon = true
+# morning_word = true
+# monday_joke = true
+# weather_change = true
+# long_focus_fact = true
+# deep_lull_trivia = true
+# on_this_day_opener = true
+# lunar_override = true
+# memory_recall = true
+
 [llm]
 backend = "http"
 # inference_engine = "ollama"   # "ollama" | "llamacpp" — set "llamacpp" on AMD

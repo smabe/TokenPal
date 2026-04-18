@@ -20,6 +20,10 @@ from tokenpal.brain.orchestrator import AgentBridge, Brain, ResearchBridge
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
+from tokenpal.config.idle_tools_writer import (
+    set_idle_rule_enabled,
+    set_idle_tools_enabled,
+)
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
 from tokenpal.config.senses_writer import (
@@ -202,6 +206,7 @@ def main() -> None:
         ),
         research_bridge=ResearchBridge(config=config.research),
         log_callback=_agent_log,
+        idle_tools_config=config.idle_tools,
     )
 
     # Load voice-specific buddy art into the overlay
@@ -711,6 +716,103 @@ def main() -> None:
 
         return CommandResult("Usage: /senses [list|enable <name>|disable <name>]")
 
+    def _cmd_idle_tools(args: str) -> CommandResult:
+        from datetime import datetime
+
+        from tokenpal.brain.idle_rules import M1_RULES, rule_by_name
+        from tokenpal.brain.idle_tools import build_context
+        from tokenpal.config.consent import Category, has_consent
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else "list"
+        target = parts[1].strip() if len(parts) > 1 else ""
+
+        if subcmd == "list":
+            rows = [
+                f"  global:  {'on ' if config.idle_tools.enabled else 'off'}  "
+                f"(cooldown {int(config.idle_tools.global_cooldown_s)}s, "
+                f"cap {config.idle_tools.max_per_hour}/h)"
+            ]
+            for rule in M1_RULES:
+                on = config.idle_tools.rules.get(rule.name, rule.enabled_default)
+                mark = "on " if on else "off"
+                rows.append(f"  {mark}  {rule.name} — {rule.description}")
+            return CommandResult("Idle tools:\n" + "\n".join(rows))
+
+        if subcmd in ("on", "off"):
+            try:
+                path = set_idle_tools_enabled(subcmd == "on")
+            except OSError as e:
+                return CommandResult(f"/idle_tools: could not write config: {e}")
+            return CommandResult(
+                f"idle_tools turned {subcmd} in {path.name}. "
+                "Restart TokenPal for the change to take effect."
+            )
+
+        if subcmd in ("enable", "disable"):
+            if not target:
+                return CommandResult(f"Usage: /idle_tools {subcmd} <rule_name>")
+            if rule_by_name(target) is None:
+                return CommandResult(
+                    f"Unknown idle rule '{target}'. Try /idle_tools list."
+                )
+            try:
+                path = set_idle_rule_enabled(target, subcmd == "enable")
+            except OSError as e:
+                return CommandResult(f"/idle_tools: could not write config: {e}")
+            verb = "enabled" if subcmd == "enable" else "disabled"
+            return CommandResult(
+                f"{target} {verb} in {path.name}. "
+                "Restart TokenPal for the change to take effect."
+            )
+
+        if subcmd == "roll":
+            if not target:
+                return CommandResult(
+                    "Usage: /idle_tools roll <rule_name> (forces a fire "
+                    "bypassing predicates + cooldowns)"
+                )
+            rule = rule_by_name(target)
+            if rule is None:
+                return CommandResult(
+                    f"Unknown idle rule '{target}'. Try /idle_tools list."
+                )
+
+            def _run_roll() -> None:
+                async def _go() -> None:
+                    ctx = build_context(
+                        now=datetime.now(),
+                        session_minutes=1,
+                        first_session_of_day=True,
+                        active_readings={},
+                        mood=str(personality.mood),
+                        time_since_last_comment_s=9999.0,
+                        consent_web_fetches=has_consent(Category.WEB_FETCHES),
+                    )
+                    result = await brain._idle_tools.force_fire(rule.name, ctx)
+                    if result is None:
+                        overlay.log_buddy_message(
+                            f"/idle_tools: {rule.name} fired but tool returned nothing."
+                        )
+                        return
+                    await brain._generate_tool_riff(
+                        brain._context.snapshot(), result,
+                    )
+
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        _go(), brain._loop,
+                    ).result(timeout=30)
+                except Exception as e:
+                    overlay.log_buddy_message(f"/idle_tools roll failed: {e}")
+
+            threading.Thread(target=_run_roll, daemon=True).start()
+            return CommandResult(f"Rolling {target}...")
+
+        return CommandResult(
+            "Usage: /idle_tools [list|on|off|enable <rule>|disable <rule>|roll <rule>]"
+        )
+
     def _cmd_wifi(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
@@ -802,6 +904,7 @@ def main() -> None:
     dispatcher.register("gh", _cmd_gh)
     dispatcher.register("math", _cmd_math)
     dispatcher.register("senses", _cmd_senses)
+    dispatcher.register("idle_tools", _cmd_idle_tools)
     dispatcher.register("wifi", _cmd_wifi)
     dispatcher.register("watch", _cmd_watch)
     dispatcher.register("help", _cmd_help)

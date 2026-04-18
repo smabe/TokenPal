@@ -65,6 +65,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Freeform thoughts: 15% default, 30% for rich voices (50+ example lines), 45s min gap
 - Easter eggs bypass LLM (3:33 AM, Friday 5 PM, Zoom, Calculator)
 - Cross-session callbacks: `MemoryStore.get_pattern_callbacks()` detects behavioral patterns (day-of-week skew, first-app-per-session, streaks, startup rituals) from SQLite history. Daily aggregation runs on startup. Callbacks injected into observation prompts as factual one-liners the LLM riffs on. Sensitive apps excluded, results cached per session
+- Idle tool rolls (M1 shipped 2026-04-17): third emission path — `IdleToolRoller` in `tokenpal/brain/idle_tools.py`, rules in `idle_rules.py`. Fires only when the comment gate chose silence, so cannot inflate comment rate. 9 M1 rules (word_of_the_day, joke_of_the_day, on_this_day, moon_phase, weather_forecast_week, random_fact, trivia_question + memory_recall as the consent-free offline floor). Evergreen daily tools (word/joke/on_this_day/moon_phase) warmed once at session start and cached 6h so the hot path never blocks on HTTP. Per-rule cooldowns + `[idle_tools] global_cooldown_s` + `max_per_hour` rate cap. Every fire writes `idle_tool_fire` to memory.db for future memory_query callbacks. Config: `[idle_tools] enabled = true` default, per-rule toggles under `[idle_tools.rules]`. See `plans/idle-tool-rolls.md` — M2 (running bits + monologue) queued next
 - See `plans/shipped/commentary-finetune.md` for full commentary system design
 
 ## UI
@@ -79,6 +80,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Slash Commands
 - `/help`, `/clear`, `/mood`, `/status`, `/chatlog`
+- `/idle_tools [list|on|off|enable <rule>|disable <rule>|roll <rule>]` — inspect + toggle the idle-tool roller rules. `roll` force-fires a rule bypassing predicates/cooldowns (handy for testing framing strings). Restart required for toggle changes to apply
 - `/gh [log|prs|issues]` — GitHub integration. Runs git/gh CLI in a daemon thread, logs raw output to chat log, then feeds it to the brain so the buddy comments in character
 - `/model [name|list|pull|browse]` — model management
 - `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|import]` — voice management

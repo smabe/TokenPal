@@ -34,6 +34,20 @@ class NetworkStateConfig:
 
 
 @dataclass
+class IdleToolsConfig:
+    # Third emission path — during quiet stretches the brain rolls a
+    # weighted die across these contextual rules to produce tool-flavored
+    # observations (word of the day, moon phase, trivia, etc).
+    enabled: bool = True
+    global_cooldown_s: float = 600.0    # min gap between any two rolls
+    max_per_hour: int = 4               # hard rate cap
+    # Per-rule toggles. Unknown keys are ignored, missing keys default True
+    # via rule metadata — keeps the schema forward-compatible as new rules
+    # land without forcing a config migration.
+    rules: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
 class FilesystemPulseConfig:
     # Absolute paths to watch for activity bursts. Empty = use platform defaults
     # (Downloads, Desktop, Documents). Managed via the /watch slash command.
@@ -247,3 +261,4 @@ class TokenPalConfig:
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
     network_state: NetworkStateConfig = field(default_factory=NetworkStateConfig)
     filesystem_pulse: FilesystemPulseConfig = field(default_factory=FilesystemPulseConfig)
+    idle_tools: IdleToolsConfig = field(default_factory=IdleToolsConfig)

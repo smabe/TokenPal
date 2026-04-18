@@ -21,12 +21,19 @@ from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.context import ContextWindowBuilder
+from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
-from tokenpal.config.schema import AgentConfig, ConversationConfig, ResearchConfig
+from tokenpal.config.consent import Category, has_consent
+from tokenpal.config.schema import (
+    AgentConfig,
+    ConversationConfig,
+    IdleToolsConfig,
+    ResearchConfig,
+)
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 
@@ -178,6 +185,7 @@ class Brain:
         agent_bridge: AgentBridge | None = None,
         research_bridge: ResearchBridge | None = None,
         log_callback: Callable[..., None] | None = None,
+        idle_tools_config: IdleToolsConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -246,6 +254,17 @@ class Brain:
         # actions opt in via underscore-prefixed attrs set during __init__.
         self._inject_brain_deps()
 
+        # Idle-tool roller (third emission path — fires only when the comment
+        # gate chose silence, so it fills dead air without inflating rate).
+        self._idle_tools_config = idle_tools_config or IdleToolsConfig()
+        self._idle_tools = IdleToolRoller(
+            config=self._idle_tools_config,
+            actions=self._actions,
+        )
+        # Session-scoped: computed once at startup from memory.db.
+        self._first_session_of_day: bool = True
+        self._session_started_at: float = time.monotonic()
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -272,7 +291,32 @@ class Brain:
         self._ui_callback(greeting)
         self._last_comment_time = time.monotonic()
 
+        # Resolve first-session-of-day once; warm evergreen tool cache in
+        # the background so the hot path never blocks on an HTTP call.
+        self._first_session_of_day = self._compute_first_session_of_day()
+        if self._idle_tools_config.enabled:
+            asyncio.create_task(self._idle_tools.warm_daily_cache())
+
         await self._run_loop()
+
+    def _compute_first_session_of_day(self) -> bool:
+        """True when no prior session_start landed in today's memory.db."""
+        if self._memory is None or not self._memory.enabled:
+            return True
+        try:
+            today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            epoch = today.timestamp()
+            with self._memory._lock:
+                row = self._memory._conn.execute(
+                    "SELECT COUNT(*) FROM observations "
+                    "WHERE event_type = 'session_start' AND timestamp >= ? "
+                    "AND session_id != ?",
+                    (epoch, self._memory.session_id),
+                ).fetchone()
+            return (row[0] if row else 0) == 0
+        except Exception:
+            log.debug("first_session_of_day probe failed", exc_info=True)
+            return True
 
     async def _run_loop(self) -> None:
         while self._running:
@@ -336,6 +380,8 @@ class Brain:
                     await self._generate_comment(snapshot)
                 elif self._should_freeform():
                     await self._generate_freeform_comment()
+                elif self._idle_tools_eligible():
+                    await self._maybe_fire_idle_tool(snapshot)
 
             except Exception:
                 log.exception("Error in brain loop")
@@ -625,6 +671,116 @@ class Brain:
         except Exception:
             log.exception("Freeform generation failed")
             self._push_status()
+
+    # ------------------------------------------------------------------
+    # Idle-tool roll — third emission path
+    # ------------------------------------------------------------------
+
+    def _idle_tools_eligible(self) -> bool:
+        """Same gates that silence observations also silence idle rolls."""
+        if not self._idle_tools_config.enabled:
+            return False
+        if self._paused:
+            return False
+        if self._in_conversation:
+            return False
+        if self._any_long_task():
+            return False
+        if time.monotonic() < self._forced_silence_until:
+            return False
+        return True
+
+    def _build_idle_context(self) -> Any:
+        return build_context(
+            now=datetime.now(),
+            session_minutes=int(
+                (time.monotonic() - self._session_started_at) / 60
+            ),
+            first_session_of_day=self._first_session_of_day,
+            active_readings=self._context.active_readings(),
+            mood=str(self._personality.mood),
+            time_since_last_comment_s=time.monotonic() - self._last_comment_time,
+            consent_web_fetches=has_consent(Category.WEB_FETCHES),
+        )
+
+    async def _maybe_fire_idle_tool(self, snapshot: str) -> None:
+        """Roll the idle-tool die; on hit, riff the result in-character."""
+        if self._personality.check_sensitive_app(snapshot):
+            return
+        ctx = self._build_idle_context()
+        try:
+            result = await self._idle_tools.maybe_fire(ctx)
+        except Exception:
+            log.exception("Idle tool roll crashed")
+            return
+        if result is None:
+            return
+        await self._generate_tool_riff(snapshot, result)
+
+    async def _generate_tool_riff(
+        self, snapshot: str, fire: IdleFireResult,
+    ) -> None:
+        """Compose an in-character line that weaves the tool output in."""
+        prompt = (
+            f"{self._personality.build_freeform_prompt()}\n\n"
+            f"[Current moment:]\n{snapshot}\n\n"
+            f"[Fresh detail to weave in, in-character:]\n{fire.tool_output}\n\n"
+            f"[How to frame it:]\n{fire.framing}\n"
+        )
+        try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            response = await self._llm.generate(prompt)
+            self._push_status()
+        except Exception:
+            log.exception("Idle-tool riff generation failed")
+            self._push_status()
+            self._record_idle_fire(fire, emitted=False)
+            return
+
+        filtered = self._personality.filter_response(response.text)
+        if filtered and self._is_near_duplicate(filtered):
+            log.info(
+                "TokenPal (idle-tool %s suppressed near-duplicate): %s",
+                fire.rule_name, filtered,
+            )
+            filtered = ""
+
+        if not filtered:
+            log.debug(
+                "Idle-tool riff filtered out: %r",
+                response.text[:80] if response.text else "",
+            )
+            self._record_idle_fire(fire, emitted=False)
+            return
+
+        log.info(
+            "TokenPal (idle-tool %s -> %s): %s (%.0fms)",
+            fire.rule_name, fire.tool_name, filtered, response.latency_ms,
+        )
+        self._emit_comment(filtered)
+        self._recent_outputs.append(filtered)
+        self._record_idle_fire(fire, emitted=True)
+
+    def _record_idle_fire(self, fire: IdleFireResult, *, emitted: bool) -> None:
+        """Write a telemetry row so memory_query can surface idle-tool stats."""
+        if self._memory is None:
+            return
+        try:
+            self._memory.record_observation(
+                sense_name="idle_tools",
+                event_type="idle_tool_fire",
+                summary=fire.rule_name,
+                data={
+                    "tool": fire.tool_name,
+                    "emitted": emitted,
+                    "tool_success": fire.success,
+                    "running_bit": fire.running_bit,
+                    "latency_ms": int(fire.latency_ms),
+                },
+            )
+        except Exception:
+            log.debug("idle_tool_fire telemetry write failed", exc_info=True)
 
     def _pick_topic(self) -> str:
         """Weighted random topic selection, penalizing recently used topics."""
