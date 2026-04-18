@@ -65,6 +65,33 @@ temperature = 1.0
 
 [llm.per_server_max_tokens]
 
+# Throughput-aware max_tokens scaling (GPU-scaling). OFF by default while
+# dogfooding. When ON, each call site declares a completion-latency budget
+# and the backend computes max_tokens from measured decode-TPS and TTFT.
+# Honors user pins in [llm.per_server_max_tokens] and explicit max_tokens
+# kwargs. See plans/gpu-scaling.md.
+# target_latency_scaling = false
+
+# Per-path latency budgets in seconds. Inactive while target_latency_scaling
+# is false — but safe to tune in advance.
+[llm.target_latency_s]
+# observation  = 5.0
+# freeform     = 6.0
+# idle_tool    = 6.0
+# tools        = 8.0
+# conversation = 12.0
+# research     = 20.0
+
+# Token-elasticity floor — the derived cap never drops below these per path
+# so a pessimistic throughput estimate can't truncate a quip mid-sentence.
+[llm.min_tokens_per_path]
+# observation  = 40
+# freeform     = 40
+# idle_tool    = 40
+# tools        = 60
+# conversation = 80
+# research     = 120
+
 [ui]
 overlay = "textual"
 buddy_name = "TokenPal"

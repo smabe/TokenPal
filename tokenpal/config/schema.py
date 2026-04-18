@@ -69,6 +69,34 @@ class WebSearchConfig:
 
 
 @dataclass
+class TargetLatencyConfig:
+    # Per-path completion-latency budgets (seconds). The backend converts
+    # these to max_tokens via measured decode throughput and TTFT. See
+    # plans/gpu-scaling.md. Sized for a 57 t/s Qwen3-14B-Q4 on RX 9070 XT;
+    # scale down gracefully on slower rigs via measured TPS.
+    observation: float = 5.0
+    freeform: float = 6.0
+    idle_tool: float = 6.0
+    tools: float = 8.0
+    conversation: float = 12.0
+    research: float = 20.0
+
+
+@dataclass
+class MinTokensPerPathConfig:
+    # Lower bound on the derived max_tokens cap, per call-path. Prevents a
+    # low decode-TPS estimate from truncating observations mid-sentence
+    # (token-elasticity: models don't compress under tight caps, they
+    # just get cut off). See arxiv 2412.18547.
+    observation: int = 40
+    freeform: int = 40
+    idle_tool: int = 40
+    tools: int = 60
+    conversation: int = 80
+    research: int = 120
+
+
+@dataclass
 class LLMConfig:
     backend: str = "http"
     # Inference engine running behind api_url. "ollama" is the default across
@@ -88,6 +116,12 @@ class LLMConfig:
     # /model <name> and /server switch at runtime.
     per_server_models: dict[str, str] = field(default_factory=dict)
     per_server_max_tokens: dict[str, int] = field(default_factory=dict)
+    # Feature flag for throughput-aware max_tokens scaling. When OFF the
+    # backend ignores target_latency_s kwargs and uses the static default.
+    # Flip via [llm] target_latency_scaling = true after dogfooding.
+    target_latency_scaling: bool = False
+    target_latency_s: TargetLatencyConfig = field(default_factory=TargetLatencyConfig)
+    min_tokens_per_path: MinTokensPerPathConfig = field(default_factory=MinTokensPerPathConfig)
 
 
 @dataclass

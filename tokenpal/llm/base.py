@@ -116,6 +116,8 @@ class AbstractLLMBackend(abc.ABC):
         *,
         enable_thinking: bool | None = None,
         response_format: dict[str, Any] | None = None,
+        target_latency_s: float | None = None,
+        min_tokens: int | None = None,
     ) -> LLMResponse:
         """Single-shot generation.
 
@@ -128,6 +130,12 @@ class AbstractLLMBackend(abc.ABC):
         ``response_format`` passes through to the OpenAI-compat request body
         (e.g. ``{"type": "json_schema", "schema": {...}}``). Grammar-constrained
         on llama-server, advisory on Ollama.
+        ``target_latency_s`` declares a completion-latency budget — backends
+        that track throughput (see ``HttpBackend``) derive max_tokens from
+        measured decode-TPS and TTFT. Explicit ``max_tokens`` always wins.
+        Ignored when the ``target_latency_scaling`` flag is off.
+        ``min_tokens`` sets a floor on the derived cap (token-elasticity
+        guard). No effect when ``max_tokens`` or the user pin takes over.
         """
 
     async def generate_with_tools(
@@ -138,6 +146,8 @@ class AbstractLLMBackend(abc.ABC):
         *,
         enable_thinking: bool | None = None,
         response_format: dict[str, Any] | None = None,
+        target_latency_s: float | None = None,
+        min_tokens: int | None = None,
     ) -> LLMResponse:
         """Chat completion with tool definitions. Default: fall back to generate()."""
         prompt = messages[-1].get("content", "") if messages else ""
@@ -146,6 +156,8 @@ class AbstractLLMBackend(abc.ABC):
             max_tokens,
             enable_thinking=enable_thinking,
             response_format=response_format,
+            target_latency_s=target_latency_s,
+            min_tokens=min_tokens,
         )
 
     async def stream(

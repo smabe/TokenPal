@@ -17,6 +17,7 @@ from tokenpal.config.schema import (
     FinetuneConfig,
     LLMConfig,
     MemoryConfig,
+    MinTokensPerPathConfig,
     NetworkStateConfig,
     PathsConfig,
     PluginsConfig,
@@ -24,6 +25,7 @@ from tokenpal.config.schema import (
     ResearchConfig,
     SensesConfig,
     ServerConfig,
+    TargetLatencyConfig,
     TokenPalConfig,
     ToolsConfig,
     UIConfig,
@@ -76,6 +78,8 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
 # Maps (parent_cls, field_name) → child_cls.
 _NESTED_FIELDS: dict[tuple[type, str], type] = {
     (FinetuneConfig, "remote"): RemoteTrainConfig,
+    (LLMConfig, "target_latency_s"): TargetLatencyConfig,
+    (LLMConfig, "min_tokens_per_path"): MinTokensPerPathConfig,
 }
 
 
