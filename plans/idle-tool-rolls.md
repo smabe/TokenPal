@@ -1,6 +1,8 @@
 # Idle Tool Rolls — Autonomous Flavor During Quiet Stretches
 
-**Status:** proposed — approval pending
+**Status:** M1 + M2 shipped 2026-04-17. `callback_book` cut per dogfood (hard to
+curate a reliable author list without LLM classification). M3 deferred to
+[issue #33](https://github.com/smabe/TokenPal/issues/33).
 **Owner:** tokenpal brain loop
 **Companion plan:** `plans/idle-loop-variety.md` (shipped 2026-04-17)
 

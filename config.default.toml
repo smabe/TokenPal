@@ -24,15 +24,17 @@ global_cooldown_s = 600      # min seconds between any two rolls
 max_per_hour = 4             # hard rate cap
 
 [idle_tools.rules]
-# Per-rule toggles. Omit a key = use the rule's default (true for all M1 rules).
+# Per-rule toggles. Omit a key = use the rule's default (true for all rules).
 # evening_moon = true
-# morning_word = true
+# morning_word = true        # running-bit: today's word rides along for 8h
 # monday_joke = true
 # weather_change = true
 # long_focus_fact = true
 # deep_lull_trivia = true
 # on_this_day_opener = true
 # lunar_override = true
+# todays_joke_bit = true     # running-bit: heard-a-joke callback for 4h
+# morning_monologue = true   # chains forecast + sunrise + on_this_day at dawn
 # memory_recall = true
 
 [llm]

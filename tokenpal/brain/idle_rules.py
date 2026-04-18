@@ -59,10 +59,18 @@ class IdleToolRule:
     framing: str
     needs_web_fetches: bool = True
     enabled_default: bool = True
-    # M1 rules never set running_bit — that's M2 territory — but the field
-    # exists now so the roller signature doesn't churn when M2 lands.
+    # When True, the fire calls PersonalityEngine.add_running_bit instead of
+    # (or in addition to) emitting a one-shot riff. `framing` supplies the
+    # soft system-prompt instruction that rides along for `bit_decay_s`
+    # seconds. `opener_framing`, if set, also emits a one-line announcement
+    # right now so the user hears when the bit was registered.
     running_bit: bool = False
     bit_decay_s: float = 0.0
+    opener_framing: str = ""
+    # Chain rules invoke extra tools alongside tool_name. Results land in
+    # IdleFireResult.extra_outputs and the orchestrator weaves them into a
+    # single multi-tool riff (used by morning_monologue).
+    extra_tool_names: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +120,19 @@ def _settled_in_session(ctx: IdleToolContext) -> bool:
     return ctx.session_minutes > 15 and ctx.time_since_last_comment_s > 600.0
 
 
+def _midday_quiet(ctx: IdleToolContext) -> bool:
+    """Catch a mid-workday lull — same settled bar, noonish window."""
+    return (
+        11 <= ctx.hour < 15
+        and ctx.session_minutes > 10
+        and ctx.time_since_last_comment_s > 300.0
+    )
+
+
+def _morning_radio_window(ctx: IdleToolContext) -> bool:
+    return ctx.first_session_of_day and 6 <= ctx.hour < 10
+
+
 def _is_approximately_full_moon(when: datetime) -> bool:
     """Cheap full-moon check — within ±1.5 days of a known reference.
 
@@ -142,13 +163,22 @@ M1_RULES: tuple[IdleToolRule, ...] = (
     IdleToolRule(
         name="morning_word",
         tool_name="word_of_the_day",
-        description="Announces today's word on the first morning session.",
+        description=(
+            "Announces today's word on the first morning session, then rides "
+            "along for 8h as a soft callback."
+        ),
         weight=1.5,
         cooldown_s=18 * 3600,
         predicate=_morning_window,
         framing=(
-            "You just learned today's word. Announce it in one line, in-character. "
-            "Do not define it unless asked."
+            "Today's word: {output}. Slip it in naturally when a moment fits; "
+            "once is enough. Never re-define unless the user asks."
+        ),
+        running_bit=True,
+        bit_decay_s=8 * 3600,
+        opener_framing=(
+            "You just learned today's word. Announce it in one line, "
+            "in-character. Do not define it unless asked."
         ),
     ),
     IdleToolRule(
@@ -219,6 +249,40 @@ M1_RULES: tuple[IdleToolRule, ...] = (
         cooldown_s=24 * 3600,
         predicate=_full_moon_late,
         framing="It's a full moon and it's late. Lean into it. One line, in-character.",
+    ),
+    IdleToolRule(
+        name="todays_joke_bit",
+        tool_name="joke_of_the_day",
+        description=(
+            "Heard a joke earlier today — referenceable for 4h, callback-only."
+        ),
+        weight=0.8,
+        cooldown_s=12 * 3600,
+        predicate=_midday_quiet,
+        framing=(
+            "You heard a joke today: {output}. Reference it as a callback "
+            "if a moment comes up. Never re-tell outright."
+        ),
+        running_bit=True,
+        bit_decay_s=4 * 3600,
+        opener_framing="",
+    ),
+    IdleToolRule(
+        name="morning_monologue",
+        tool_name="weather_forecast_week",
+        description=(
+            "First-session morning radio broadcast — chains forecast, "
+            "sunrise/sunset, and this-day-in-history into one riff."
+        ),
+        weight=1.4,
+        cooldown_s=24 * 3600,
+        predicate=_morning_radio_window,
+        framing=(
+            "You're doing your 30-second morning radio broadcast. Weave the "
+            "forecast, sunrise, and one this-day-in-history item into a "
+            "single short riff, in-character. Do not list every detail."
+        ),
+        extra_tool_names=("sunrise_sunset", "on_this_day"),
     ),
     IdleToolRule(
         name="memory_recall",

@@ -28,7 +28,7 @@ import random
 import time
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -50,6 +50,7 @@ _DAILY_EVERGREEN_TOOLS: frozenset[str] = frozenset({
     "joke_of_the_day",
     "on_this_day",
     "moon_phase",
+    "sunrise_sunset",
 })
 
 # Memory-recall probes — the offline floor picks one at random per fire.
@@ -71,8 +72,14 @@ class IdleFireResult:
     framing: str
     latency_ms: float
     success: bool
-    running_bit: bool = False       # M2 will flip this; M1 always False
-    bit_decay_s: float = 0.0        # M2 only
+    running_bit: bool = False
+    bit_decay_s: float = 0.0
+    # Opener announcement framing (running-bit rules only). Empty means the
+    # bit is registered silently; orchestrator skips the one-line emit.
+    opener_framing: str = ""
+    # Chain-rule outputs keyed by tool name, excluding the primary tool.
+    # Non-empty only for rules that declare extra_tool_names.
+    extra_outputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -103,9 +110,11 @@ class IdleToolRoller:
         self._invoker = invoker or ToolInvoker()
 
         # Per-rule last-fire monotonic timestamps. Initialized lazy on first
-        # maybe_fire — we do not want to stamp "just fired" on startup.
+        # maybe_fire — we do not want to stamp "just fired" on startup. A
+        # missing key means "never fired", so cooldown checks should let the
+        # rule through on the first call regardless of process uptime.
         self._last_fire_by_rule: dict[str, float] = {}
-        self._last_fire_any: float = 0.0
+        self._last_fire_any: float | None = None
 
         # Sliding window of fire times (monotonic) for max_per_hour.
         self._recent_fires: deque[float] = deque()
@@ -141,7 +150,10 @@ class IdleToolRoller:
         now = time.monotonic()
 
         # Global cooldown.
-        if now - self._last_fire_any < self._config.global_cooldown_s:
+        if (
+            self._last_fire_any is not None
+            and now - self._last_fire_any < self._config.global_cooldown_s
+        ):
             return None
 
         # Rolling-hour rate cap.
@@ -221,8 +233,8 @@ class IdleToolRoller:
                 continue
             if rule.needs_web_fetches and not ctx.consent_web_fetches:
                 continue
-            last = self._last_fire_by_rule.get(rule.name, 0.0)
-            if now - last < rule.cooldown_s:
+            last = self._last_fire_by_rule.get(rule.name)
+            if last is not None and now - last < rule.cooldown_s:
                 continue
             if rule.tool_name not in self._actions:
                 continue
@@ -243,64 +255,77 @@ class IdleToolRoller:
     async def _invoke(
         self, rule: IdleToolRule, ctx: IdleToolContext,
     ) -> IdleFireResult | None:
-        action = self._actions.get(rule.tool_name)
-        if action is None:
-            log.debug("Rule %r refers to missing action %r", rule.name, rule.tool_name)
+        primary = await self._invoke_single(rule.tool_name, rule, ctx)
+        if primary is None:
             return None
+        primary_output, primary_latency_ms = primary
 
-        # Evergreen cache hit.
-        if rule.tool_name in _DAILY_EVERGREEN_TOOLS:
-            cached = self._daily_cache.get(rule.tool_name)
-            if cached and (time.time() - cached.fetched_at) < self._DAILY_CACHE_TTL_S:
-                return IdleFireResult(
-                    rule_name=rule.name,
-                    tool_name=rule.tool_name,
-                    tool_output=cached.output,
-                    framing=rule.framing,
-                    latency_ms=0.0,
-                    success=cached.success,
+        extras: dict[str, str] = {}
+        for extra_name in rule.extra_tool_names:
+            pair = await self._invoke_single(extra_name, rule, ctx)
+            if pair is None:
+                # Graceful degradation — a single failed chain tool doesn't
+                # poison the whole monologue. The riff just has less to chew on.
+                log.debug(
+                    "Chain tool %r for rule %r failed; continuing without it",
+                    extra_name, rule.name,
                 )
-            await self._refresh_cache(rule.tool_name, action)
-            cached = self._daily_cache.get(rule.tool_name)
-            if cached is None:
-                return None
-            return IdleFireResult(
-                rule_name=rule.name,
-                tool_name=rule.tool_name,
-                tool_output=cached.output,
-                framing=rule.framing,
-                latency_ms=0.0,
-                success=cached.success,
-            )
-
-        # Live call.
-        arguments = self._build_arguments(rule, ctx)
-        start = time.monotonic()
-        try:
-            result = await self._invoker.invoke(action, arguments)
-        except Exception:
-            log.debug("Idle tool invocation crashed: %r", rule.tool_name, exc_info=True)
-            return None
-        latency_ms = (time.monotonic() - start) * 1000.0
-
-        if not result.success or not result.output:
-            log.debug("Idle tool %r returned no usable output", rule.tool_name)
-            return None
+                continue
+            extras[extra_name] = pair[0]
 
         return IdleFireResult(
             rule_name=rule.name,
             tool_name=rule.tool_name,
-            tool_output=result.output,
+            tool_output=primary_output,
             framing=rule.framing,
-            latency_ms=latency_ms,
+            latency_ms=primary_latency_ms,
             success=True,
+            running_bit=rule.running_bit,
+            bit_decay_s=rule.bit_decay_s,
+            opener_framing=rule.opener_framing,
+            extra_outputs=extras,
         )
 
-    def _build_arguments(
-        self, rule: IdleToolRule, ctx: IdleToolContext,
+    async def _invoke_single(
+        self, tool_name: str, rule: IdleToolRule, ctx: IdleToolContext,
+    ) -> tuple[str, float] | None:
+        """Invoke one tool (primary or chain). Returns (output, latency_ms)."""
+        action = self._actions.get(tool_name)
+        if action is None:
+            log.debug("Tool %r for rule %r not loaded", tool_name, rule.name)
+            return None
+
+        # Evergreen cache hit — shared across primary + chain tools.
+        if tool_name in _DAILY_EVERGREEN_TOOLS:
+            cached = self._daily_cache.get(tool_name)
+            if cached and (time.time() - cached.fetched_at) < self._DAILY_CACHE_TTL_S:
+                return cached.output, 0.0
+            await self._refresh_cache(tool_name, action)
+            cached = self._daily_cache.get(tool_name)
+            if cached is None:
+                return None
+            return cached.output, 0.0
+
+        arguments = self._build_arguments_for_tool(tool_name, rule, ctx)
+        start = time.monotonic()
+        try:
+            result = await self._invoker.invoke(action, arguments)
+        except Exception:
+            log.debug("Idle tool invocation crashed: %r", tool_name, exc_info=True)
+            return None
+        latency_ms = (time.monotonic() - start) * 1000.0
+
+        if not result.success or not result.output:
+            log.debug("Idle tool %r returned no usable output", tool_name)
+            return None
+
+        return result.output, latency_ms
+
+    def _build_arguments_for_tool(
+        self, tool_name: str, rule: IdleToolRule, ctx: IdleToolContext,
     ) -> dict[str, Any]:
-        """Derive tool arguments from rule + context. Keep small."""
-        if rule.tool_name == "memory_query":
+        """Derive tool arguments from rule + tool_name + context. Keep small."""
+        if tool_name == "memory_query":
             return {"metric": self._rng.choice(_MEMORY_RECALL_METRICS)}
         return {}
 
@@ -329,10 +354,11 @@ class IdleToolRoller:
             return "disabled in config"
         if rule.needs_web_fetches and not ctx.consent_web_fetches:
             return "web_fetches consent missing"
-        last = self._last_fire_by_rule.get(rule.name, 0.0)
-        remaining = rule.cooldown_s - (now - last)
-        if remaining > 0:
-            return f"cooldown: {int(remaining)}s left"
+        last = self._last_fire_by_rule.get(rule.name)
+        if last is not None:
+            remaining = rule.cooldown_s - (now - last)
+            if remaining > 0:
+                return f"cooldown: {int(remaining)}s left"
         if rule.tool_name not in self._actions:
             return f"tool '{rule.tool_name}' not loaded"
         try:

@@ -715,17 +715,45 @@ class Brain:
             return
         if result is None:
             return
+        if result.running_bit:
+            self._register_running_bit(result)
+            if not result.opener_framing:
+                # Silent registration — bit rides along future prompts without
+                # announcing itself. Still counts as a fire for telemetry.
+                self._record_idle_fire(result, emitted=True)
+                return
         await self._generate_tool_riff(snapshot, result)
+
+    def _register_running_bit(self, fire: IdleFireResult) -> None:
+        """Install the fired rule as a running bit on the personality engine."""
+        try:
+            framing = fire.framing.format(output=fire.tool_output)
+        except (KeyError, IndexError):
+            framing = fire.framing
+        self._personality.add_running_bit(
+            tag=fire.rule_name,
+            framing=framing,
+            decay_s=fire.bit_decay_s,
+            payload={"output": fire.tool_output},
+        )
 
     async def _generate_tool_riff(
         self, snapshot: str, fire: IdleFireResult,
     ) -> None:
         """Compose an in-character line that weaves the tool output in."""
+        # Running-bit opener uses opener_framing; one-shot rules use framing.
+        framing = fire.opener_framing if fire.running_bit else fire.framing
+        detail_block = fire.tool_output
+        if fire.extra_outputs:
+            detail_lines = [fire.tool_output]
+            for tool_name, extra in fire.extra_outputs.items():
+                detail_lines.append(f"({tool_name}) {extra}")
+            detail_block = "\n".join(detail_lines)
         prompt = (
             f"{self._personality.build_freeform_prompt()}\n\n"
             f"[Current moment:]\n{snapshot}\n\n"
-            f"[Fresh detail to weave in, in-character:]\n{fire.tool_output}\n\n"
-            f"[How to frame it:]\n{fire.framing}\n"
+            f"[Fresh detail to weave in, in-character:]\n{detail_block}\n\n"
+            f"[How to frame it:]\n{framing}\n"
         )
         try:
             if self._status_callback:

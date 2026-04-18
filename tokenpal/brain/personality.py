@@ -8,6 +8,7 @@ import random
 import re
 import time
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -20,6 +21,24 @@ from tokenpal.util.text_guards import is_clean_english
 log = logging.getLogger(__name__)
 
 _SILENT_MARKERS = ["[SILENT]", "[silent]", "SILENT"]
+
+# Max concurrently-active running bits. Extra bits evict oldest by added_at.
+_MAX_RUNNING_BITS = 3
+
+
+@dataclass
+class RunningBit:
+    """A multi-hour callback prompt that rides along in every system message.
+
+    Framing is deliberately soft so the LLM decides when to weave it in;
+    the near-duplicate guard is what keeps it from being spammed.
+    """
+
+    tag: str
+    payload: dict[str, str] = field(default_factory=dict)
+    framing: str = ""
+    added_at: float = 0.0
+    decay_at: float = 0.0
 
 # All flavors of quotation marks
 _QUOTES = '"\'\u201c\u201d\u2018\u2019\u00ab\u00bb'
@@ -290,6 +309,8 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." — boring.
 
 {callbacks_block}
 
+{running_bits_block}
+
 What you see right now:
 {context}
 
@@ -311,6 +332,8 @@ Rules:
 
 Examples of your voice:
 {examples}
+
+{running_bits_block}
 
 {recent_comments_block}
 
@@ -356,6 +379,8 @@ Rules:
 
 {callbacks_block}
 
+{running_bits_block}
+
 What you see right now:
 {context}
 
@@ -370,6 +395,8 @@ Rules:
 3. Do NOT reference what the user is doing on their computer.
 
 {mood_line}
+
+{running_bits_block}
 
 {recent_comments_block}
 
@@ -422,6 +449,9 @@ class PersonalityEngine:
 
         # Guardrails — consecutive snarky counter for compliment ratio
         self._consecutive_snarky: int = 0
+
+        # Running bits — multi-hour callback prompts slotted into system msg.
+        self._running_bits: list[RunningBit] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -514,6 +544,57 @@ class PersonalityEngine:
             self._consecutive_snarky = 0
         else:
             self._consecutive_snarky += 1
+
+    def add_running_bit(
+        self,
+        tag: str,
+        framing: str,
+        decay_s: float,
+        payload: dict[str, str] | None = None,
+    ) -> RunningBit:
+        """Register a callback bit. Replaces any existing bit with the same tag.
+
+        Evicts oldest bit when we hit `_MAX_RUNNING_BITS`; existing-tag replace
+        bypasses the cap so refreshing a running rule isn't penalized.
+        """
+        now = time.monotonic()
+        bit = RunningBit(
+            tag=tag,
+            payload=dict(payload or {}),
+            framing=framing,
+            added_at=now,
+            decay_at=now + max(decay_s, 0.0),
+        )
+        self._prune_expired_bits()
+        # Same-tag replace in place.
+        for i, existing in enumerate(self._running_bits):
+            if existing.tag == tag:
+                self._running_bits[i] = bit
+                return bit
+        self._running_bits.append(bit)
+        if len(self._running_bits) > _MAX_RUNNING_BITS:
+            self._running_bits.sort(key=lambda b: b.added_at)
+            self._running_bits.pop(0)
+        return bit
+
+    def active_running_bits(self) -> list[RunningBit]:
+        """Return the non-expired bits. Safe to call from anywhere."""
+        self._prune_expired_bits()
+        return list(self._running_bits)
+
+    def _prune_expired_bits(self) -> None:
+        now = time.monotonic()
+        self._running_bits = [b for b in self._running_bits if b.decay_at > now]
+
+    def _running_bits_block(self) -> str:
+        bits = self.active_running_bits()
+        if not bits:
+            return ""
+        lines: list[str] = []
+        for b in bits:
+            detail = b.framing.strip() or b.tag
+            lines.append(f"- {detail}")
+        return "Running bits you can organically weave in today:\n" + "\n".join(lines)
 
     def check_sensitive_app(self, context_snapshot: str) -> bool:
         """Return True if a sensitive app is detected — should go silent."""
@@ -636,12 +717,15 @@ class PersonalityEngine:
         else:
             cb_block = ""
 
+        running_bits = self._running_bits_block()
+
         if self.is_finetuned:
             return _FINETUNED_OBSERVE_TEMPLATE.format(
                 mood_line=mood_line,
                 session_notes=session_notes,
                 memory_block=mem_block,
                 callbacks_block=cb_block,
+                running_bits_block=running_bits,
                 context=context_snapshot,
                 recent_comments_block=self._recent_comments_block(),
             )
@@ -655,15 +739,18 @@ class PersonalityEngine:
             session_notes=session_notes,
             memory_block=mem_block,
             callbacks_block=cb_block,
+            running_bits_block=running_bits,
             recent_comments_block=self._recent_comments_block(),
             voice_reminder=self._voice_reminder(),
         )
 
     def build_freeform_prompt(self) -> str:
         """Build a prompt for an unprompted in-character thought (no screen context)."""
+        running_bits = self._running_bits_block()
         if self.is_finetuned:
             return _FINETUNED_FREEFORM_TEMPLATE.format(
                 mood_line=self._mood_line(),
+                running_bits_block=running_bits,
                 recent_comments_block=self._recent_comments_block(),
             )
 
@@ -672,6 +759,7 @@ class PersonalityEngine:
             mood_line=self._mood_line(),
             structure_hint=self._pick_hint(),
             examples=self._sample_examples(),
+            running_bits_block=running_bits,
             recent_comments_block=self._recent_comments_block(),
             voice_reminder=self._voice_reminder(),
         )
