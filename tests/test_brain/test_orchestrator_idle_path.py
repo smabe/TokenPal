@@ -96,6 +96,34 @@ def test_record_idle_fire_writes_telemetry_row() -> None:
     assert row["data"]["latency_ms"] == 42
 
 
+async def test_generate_comment_returns_false_on_sensitive_app() -> None:
+    """False return is what lets the brain loop cede the tick to idle rolls.
+
+    Pre-patch, a sensitive-app early-return produced implicit None, the loop
+    treated it as "we spoke," and idle rolls were starved all day.
+    """
+    brain = _bare_brain()
+    brain._context = type("C", (), {"snapshot": lambda self: "banking app"})()
+    brain._personality = type("P", (), {
+        "check_sensitive_app": lambda self, s: True,
+    })()
+    assert await brain._generate_comment() is False
+
+
+async def test_generate_comment_returns_true_on_easter_egg() -> None:
+    """Easter eggs count as emitted, so no redundant idle roll on the tick."""
+    brain = _bare_brain()
+    brain._context = type("C", (), {"snapshot": lambda self: "noon"})()
+    brain._personality = type("P", (), {
+        "check_sensitive_app": lambda self, s: False,
+        "check_easter_egg": lambda self, s: "Lunchtime.",
+    })()
+    emitted: list[str] = []
+    brain._emit_comment = lambda text, acknowledge=False: emitted.append(text)
+    assert await brain._generate_comment() is True
+    assert emitted == ["Lunchtime."]
+
+
 def test_build_idle_context_wires_session_minutes(monkeypatch: Any) -> None:
     from tokenpal.brain.context import ContextWindowBuilder
 

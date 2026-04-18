@@ -393,11 +393,13 @@ class Brain:
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
+                emitted = False
                 if has_urgent or self._should_comment():
-                    await self._generate_comment(snapshot)
+                    emitted = await self._generate_comment(snapshot)
                 elif self._should_freeform():
-                    await self._generate_freeform_comment()
-                elif self._idle_tools_eligible():
+                    emitted = await self._generate_freeform_comment()
+
+                if not emitted and self._idle_tools_eligible():
                     await self._maybe_fire_idle_tool(snapshot)
 
             except Exception:
@@ -712,8 +714,8 @@ class Brain:
             return True
         return False
 
-    async def _generate_freeform_comment(self) -> None:
-        """Generate an unprompted in-character thought."""
+    async def _generate_freeform_comment(self) -> bool:
+        """Generate an unprompted in-character thought. Returns True iff emitted."""
         prompt = self._personality.build_freeform_prompt()
 
         try:
@@ -727,18 +729,20 @@ class Brain:
             if filtered and self._is_near_duplicate(filtered):
                 log.info("TokenPal (freeform suppressed near-duplicate): %s", filtered)
                 self._handle_suppressed_output("freeform near-duplicate")
-                filtered = ""
+                return False
 
             if filtered:
                 log.info("TokenPal (freeform): %s (%.0fms)", filtered, response.latency_ms)
                 self._emit_comment(filtered)
                 self._recent_outputs.append(filtered)
-            else:
-                log.debug("Freeform filtered out: %r", response.text[:80])
+                return True
+            log.debug("Freeform filtered out: %r", response.text[:80])
+            return False
 
         except Exception:
             log.exception("Freeform generation failed")
             self._push_status()
+            return False
 
     # ------------------------------------------------------------------
     # Idle-tool roll — third emission path
@@ -928,23 +932,29 @@ class Brain:
             return f"[{hint}]\n\n{snapshot}"
         return snapshot
 
-    async def _generate_comment(self, snapshot: str | None = None) -> None:
+    async def _generate_comment(self, snapshot: str | None = None) -> bool:
+        """Generate an observation comment. Returns True iff a line was emitted.
+
+        False return lets the brain loop fall through to the idle-tool roller
+        on the same tick, so suppressed near-duplicates don't starve idle
+        rolls (observations would otherwise consume every tick).
+        """
         if snapshot is None:
             snapshot = self._context.snapshot()
         if not snapshot.strip():
-            return
+            return False
 
         # Guardrail: sensitive app detected — go silent
         if self._personality.check_sensitive_app(snapshot):
             log.debug("Sensitive app detected — staying silent")
-            return
+            return False
 
         # Check for easter eggs first — bypass LLM entirely
         egg = self._personality.check_easter_egg(snapshot)
         if egg:
             log.info("TokenPal (easter egg): %s", egg)
             self._emit_comment(egg, acknowledge=True)
-            return
+            return True
 
         # Topic roulette: pick what to focus on and hint the LLM
         topic = self._pick_topic()
@@ -980,7 +990,7 @@ class Brain:
             if filtered and self._is_near_duplicate(filtered):
                 log.info("TokenPal (suppressed near-duplicate): %s", filtered)
                 self._handle_suppressed_output("observation near-duplicate")
-                return
+                return False
 
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
@@ -998,9 +1008,11 @@ class Brain:
                         "system", "milestone",
                         f"Comment #{self._personality._total_comments}",
                     )
+                return True
             else:
                 log.debug("LLM chose silence")
                 self._consecutive_comments = 0
+                return False
 
         except Exception:
             self._consecutive_failures += 1
@@ -1027,6 +1039,8 @@ class Brain:
                 self._ui_callback(quip)
                 self._last_confused_quip = now
                 self._last_comment_time = now
+                return True
+            return False
 
     def _effective_conv_max_tokens(self) -> int:
         """Conversation response budget: user-pinned wins, else server-derived, else 300."""
