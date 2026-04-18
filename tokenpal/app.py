@@ -212,6 +212,8 @@ def main() -> None:
         research_bridge=ResearchBridge(config=config.research),
         log_callback=_agent_log,
         idle_tools_config=config.idle_tools,
+        target_latency_s=config.llm.target_latency_s,
+        min_tokens_per_path=config.llm.min_tokens_per_path,
     )
 
     # Load voice-specific buddy art into the overlay

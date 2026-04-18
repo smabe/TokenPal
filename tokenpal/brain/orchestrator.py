@@ -33,7 +33,9 @@ from tokenpal.config.schema import (
     AgentConfig,
     ConversationConfig,
     IdleToolsConfig,
+    MinTokensPerPathConfig,
     ResearchConfig,
+    TargetLatencyConfig,
 )
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
@@ -203,6 +205,8 @@ class Brain:
         research_bridge: ResearchBridge | None = None,
         log_callback: Callable[..., None] | None = None,
         idle_tools_config: IdleToolsConfig | None = None,
+        target_latency_s: TargetLatencyConfig | None = None,
+        min_tokens_per_path: MinTokensPerPathConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -285,6 +289,14 @@ class Brain:
 
         self._app_enricher = (
             AppEnricher(memory=self._memory) if self._memory is not None else None
+        )
+
+        # Target-latency budgets + token floors per call-path. When the
+        # backend has target_latency_scaling off these are still passed but
+        # ignored; see plans/gpu-scaling.md.
+        self._budgets: TargetLatencyConfig = target_latency_s or TargetLatencyConfig()
+        self._min_tokens: MinTokensPerPathConfig = (
+            min_tokens_per_path or MinTokensPerPathConfig()
         )
 
     async def start(self) -> None:
@@ -727,7 +739,11 @@ class Brain:
             if self._status_callback:
                 self._status_callback("thinking...")
             log.debug("Generating freeform comment...")
-            response = await self._llm.generate(prompt)
+            response = await self._llm.generate(
+                prompt,
+                target_latency_s=self._budgets.freeform,
+                min_tokens=self._min_tokens.freeform,
+            )
             self._push_status()
 
             filtered = self._personality.filter_response(response.text)
@@ -835,7 +851,11 @@ class Brain:
         try:
             if self._status_callback:
                 self._status_callback("thinking...")
-            response = await self._llm.generate(prompt)
+            response = await self._llm.generate(
+                prompt,
+                target_latency_s=self._budgets.idle_tool,
+                min_tokens=self._min_tokens.idle_tool,
+            )
             self._push_status()
         except Exception:
             log.exception("Idle-tool riff generation failed")
@@ -1002,9 +1022,17 @@ class Brain:
             log.debug("Generating observation comment...")
             # Use tool-calling path if actions are available
             if self._actions and self._tool_specs:
-                response = await self._generate_with_tools(prompt)
+                response = await self._generate_with_tools(
+                    prompt,
+                    target_latency_s=self._budgets.tools,
+                    min_tokens=self._min_tokens.tools,
+                )
             else:
-                response = await self._llm.generate(prompt)
+                response = await self._llm.generate(
+                    prompt,
+                    target_latency_s=self._budgets.observation,
+                    min_tokens=self._min_tokens.observation,
+                )
             self._push_status()
 
             if not response.text:
@@ -1078,19 +1106,39 @@ class Brain:
         prompt: str | None = None,
         messages: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
+        target_latency_s: float | None = None,
+        min_tokens: int | None = None,
     ) -> LLMResponse:
         """Multi-turn tool-calling loop. Sends prompt (or pre-built messages)
         with tool defs, executes tool calls, feeds results back, and repeats
-        until the LLM produces a final text response (or we hit the round limit)."""
+        until the LLM produces a final text response (or we hit the round limit).
+
+        When ``target_latency_s`` is set, each round gets the remaining
+        wall-clock budget (deadline - now), not a static fraction. An
+        early-fast round thus leaves the next round more runway. The final
+        forced-text-only round is capped at the floor to keep the reply
+        coherent even when the budget has already been spent.
+        """
         if messages is None:
             assert prompt is not None
             messages = [{"role": "user", "content": prompt}]
+
+        deadline = (
+            time.monotonic() + target_latency_s
+            if target_latency_s is not None
+            else None
+        )
+
+        def _remaining() -> float | None:
+            return max(0.0, deadline - time.monotonic()) if deadline is not None else None
 
         for _round in range(self._MAX_TOOL_ROUNDS):
             response = await self._llm.generate_with_tools(
                 messages=messages,
                 tools=self._tool_specs,
                 max_tokens=max_tokens,
+                target_latency_s=_remaining(),
+                min_tokens=min_tokens,
             )
 
             if not response.tool_calls:
@@ -1116,7 +1164,11 @@ class Brain:
 
         log.warning("Hit tool round limit (%d), forcing text response", self._MAX_TOOL_ROUNDS)
         return await self._llm.generate_with_tools(
-            messages=messages, tools=[], max_tokens=max_tokens,
+            messages=messages,
+            tools=[],
+            max_tokens=max_tokens,
+            target_latency_s=_remaining(),
+            min_tokens=min_tokens,
         )
 
     async def _reply_with_continuation(

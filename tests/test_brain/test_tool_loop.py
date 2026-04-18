@@ -60,9 +60,9 @@ class _MockLLM(AbstractLLMBackend):
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         max_tokens: int = 256,
-        **_: Any,
+        **kwargs: Any,
     ) -> LLMResponse:
-        self.calls.append({"messages": messages, "tools": tools})
+        self.calls.append({"messages": messages, "tools": tools, **kwargs})
         return self._responses.pop(0)
 
     async def teardown(self) -> None:
@@ -221,6 +221,51 @@ async def test_multiple_tool_calls_parallel():
 
     tool_msgs = [m for m in llm.calls[1]["messages"] if m["role"] == "tool"]
     assert len(tool_msgs) == 2
+
+
+async def test_deadline_propagates_remaining_wallclock():
+    """Each tool round receives target_latency_s = deadline - now, not a
+    static target/N divide. Round 2 should see a smaller budget than round 1."""
+    tool_response_1 = LLMResponse(
+        text="",
+        tokens_used=10,
+        model_name="mock",
+        latency_ms=5.0,
+        tool_calls=[ToolCall(id="c1", name="stub", arguments={})],
+    )
+    tool_response_2 = LLMResponse(
+        text="",
+        tokens_used=10,
+        model_name="mock",
+        latency_ms=5.0,
+        tool_calls=[ToolCall(id="c2", name="stub", arguments={})],
+    )
+    final = LLMResponse(text="Done.", tokens_used=5, model_name="mock", latency_ms=5.0)
+    llm = _MockLLM([tool_response_1, tool_response_2, final])
+    brain = _make_brain(llm, actions=[_StubAction()])
+
+    await brain._generate_with_tools(
+        "test", target_latency_s=8.0, min_tokens=60,
+    )
+    # Three calls: two tool rounds + final text. Each saw a budget.
+    budgets = [c.get("target_latency_s") for c in llm.calls]
+    assert all(b is not None for b in budgets)
+    # Budgets are monotonically non-increasing — deadline ticks forward.
+    assert budgets[0] >= budgets[1] >= budgets[2]
+    # First round sees ~full budget (work is async-fast here so ≈8.0).
+    assert budgets[0] <= 8.0
+    # min_tokens passed unchanged.
+    assert all(c.get("min_tokens") == 60 for c in llm.calls)
+
+
+async def test_no_target_latency_means_no_kwarg_forwarded():
+    """Legacy callers that don't pass target_latency_s get None forwarded,
+    so the backend stays in static-default mode."""
+    response = LLMResponse(text="ok", tokens_used=5, model_name="mock", latency_ms=1.0)
+    llm = _MockLLM([response])
+    brain = _make_brain(llm, actions=[_StubAction()])
+    await brain._generate_with_tools("test")
+    assert llm.calls[0].get("target_latency_s") is None
 
 
 async def test_assistant_message_has_tool_calls_json():
