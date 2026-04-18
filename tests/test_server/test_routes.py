@@ -25,6 +25,11 @@ def app(tmp_path):
             return httpx.Response(200, json={
                 "data": [{"id": "gemma4"}, {"id": "tokenpal-bmo"}],
             })
+        if path.endswith("/props"):
+            return httpx.Response(200, json={
+                "default_generation_settings": {"n_ctx": 8192},
+                "model_path": "/models/qwen3.gguf",
+            })
         if path.endswith("/"):
             return httpx.Response(200, text="Ollama is running")
         return httpx.Response(404)
@@ -59,6 +64,12 @@ def test_proxy_forwards_models_list(client):
     models = resp.json()["data"]
     assert len(models) == 2
     assert models[0]["id"] == "gemma4"
+
+
+def test_proxy_forwards_props(client):
+    resp = client.get("/props")
+    assert resp.status_code == 200
+    assert resp.json()["default_generation_settings"]["n_ctx"] == 8192
 
 
 def test_proxy_returns_502_when_ollama_down(tmp_path):
