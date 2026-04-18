@@ -100,7 +100,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Voice Training
 - `/voice train`, `/voice regenerate` — structured persona cards with catchphrase priming and cross-franchise guardrails
-- ASCII art generation: LLM generates 3 Rich-markup frames (idle, idle_alt, talking) per voice during training. Stored in voice profile JSON as `ascii_idle`, `ascii_idle_alt`, `ascii_talking`
+- ASCII art generation: LLM returns a small JSON classification (skeleton name + 5-color hex palette + eye/mouth glyphs), which is rendered against one of 8 hand-drawn skeleton templates in `tokenpal/ui/ascii_skeletons.py`. Franchise context from `profile.source` is passed to the classifier so it can pick canonical colors. Three frames (idle, idle_alt with blink eye, talking with open mouth) are all rendered from the same skeleton via slot substitution and stored in voice profile JSON as `ascii_idle`, `ascii_idle_alt`, `ascii_talking`. Read `docs/voice-training.md` and `ascii_skeletons.py` before editing either the classifier prompt or the templates
 - See `docs/voice-training.md` for persona format, anchor lines, banned names, and architecture
 
 ## Fine-Tuning
