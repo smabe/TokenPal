@@ -283,13 +283,8 @@ class Brain:
         self._first_session_of_day: bool = True
         self._session_started_at: float = time.monotonic()
 
-        # First-sighting app enrichment. Blocks the observation tick (~3s cap)
-        # on cache miss for a new app so the first quip lands with context,
-        # not just a bare app name. Needs memory for the cache; no-op without it.
-        self._app_enricher: AppEnricher | None = (
-            AppEnricher(memory=self._memory, sensitive_apps=set(SENSITIVE_APPS))
-            if self._memory is not None
-            else None
+        self._app_enricher = (
+            AppEnricher(memory=self._memory) if self._memory is not None else None
         )
 
     async def start(self) -> None:
@@ -943,11 +938,10 @@ class Brain:
         return snapshot
 
     async def _maybe_enrich_snapshot(self, snapshot: str) -> str:
-        """Splice the active app's cached/fetched description into the snapshot."""
+        """Splice the active app's description into the snapshot's App: line."""
         if self._app_enricher is None:
             return snapshot
-        active = self._context.active_readings()
-        app_reading = active.get("app_awareness")
+        app_reading = self._context.active_readings().get("app_awareness")
         if app_reading is None:
             return snapshot
         app_name = (app_reading.data or {}).get("app_name")
@@ -956,9 +950,9 @@ class Brain:
         description = await self._app_enricher.enrich(app_name)
         if not description:
             return snapshot
-        pattern = rf"App: {re.escape(app_name)}"
-        replacement = f"App: {app_name} ({description})"
-        return re.sub(pattern, replacement, snapshot, count=1)
+        return snapshot.replace(
+            f"App: {app_name}", f"App: {app_name} ({description})", 1,
+        )
 
     async def _generate_comment(self, snapshot: str | None = None) -> bool:
         """Generate an observation comment. Returns True iff a line was emitted.
@@ -984,9 +978,6 @@ class Brain:
             self._emit_comment(egg, acknowledge=True)
             return True
 
-        # First-sighting enrichment: for a new app we've never looked up,
-        # block here (~3s cap) on a search_web call and splice the one-line
-        # description into the snapshot. Cache hit path is instant.
         snapshot = await self._maybe_enrich_snapshot(snapshot)
 
         # Topic roulette: pick what to focus on and hint the LLM

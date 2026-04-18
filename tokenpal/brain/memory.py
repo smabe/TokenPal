@@ -697,9 +697,18 @@ class MemoryStore:
         return (answer, sources_json, age)
 
     def get_app_enrichment(
-        self, app_name: str,
-    ) -> tuple[str | None, float, bool] | None:
-        """Return ``(description, age_s, success)`` for a cached app, else None."""
+        self,
+        app_name: str,
+        fresh_after_s: float,
+        retry_after_s: float,
+    ) -> tuple[str | None, bool] | None:
+        """Return ``(description, still_fresh)`` for a cached app, or None.
+
+        ``still_fresh`` is True when a successful row is younger than
+        ``fresh_after_s`` or a failed row is younger than ``retry_after_s``
+        — i.e. the caller should use (or respect) the cached value rather
+        than re-fetching. When False, callers should treat this as a miss.
+        """
         if not self._enabled or not self._conn:
             return None
         with self._lock:
@@ -711,7 +720,12 @@ class MemoryStore:
         if row is None:
             return None
         description, fetched_at, success = row
-        return (description, time.time() - fetched_at, bool(success))
+        age_s = time.time() - fetched_at
+        still_fresh = (
+            (bool(success) and age_s < fresh_after_s)
+            or (not bool(success) and age_s < retry_after_s)
+        )
+        return (description if success else None, still_fresh)
 
     def put_app_enrichment(
         self, app_name: str, description: str | None, success: bool,

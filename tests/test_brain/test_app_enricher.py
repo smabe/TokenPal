@@ -9,11 +9,19 @@ import pytest
 
 from tokenpal.brain.app_enricher import (
     MAX_DESCRIPTION_CHARS,
+    REFRESH_AFTER_S,
+    RETRY_AFTER_S,
     AppEnricher,
     _trim_to_sentence,
 )
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.senses.web_search.client import SearchResult
+
+
+def _cached(store: MemoryStore, name: str) -> tuple[str | None, bool] | None:
+    return store.get_app_enrichment(
+        name, fresh_after_s=REFRESH_AFTER_S, retry_after_s=RETRY_AFTER_S,
+    )
 
 
 @pytest.fixture()
@@ -25,7 +33,7 @@ def store(tmp_path: Path) -> MemoryStore:
 
 @pytest.fixture()
 def enricher(store: MemoryStore) -> AppEnricher:
-    return AppEnricher(memory=store, sensitive_apps={"1Password", "Banking"})
+    return AppEnricher(memory=store)
 
 
 def _patch_search(
@@ -79,10 +87,10 @@ async def test_first_sighting_fetches_and_caches(
 
     got = await enricher.enrich("Cronometer")
     assert got == "Cronometer is a nutrition and calorie tracking app."
-    cached = store.get_app_enrichment("Cronometer")
+    cached = _cached(store, "Cronometer")
     assert cached is not None
-    description, _age, success = cached
-    assert success is True
+    description, still_fresh = cached
+    assert still_fresh is True
     assert description == "Cronometer is a nutrition and calorie tracking app."
 
 
@@ -121,7 +129,7 @@ async def test_no_consent_does_not_fetch(
 
     assert await enricher.enrich("Cronometer") is None
     assert calls == []
-    assert store.get_app_enrichment("Cronometer") is None
+    assert _cached(store, "Cronometer") is None
 
 
 async def test_failed_fetch_caches_failure(
@@ -132,11 +140,11 @@ async def test_failed_fetch_caches_failure(
     _grant_consent(monkeypatch)
 
     assert await enricher.enrich("NeverHeardOfIt") is None
-    cached = store.get_app_enrichment("NeverHeardOfIt")
+    cached = _cached(store, "NeverHeardOfIt")
     assert cached is not None
-    description, _age, success = cached
-    assert success is False
+    description, still_fresh = cached
     assert description is None
+    assert still_fresh is True  # failed lookup is "fresh" within retry_after_s
 
 
 async def test_recent_failure_does_not_refetch(
@@ -160,10 +168,10 @@ async def test_sensitive_term_in_result_filtered(
     _grant_consent(monkeypatch)
 
     assert await enricher.enrich("SomeApp") is None
-    cached = store.get_app_enrichment("SomeApp")
+    cached = _cached(store, "SomeApp")
     assert cached is not None
-    _, _, success = cached
-    assert success is False
+    description, _ = cached
+    assert description is None
 
 
 def test_trim_to_sentence_respects_max() -> None:

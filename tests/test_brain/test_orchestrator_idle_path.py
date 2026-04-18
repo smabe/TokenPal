@@ -97,11 +97,7 @@ def test_record_idle_fire_writes_telemetry_row() -> None:
 
 
 async def test_generate_comment_returns_false_on_sensitive_app() -> None:
-    """False return is what lets the brain loop cede the tick to idle rolls.
-
-    Pre-patch, a sensitive-app early-return produced implicit None, the loop
-    treated it as "we spoke," and idle rolls were starved all day.
-    """
+    """False return is what lets the brain loop cede the tick to idle rolls."""
     brain = _bare_brain()
     brain._context = type("C", (), {"snapshot": lambda self: "banking app"})()
     brain._personality = type("P", (), {
