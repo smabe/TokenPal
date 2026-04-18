@@ -116,10 +116,10 @@ class LLMConfig:
     # /model <name> and /server switch at runtime.
     per_server_models: dict[str, str] = field(default_factory=dict)
     per_server_max_tokens: dict[str, int] = field(default_factory=dict)
-    # Feature flag for throughput-aware max_tokens scaling. When OFF the
-    # backend ignores target_latency_s kwargs and uses the static default.
-    # Flip via [llm] target_latency_scaling = true after dogfooding.
-    target_latency_scaling: bool = False
+    # Throughput-aware max_tokens scaling — see plans/shipped/gpu-scaling.md.
+    # Backends compute max_tokens from measured decode_tps and TTFT when a
+    # caller passes target_latency_s; user pins and explicit max_tokens args
+    # still win per the documented resolution order.
     target_latency_s: TargetLatencyConfig = field(default_factory=TargetLatencyConfig)
     min_tokens_per_path: MinTokensPerPathConfig = field(default_factory=MinTokensPerPathConfig)
 

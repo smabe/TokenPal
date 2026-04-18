@@ -61,10 +61,7 @@ class HttpBackend(AbstractLLMBackend):
         self._model_available: bool = False
         self._using_fallback: bool = False
         # Throughput estimator state. None until MIN_SAMPLES_FOR_ESTIMATE calls
-        # accumulate. See plans/gpu-scaling.md for the TTFT/decode split.
-        self._target_latency_scaling: bool = bool(
-            config.get("target_latency_scaling", False)
-        )
+        # accumulate. See plans/shipped/gpu-scaling.md for the TTFT/decode split.
         self._sample_count: int = 0
         self._decode_tps_ewma: float | None = None
         self._ttft_ewma_s: float | None = None
@@ -194,22 +191,18 @@ class HttpBackend(AbstractLLMBackend):
         target_latency_s: float | None,
         min_tokens: int | None,
     ) -> int:
-        """Pick the max_tokens cap per plans/gpu-scaling.md resolution order.
+        """Pick the max_tokens cap per plans/shipped/gpu-scaling.md resolution order.
 
         1. Explicit max_tokens arg → use as-is.
         2. User-pinned per-server max_tokens → use pin.
-        3. target_latency_scaling on, estimator ready →
+        3. target_latency_s provided + estimator ready →
            (target_latency_s - ttft_ewma) * decode_tps_ewma, floored by
            min_tokens and clamped by ctx_length//4 and MAX_TOKENS_HARD_CAP.
         4. Fall back to the static self._max_tokens default.
         """
         if max_tokens is not None:
             return max_tokens
-        latency_ready = (
-            self._target_latency_scaling
-            and target_latency_s is not None
-            and self._estimate_ready
-        )
+        latency_ready = target_latency_s is not None and self._estimate_ready
         if self._max_tokens_pinned:
             if latency_ready and not self._logged_pin_underuse:
                 assert target_latency_s is not None

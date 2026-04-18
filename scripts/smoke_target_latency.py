@@ -1,8 +1,9 @@
-"""Smoke-test target_latency_scaling against a live llama-server.
+"""Smoke-test target-latency scaling against a live llama-server.
 
 Runs 5 real generate calls, prints EWMA state + resolved max_tokens after
-each. Use after flipping the flag in config.toml to verify the estimator
-converges on real hardware.
+each, then spins up a second backend on the same MemoryStore to verify
+seed-from-persistence skips the bootstrap. Useful when debugging the
+estimator on a new rig.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ def _make_backend(llm: object, store: MemoryStore) -> HttpBackend:
         "temperature": llm.temperature,                  # type: ignore[attr-defined]
         "disable_reasoning": llm.disable_reasoning,      # type: ignore[attr-defined]
         "inference_engine": llm.inference_engine,        # type: ignore[attr-defined]
-        "target_latency_scaling": llm.target_latency_scaling,  # type: ignore[attr-defined]
         "per_server_models": llm.per_server_models,      # type: ignore[attr-defined]
         "per_server_max_tokens": llm.per_server_max_tokens,  # type: ignore[attr-defined]
         "memory_store": store,
@@ -62,7 +62,6 @@ async def main() -> int:
     print(f"model: {backend.model_name}")
     print(f"context_length: {backend.context_length}")
     print(f"initial max_tokens: {backend.max_tokens}")
-    print(f"target_latency_scaling: {llm.target_latency_scaling}")
     print(f"observation target: {target_s}s, min_tokens: {min_t}")
     print()
 

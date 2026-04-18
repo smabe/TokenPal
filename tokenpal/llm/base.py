@@ -132,8 +132,8 @@ class AbstractLLMBackend(abc.ABC):
         on llama-server, advisory on Ollama.
         ``target_latency_s`` declares a completion-latency budget — backends
         that track throughput (see ``HttpBackend``) derive max_tokens from
-        measured decode-TPS and TTFT. Explicit ``max_tokens`` always wins.
-        Ignored when the ``target_latency_scaling`` flag is off.
+        measured decode-TPS and TTFT once enough samples accumulate. Explicit
+        ``max_tokens`` and user pins still win per resolution order.
         ``min_tokens`` sets a floor on the derived cap (token-elasticity
         guard). No effect when ``max_tokens`` or the user pin takes over.
         """

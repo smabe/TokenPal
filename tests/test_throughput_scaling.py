@@ -11,7 +11,6 @@ from tokenpal.llm.http_backend import HttpBackend
 
 def _backend(
     *,
-    target_latency_scaling: bool = True,
     max_tokens: int = 60,
     per_server_max_tokens: dict[str, int] | None = None,
 ) -> HttpBackend:
@@ -19,7 +18,6 @@ def _backend(
         "api_url": "http://localhost:11434/v1",
         "model_name": "gemma4",
         "max_tokens": max_tokens,
-        "target_latency_scaling": target_latency_scaling,
         "per_server_max_tokens": per_server_max_tokens or {},
     }
     return HttpBackend(config)
@@ -102,10 +100,10 @@ def test_measurement_clamped_to_context_quarter() -> None:
     assert derived == 256
 
 
-def test_flag_off_ignores_target_latency() -> None:
-    b = _backend(target_latency_scaling=False, max_tokens=60)
+def test_target_latency_none_falls_back_to_static() -> None:
+    b = _backend(max_tokens=60)
     _seed_estimator(b)
-    assert b._resolve_max_tokens(None, 5.0, 40) == 60
+    assert b._resolve_max_tokens(None, None, 40) == 60
 
 
 def test_model_swap_clears_estimators() -> None:
@@ -192,14 +190,11 @@ class _FakeMemoryStore:
         self.save_calls += 1
 
 
-def _backend_with_store(
-    store: _FakeMemoryStore, *, target_latency_scaling: bool = True
-) -> HttpBackend:
+def _backend_with_store(store: _FakeMemoryStore) -> HttpBackend:
     return HttpBackend({
         "api_url": "http://localhost:11434/v1",
         "model_name": "gemma4",
         "max_tokens": 60,
-        "target_latency_scaling": target_latency_scaling,
         "memory_store": store,
     })
 

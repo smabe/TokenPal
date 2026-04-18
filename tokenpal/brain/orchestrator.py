@@ -291,9 +291,8 @@ class Brain:
             AppEnricher(memory=self._memory) if self._memory is not None else None
         )
 
-        # Target-latency budgets + token floors per call-path. When the
-        # backend has target_latency_scaling off these are still passed but
-        # ignored; see plans/gpu-scaling.md.
+        # Target-latency budgets + token floors per call-path.
+        # See plans/shipped/gpu-scaling.md.
         self._budgets: TargetLatencyConfig = target_latency_s or TargetLatencyConfig()
         self._min_tokens: MinTokensPerPathConfig = (
             min_tokens_per_path or MinTokensPerPathConfig()

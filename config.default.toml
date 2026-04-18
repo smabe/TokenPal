@@ -65,15 +65,10 @@ temperature = 1.0
 
 [llm.per_server_max_tokens]
 
-# Throughput-aware max_tokens scaling (GPU-scaling). OFF by default while
-# dogfooding. When ON, each call site declares a completion-latency budget
-# and the backend computes max_tokens from measured decode-TPS and TTFT.
-# Honors user pins in [llm.per_server_max_tokens] and explicit max_tokens
-# kwargs. See plans/gpu-scaling.md.
-# target_latency_scaling = false
-
-# Per-path latency budgets in seconds. Inactive while target_latency_scaling
-# is false — but safe to tune in advance.
+# Per-path completion-latency budgets (seconds). The backend derives
+# max_tokens from measured decode-TPS and TTFT when a caller passes a
+# budget. User pins in [llm.per_server_max_tokens] and explicit max_tokens
+# kwargs still win per resolution order. See plans/shipped/gpu-scaling.md.
 [llm.target_latency_s]
 # observation  = 5.0
 # freeform     = 6.0
