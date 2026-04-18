@@ -109,6 +109,14 @@ _WINDOW_SECONDS = 300.0
 _FORCED_SILENCE_AFTER = 3
 _FORCED_SILENCE_DURATION = 120.0
 
+# Forced silence after N consecutive SUPPRESSED outputs. Stops the brain
+# loop from burning LLM calls every tick when the model is stuck in a
+# template lock-in (near-duplicate or prefix-lock variants of the same
+# line). Shorter than the 3-consecutive-comment forced silence because
+# suppressions are usually a symptom of a drift the LLM can't escape
+# without the prompt being reshuffled by a real sense change.
+_FORCED_SILENCE_AFTER_SUPPRESSIONS = 5
+
 # Freeform chance for voices with 50+ example lines
 _FREEFORM_CHANCE_RICH = 0.20
 
@@ -232,6 +240,7 @@ class Brain:
 
         # Silence tuning state
         self._consecutive_comments: int = 0
+        self._suppressed_streak: int = 0
         self._comment_timestamps: list[float] = []
         self._forced_silence_until: float = 0.0
 
@@ -620,7 +629,29 @@ class Brain:
             self._context.acknowledge()
         self._last_comment_time = time.monotonic()
         self._consecutive_comments += 1
+        self._suppressed_streak = 0
         self._comment_timestamps.append(time.monotonic())
+
+    def _handle_suppressed_output(self, reason: str) -> None:
+        """Apply cooldown + silence pressure after a filter rejected a gen.
+
+        Without this, the three emit paths leave `_last_comment_time` intact
+        after a suppression, so the next tick's gate sees "it's been forever
+        since we spoke" and fires another LLM call immediately. That loop
+        can burn thousands of generations overnight when the model is stuck
+        on a locked phrase (seen 3k+ suppressions in one session).
+        """
+        now = time.monotonic()
+        self._last_comment_time = now
+        self._consecutive_comments = 0
+        self._suppressed_streak += 1
+        if self._suppressed_streak >= _FORCED_SILENCE_AFTER_SUPPRESSIONS:
+            log.info(
+                "Gate: forced silence for %ds after %d consecutive suppressions (%s)",
+                int(_FORCED_SILENCE_DURATION), self._suppressed_streak, reason,
+            )
+            self._forced_silence_until = now + _FORCED_SILENCE_DURATION
+            self._suppressed_streak = 0
 
     @staticmethod
     def _trigram_set(text: str) -> set[str]:
@@ -695,6 +726,7 @@ class Brain:
             filtered = self._personality.filter_response(response.text)
             if filtered and self._is_near_duplicate(filtered):
                 log.info("TokenPal (freeform suppressed near-duplicate): %s", filtered)
+                self._handle_suppressed_output("freeform near-duplicate")
                 filtered = ""
 
             if filtered:
@@ -808,6 +840,7 @@ class Brain:
                 "TokenPal (idle-tool %s suppressed near-duplicate): %s",
                 fire.rule_name, filtered,
             )
+            self._handle_suppressed_output(f"idle-tool {fire.rule_name}")
             filtered = ""
 
         if not filtered:
@@ -946,7 +979,7 @@ class Brain:
 
             if filtered and self._is_near_duplicate(filtered):
                 log.info("TokenPal (suppressed near-duplicate): %s", filtered)
-                self._consecutive_comments = 0
+                self._handle_suppressed_output("observation near-duplicate")
                 return
 
             if filtered:
