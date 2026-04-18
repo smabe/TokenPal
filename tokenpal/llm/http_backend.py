@@ -348,18 +348,20 @@ class HttpBackend(AbstractLLMBackend):
             self._max_tokens = self._initial_max_tokens
         log.info("API URL switched to: %s", self._api_url)
 
+    @property
+    def _native_root(self) -> str:
+        """The non-OpenAI-compat root URL (strip trailing /v1) for native probes."""
+        return self._api_url[:-3] if self._api_url.endswith("/v1") else self._api_url
+
     async def _probe_context_length(self) -> int | None:
         """Probe Ollama's native /api/show for the active model's context_length.
 
         Returns None on any error (non-Ollama backend, network failure, missing field).
         """
         assert self._client is not None
-        native_root = self._api_url
-        if native_root.endswith("/v1"):
-            native_root = native_root[:-3]
         try:
             resp = await self._client.post(
-                f"{native_root}/api/show",
+                f"{self._native_root}/api/show",
                 json={"name": self._model_name},
                 timeout=self._PROBE_TIMEOUT_S,
             )
@@ -376,9 +378,34 @@ class HttpBackend(AbstractLLMBackend):
             log.debug("Capability probe failed for %s: %s", self._model_name, e)
             return None
 
+    async def _probe_llamacpp_props(self) -> int | None:
+        """Probe llama-server's /props for default_generation_settings.n_ctx.
+
+        Counterpart to _probe_context_length for the llamacpp backend —
+        llama-server has no /api/show but exposes n_ctx on /props.
+        """
+        assert self._client is not None
+        try:
+            resp = await self._client.get(
+                f"{self._native_root}/props",
+                timeout=self._PROBE_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            gen = resp.json().get("default_generation_settings") or {}
+            n_ctx = gen.get("n_ctx")
+            if not isinstance(n_ctx, (int, float)) or n_ctx <= 0:
+                return None
+            return int(n_ctx)
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            log.debug("llama-server /props probe failed: %s", e)
+            return None
+
     async def _apply_auto_max_tokens(self) -> None:
         """Probe server capability and update max_tokens when not user-pinned."""
-        ctx = await self._probe_context_length()
+        if self._inference_engine == "llamacpp":
+            ctx = await self._probe_llamacpp_props()
+        else:
+            ctx = await self._probe_context_length()
         if ctx is None:
             return
         self._context_length = ctx

@@ -42,6 +42,32 @@ let the backend compute tokens from measured throughput.
 - **NG4**  Calling-path inference. The caller passes explicit intent;
   we don't guess from the stack.
 
+## Prior art
+
+No published system does exactly this (client-side, piggyback-measured,
+per-caller latency budget), but the serving-side literature settles the
+vocabulary and the structural pitfalls. Terms borrowed: **TTFT** (time
+to first token, prefill-dominated), **TPOT / ITL** (time per output
+token / inter-token latency, decode-dominated), **latency SLO / deadline**
+(the caller-declared target). Non-borrowed: **goodput** (SLO-attaining
+throughput), which is a server fleet metric that doesn't apply to a
+single-user desktop app.
+
+Two lessons shaped this design:
+
+- **Prefill and decode are separate-variance regimes.** KV-cache hits
+  collapse prefill; decode is steadier but thermally sensitive. Papers
+  (DistServe, SCORPIO) all separate them. Our first-pass plan used a
+  single rolling-median tps; rewriting to `(target - ttft) * decode_tps`.
+- **Token elasticity** (arxiv 2412.18547): a tight `max_tokens` doesn't
+  make the model compress its answer, it truncates mid-sentence. Hence
+  the `min_tokens_per_path` floor.
+
+llama.cpp and Ollama both have per-request **reasoning** budget
+discussions open (llama.cpp #21445, Ollama #10925) but no per-request
+**latency** target. This feature puts TokenPal ahead of both upstream
+projects in that dimension.
+
 ## Current state (audit)
 
 Call sites of `generate` / `generate_with_tools` in prod:
@@ -91,32 +117,56 @@ paths, no new endpoint.
 
 ### Data
 
-On `HttpBackend`:
+On `HttpBackend`. Prior-art note: production serving stacks (vLLM,
+SGLang) treat prefill and decode as separate-variance regimes — prefill
+absorbs KV-cache-hit bimodality, decode is steadier but thermally
+sensitive. Collapsing them into one rolling tps figure is what blows
+up the estimate on short-budget paths like observations.
 
 ```python
 @dataclass
-class ThroughputMeasurement:
+class ThroughputSample:
+    prompt_tokens: int
     completion_tokens: int
-    elapsed_s: float
+    total_elapsed_s: float  # wall-clock around the HTTP call
     timestamp: float
 
 class HttpBackend:
-    _throughput_samples: deque[ThroughputMeasurement]  # maxlen=10
-    _measured_tps: float | None  # median of samples, None until 3+ samples
+    _samples: deque[ThroughputSample]                 # maxlen=20
+    _decode_tps_ewma: float | None                    # α=0.2, None < 3 samples
+    _ttft_ewma_s: float | None                        # α=0.2, None < 3 samples
+    _estimator_key: tuple[str, str] | None            # (server_url, model)
 ```
 
-Measurements:
+Measurements, per successful call with `completion_tokens > 0`:
 
-- Every `generate` / `generate_with_tools` call records a sample when
-  it completes successfully with `completion_tokens > 0`.
-- Median of the last 10 is the steady-state tps estimate.
-- Samples cleared on model swap / backend reconnect (same places we
-  already clear `_derived_max_tokens`).
-- Below 3 samples we fall back to the current static cap.
+- Record one `ThroughputSample`.
+- Derive per-call `decode_tps = completion_tokens / max(total_elapsed_s - ttft_estimate, epsilon)`;
+  feed into EWMA. For the very first sample (no TTFT estimate yet)
+  approximate `decode_tps ≈ completion_tokens / total_elapsed_s` and
+  carry a zero TTFT — subsequent samples correct it.
+- Derive per-call `ttft_estimate_s = total_elapsed_s - completion_tokens / decode_tps_ewma`;
+  feed into TTFT EWMA. Floor at 0.
+- EWMA α = 0.2 — responds in ~5 samples, matches vLLM internals.
+  Open to dogfood tuning.
+- Estimators cleared when `_estimator_key` changes (model swap /
+  server switch); seeded from persisted state otherwise (see below).
+- Below 3 samples both estimators are `None`; resolution falls back
+  to the current static cap.
 
-Bootstrap: the first ~3 real generate calls use the existing static
-default. By the 4th call we have a measurement. No dedicated warm-up
-round.
+### Cold-start seeding
+
+A machine that's been run before shouldn't relearn its own GPU every
+restart. Persist `(server_url, model) → (decode_tps_ewma, ttft_ewma_s,
+sample_count)` in `memory.db` (new table `llm_throughput_estimators`,
+same 0o600 file). On connect, if the key matches, seed the in-memory
+EWMAs and skip the 3-sample bootstrap. If the key doesn't match (first
+time on this model, or hardware change), fall back to static default
+until 3 real samples accumulate.
+
+Write-back: throttled to once per minute during steady state, always
+on graceful shutdown. Missing/corrupt row → ignore, fall back to
+bootstrap path.
 
 ### Per-path budgets
 
@@ -130,12 +180,27 @@ idle_tool    = 6.0
 tools        = 8.0        # /agent one-round, tool-calling observation round
 conversation = 12.0
 research     = 20.0
+
+[llm.min_tokens_per_path]
+observation  = 40         # token-elasticity floor: below this, quips truncate
+freeform     = 40
+idle_tool    = 40
+tools        = 60
+conversation = 80
+research     = 120
 ```
 
 `target_latency_s` stays in a compact, named-slot config rather than
 propagating through every call site as a float. Orchestrator code
 imports these constants (or reads them off the backend) and passes
 a `path: Literal[...]` string to `generate`.
+
+**Token-elasticity floor.** Per arxiv 2412.18547, models don't compress
+output when given a tight cap — they get truncated mid-sentence. The
+`min_tokens_per_path` table sets a lower bound for the derived cap so
+an unlucky decode_tps estimate can't produce a 15-token observation
+that cuts off at "I see you're in Chro—". Ceiling is still
+`ctx_length // 4` and `MAX_TOKENS_HARD_CAP`.
 
 ### API shape
 
@@ -157,10 +222,20 @@ Resolution order inside `HttpBackend.generate`:
 1. If `max_tokens` passed explicitly → use as-is (honors user code
    that knows what it wants).
 2. Else if user-pinned `max_tokens` for this server → use pin.
-3. Else if `target_latency_s` passed AND we have `_measured_tps` →
-   `int(target_latency_s * _measured_tps)`, clamped to `ctx_length // 4`
-   and to `MAX_TOKENS_HARD_CAP`.
+3. Else if `target_latency_s` passed AND both `_decode_tps_ewma` and
+   `_ttft_ewma_s` are populated →
+   `int((target_latency_s - _ttft_ewma_s) * _decode_tps_ewma)`,
+   clamped to `[min_tokens_for_path, ctx_length // 4, MAX_TOKENS_HARD_CAP]`.
+   If `target_latency_s ≤ _ttft_ewma_s` (user set a budget smaller
+   than typical prefill), clamp to `min_tokens_for_path` and INFO-log
+   once per session.
 4. Else → fall back to current `_max_tokens` default.
+
+Why `(target - ttft) * decode_tps` not `target * total_tps`: TTFT can
+be 0.5–2s on a cold prompt; decode on Qwen3-14B-Q4 runs 50+ t/s. A 1s
+TTFT misestimate wipes out a 50-token error in the cap. Keeping the
+two estimators separate is what makes the 5s observation budget
+correct on both warm and cold calls.
 
 Same rule applied in `generate_with_tools`. No existing caller breaks:
 passing nothing still works, passing `max_tokens=N` still works.
@@ -177,10 +252,28 @@ conversation) we just add the kwarg. The two explicit-max_tokens sites
 (`research.py:271`, conversation continuation) stay as-is — user code
 that knew what it wanted still takes precedence per rule 1.
 
+### Tool-calling budget propagation
+
+A 5s observation that calls `search_web` is really N sequential
+generations separated by tool I/O. Dividing `target_latency_s / N`
+statically wastes budget if an early round finishes fast. The
+orchestrator-layer approach: stash a `deadline_monotonic_s = now + target_latency_s`
+at the top of the multi-round call and pass `remaining = deadline - now`
+as `target_latency_s` into each inner `generate`. Last round gets
+whatever runway is left. Floor per-round at `min_tokens_for_path` so
+a burned-down budget still yields a coherent final turn.
+
+Implementation: pass `target_latency_s` through the existing
+`_generate_with_tools` loop in `orchestrator.py`, recomputing before
+each round. No new abstraction.
+
 ### Log discipline
 
-- INFO once when we cross the 3-sample threshold ("measured ≈ 57 t/s").
-- INFO when we swap models and discard samples.
+- INFO once when we cross the 3-sample threshold ("measured ≈ 57 t/s
+  decode, 0.8s TTFT").
+- INFO when we swap models/servers and discard samples. INFO when we
+  seed from persisted state ("resuming estimator: 57 t/s, 0.8s TTFT,
+  142 prior samples").
 - DEBUG per-call only with `--verbose` — the sample record itself is
   too chatty for INFO.
 - If user-pinned `max_tokens < measured_suggestion`, INFO once per
@@ -208,35 +301,49 @@ throughput measurement isn't available yet.
   to drive sample accumulation, asserts resolution order 1-4.
 
 ### EDIT
-- `tokenpal/llm/http_backend.py` — add `_throughput_samples`,
-  `_measured_tps`, the `/props` probe, and the resolution logic in
-  `generate` + `generate_with_tools`.
+- `tokenpal/llm/http_backend.py` — add `_samples`, `_decode_tps_ewma`,
+  `_ttft_ewma_s`, `_estimator_key`, the `/props` probe, seeding from
+  persisted estimator row, throttled write-back, and the resolution
+  logic in `generate` + `generate_with_tools`.
 - `tokenpal/llm/base.py` — new optional `target_latency_s` kwarg on the
   abstract method signature.
-- `tokenpal/config/schema.py` — `LLMConfig.target_latency_s` nested
-  dataclass with the six slots, defaults as above.
-- `config.default.toml` — annotated `[llm.target_latency_s]` stubs.
+- `tokenpal/config/schema.py` — `LLMConfig.target_latency_s` +
+  `LLMConfig.min_tokens_per_path` nested dataclasses with the six
+  slots each, defaults as above.
+- `config.default.toml` — annotated `[llm.target_latency_s]` and
+  `[llm.min_tokens_per_path]` stubs.
+- `tokenpal/memory/store.py` (or wherever `memory.db` DDL lives) —
+  new `llm_throughput_estimators` table keyed `(server_url, model)`.
 - `tokenpal/brain/orchestrator.py` — route the six observation/freeform/
   idle-tool/conversation/tools/research-synth call sites through the
-  new kwarg.
+  new kwarg; add the deadline-propagation loop in `_generate_with_tools`
+  so each round gets remaining-wall-clock.
 - `tokenpal/brain/research.py` — synth call site gets
-  `target_latency_s=10.0`; drop the explicit `max_tokens=400`.
+  `target_latency_s=20.0`; drop the explicit `max_tokens=400`.
 - `tokenpal/brain/agent.py` — agent-loop call site gets
-  `target_latency_s=4.0`.
+  `target_latency_s=8.0`.
 - `CLAUDE.md` — one line under LLM Notes pointing to the new scaler.
 
 ## Tests
 
 - `test_throughput_scaling.py`
   - `test_first_calls_use_static_default_before_three_samples`
-  - `test_three_samples_triggers_measured_tps_switch`
+  - `test_three_samples_populate_decode_and_ttft_ewmas`
+  - `test_resolution_uses_target_minus_ttft_times_decode_tps`
   - `test_explicit_max_tokens_overrides_measurement`
   - `test_user_pin_beats_measurement`
   - `test_measurement_clamped_to_context_quarter`
   - `test_measurement_clamped_to_hard_cap`
-  - `test_model_swap_clears_samples`
-  - `test_low_sample_count_after_clear_falls_back_to_static`
-  - `test_median_resistant_to_one_slow_call`
+  - `test_measurement_floored_to_min_tokens_per_path`
+  - `test_target_below_ttft_clamps_to_min_and_logs_once`
+  - `test_model_swap_clears_estimators_and_reseeds_from_db`
+  - `test_first_time_model_seen_falls_back_to_bootstrap`
+  - `test_ewma_tracks_thermal_drift_over_rolling_samples`
+  - `test_ewma_not_whipsawed_by_one_fast_cache_hit`
+  - `test_persisted_estimator_roundtrip_across_restart`
+- `test_tool_deadline_propagation.py`
+  - `test_multi_round_tool_loop_divides_remaining_wallclock`
+  - `test_last_round_floors_at_min_tokens_when_budget_exhausted`
 - Extend `test_http_backend.py` with a `/props` probe test for
   llamacpp.
 
@@ -256,9 +363,12 @@ throughput measurement isn't available yet.
 
 ## Open decisions (for approval)
 
-1. **Rolling-median window size.** 10 samples. Could be shorter (5) for
-   faster adaptation at some noise cost. Verdict: 10 unless dogfood
-   shows lag.
+1. **EWMA α.** 0.2 (responds in ~5 samples, matches vLLM internal
+   estimators). Rolling median was the original pick; switched after
+   prior-art review — median's strength is outlier rejection, and the
+   TTFT/decode split already isolates the cache-hit bimodality that
+   motivated it. Lower α = steadier, higher α = faster to thermal
+   drift. Verdict: 0.2 unless dogfood shows lag.
 2. **Per-path target_latency_s in config vs hardcoded.** Config adds
    surface area. Hardcoded (per-path constants in `orchestrator.py`)
    is simpler. Leaning config — lets the user tune per rig without a
@@ -266,7 +376,7 @@ throughput measurement isn't available yet.
 3. **What to do if `completion_tokens` is missing from the response**
    (some llama-server builds omit it under tool-calling). Fall back
    to stopwatch-only estimation or skip the sample entirely? Leaning
-   skip — keeps the median honest.
+   skip — keeps the EWMA honest.
 4. **Should the conversation continuation path re-measure mid-run?**
    Today it pins max_tokens across continuations. With target_latency,
    each continuation could re-derive — but that risks drift across a
@@ -276,24 +386,33 @@ throughput measurement isn't available yet.
    Yes — `ctx_length // 4` is the upper clamp (rule 3). Without it the
    llamacpp path would clamp to `MAX_TOKENS_HARD_CAP` (1024) only,
    potentially above the model's safe ceiling.
+6. **Persisted estimator invalidation.** Besides model/server change,
+   when else should we discard the row? Proposal: version the schema
+   with a `schema_version` column and drop rows on upgrade. GPU driver
+   changes aren't detectable — the EWMA will just re-converge in ~5
+   calls, which is fine.
 
 ## Known risks
 
-- **Measurement noise from cache hits.** llama-server's host-memory
-  cache makes the second call with an overlapping prefix very fast.
-  That inflates the tps estimate, which expands max_tokens, which may
-  then stall on a genuine cold-prompt call. Mitigation: samples are a
-  rolling median, so one fast hit can't dominate. If dogfood shows
-  clear bimodality, drop to the 20th-percentile sample instead of median.
-- **Tool-calling round-trips.** `_generate_with_tools` issues up to 3
-  LLM calls per observation. Target latency is per-path not per-round,
-  so a 4s tools budget divided across 3 rounds is ~1.3s each. Either
-  divide in the backend or let callers pass a per-round budget.
-  Leaning pass `target_latency_s / max_rounds` from the multi-round
-  call site.
+- **Measurement noise from cache hits** (largely absorbed by TTFT/decode
+  split). Cache hits collapse prefill, not decode, so `_ttft_ewma_s`
+  carries the bimodality and `_decode_tps_ewma` stays steady. Residual
+  risk: llama-server can serve part of a long completion from cache on
+  continuation — if dogfood shows `decode_tps` spiking on those calls,
+  gate samples where `prompt_tokens` overlaps the prior prompt.
+- **Persisted estimator goes stale.** A user swaps their GPU but keeps
+  the same model+server URL — the DB row mis-seeds decode_tps by 3×.
+  EWMA re-converges in ~5 calls, which is survivable, but the first
+  few observations could overrun or underuse. Accepted; mitigation via
+  `schema_version` bump when we know we've invalidated the priors.
+- **Tool-calling round-trips** — addressed above under "Tool-calling
+  budget propagation." No longer a static divide; deadline is tracked
+  at the orchestrator layer and each round gets remaining wall-clock.
 - **Config footgun.** User sets `observation = 0.5` and all quips
   truncate mid-sentence. Mitigation: floor each slot at 1.0s; log the
-  clamp once on startup.
+  clamp once on startup. Separately, `min_tokens_per_path` provides a
+  second safety net — derived cap never dips below a complete-one-liner
+  budget.
 - **User-pinned `max_tokens` interaction with research's explicit
   400.** Today the user pin overrides the call-site default. Under
   the new rules, an explicit `max_tokens=400` (rule 1) beats both the
@@ -301,3 +420,10 @@ throughput measurement isn't available yet.
   pinned low expecting it to cap everything will see research ignore
   the pin. Document clearly; consider adding a `force_pin = true`
   escape hatch if dogfood complains.
+- **EWMA cold-start bias on first sample.** We approximate
+  `decode_tps ≈ completion_tokens / total_elapsed_s` for sample 1 (no
+  TTFT yet). That's biased low — actual decode is faster than the
+  prompt-included estimate. Second and third samples correct it once
+  the TTFT EWMA has data. Quantified risk: the 4th-call derived cap is
+  ~15-20% tight; observation still completes well, just with a bit
+  more headroom than optimal. Accepted.

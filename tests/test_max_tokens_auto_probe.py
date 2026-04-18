@@ -15,12 +15,14 @@ def _backend(
     api_url: str = "http://localhost:11434/v1",
     per_server_max_tokens: dict[str, int] | None = None,
     max_tokens: int = 60,
+    inference_engine: str = "ollama",
 ) -> HttpBackend:
     config: dict[str, Any] = {
         "api_url": api_url,
         "model_name": "gemma4",
         "max_tokens": max_tokens,
         "per_server_max_tokens": per_server_max_tokens or {},
+        "inference_engine": inference_engine,
     }
     return HttpBackend(config)
 
@@ -167,3 +169,69 @@ def test_set_max_tokens_marks_pinned() -> None:
     b.set_max_tokens(200)
     assert b._max_tokens_pinned is True
     assert b.max_tokens == 200
+
+
+@pytest.mark.asyncio
+async def test_props_probe_parses_llamacpp_response() -> None:
+    """_probe_llamacpp_props reads default_generation_settings.n_ctx."""
+    b = _backend(inference_engine="llamacpp")
+
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {
+                "default_generation_settings": {
+                    "n_ctx": 8192,
+                    "params": {"n_predict": -1},
+                },
+                "model_path": "/models/qwen3.gguf",
+            }
+
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=FakeResp())
+    b._client = client  # type: ignore[assignment]
+    ctx = await b._probe_llamacpp_props()
+    assert ctx == 8192
+    # URL should be native (no /v1), GET not POST.
+    assert client.get.await_args.args[0] == "http://localhost:11434/props"
+
+
+@pytest.mark.asyncio
+async def test_props_probe_returns_none_on_http_error() -> None:
+    b = _backend(inference_engine="llamacpp")
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=httpx.ConnectError("nope"))
+    b._client = client  # type: ignore[assignment]
+    assert await b._probe_llamacpp_props() is None
+
+
+@pytest.mark.asyncio
+async def test_props_probe_returns_none_when_n_ctx_missing() -> None:
+    b = _backend(inference_engine="llamacpp")
+
+    class FakeResp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"default_generation_settings": {}}
+
+    client = AsyncMock()
+    client.get = AsyncMock(return_value=FakeResp())
+    b._client = client  # type: ignore[assignment]
+    assert await b._probe_llamacpp_props() is None
+
+
+@pytest.mark.asyncio
+async def test_llamacpp_engine_routes_to_props_probe() -> None:
+    """_apply_auto_max_tokens uses /props for llamacpp, not /api/show."""
+    b = _backend(inference_engine="llamacpp")
+    b._probe_llamacpp_props = AsyncMock(return_value=4096)  # type: ignore[method-assign]
+    b._probe_context_length = AsyncMock(return_value=None)  # type: ignore[method-assign]
+    await b._apply_auto_max_tokens()
+    assert b.context_length == 4096
+    assert b.derived_max_tokens == 1024  # min(4096//4, hard cap)
+    b._probe_llamacpp_props.assert_awaited_once()
+    b._probe_context_length.assert_not_awaited()
