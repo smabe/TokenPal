@@ -702,6 +702,35 @@ def regenerate_voice_assets(
     return profile
 
 
+def regenerate_ascii_art(
+    profile: VoiceProfile,
+    voices_dir: Path | None = None,
+    progress_callback: Callable[[str], None] | None = None,
+) -> VoiceProfile:
+    """Re-run just the ASCII art generator and save the profile.
+
+    Useful when the existing persona/anchor/mood data is good but the art
+    came out flat, mispigmented, or wrong-proportioned — no need to spend
+    the ~60s full-regen bake on the five LLM-backed generators that also
+    fire in `regenerate_voice_assets`.
+    """
+    def _progress(msg: str) -> None:
+        if progress_callback:
+            progress_callback(msg)
+
+    _progress(f"Generating ASCII art for {profile.character}...")
+    (
+        profile.ascii_idle,
+        profile.ascii_idle_alt,
+        profile.ascii_talking,
+    ) = _generate_ascii_art(profile.character, profile.persona)
+
+    out_dir = voices_dir or _get_voices_dir()
+    save_profile(profile, out_dir)
+    _progress(f"Saved {profile.character} ASCII art")
+    return profile
+
+
 @dataclass
 class AuditReport:
     slug: str

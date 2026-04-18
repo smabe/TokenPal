@@ -83,7 +83,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `/idle_tools [list|on|off|enable <rule>|disable <rule>|roll <rule>]` — inspect + toggle the idle-tool roller rules. See `docs/idle-tool-rolls.md`. Restart required for toggle changes.
 - `/gh [log|prs|issues]` — GitHub integration. Runs git/gh CLI in a daemon thread, logs raw output to chat log, then feeds it to the brain so the buddy comments in character
 - `/model [name|list|pull|browse]` — model management
-- `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|import]` — voice management
+- `/voice [train|switch|list|off|info|finetune|finetune-setup|regenerate|ascii|import]` — voice management. `regenerate` refreshes all LLM-backed assets (~60s); `ascii` refreshes only the three ASCII-art frames (idle/idle_alt/talking) so you can iterate on art without re-baking persona/moods/etc.
 - `/server [status|switch]` — server connection
 - `/zip <zipcode>` — set weather location (geocodes via Open-Meteo, writes to config.toml)
 - `/ask <question>` -- web search via DuckDuckGo Instant Answer + Wikipedia REST fallback (free, keyless; Brave API stub). Gated by the `web_fetches` consent category (`~/.tokenpal/.consent.json`); run /consent to grant. Results filtered through `contains_sensitive_term`, wrapped in `<search_result>` delimiters, fed to brain via `submit_user_input()` -- conversation-session follow-up auto-opens. Source URL displayed as clickable link in chat log. Also available as the `search_web` LLM tool (same clickable-link behavior). Search backend abstraction in `tokenpal/senses/web_search/client.py` (BackendName Literal, `_clear_conversation()` zeros history refs on session timeout)

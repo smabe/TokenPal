@@ -1268,11 +1268,17 @@ def _handle_voice_command(
             on_voice_loaded=on_voice_loaded,
         )
 
+    if subcmd == "ascii":
+        return _start_voice_regenerate_ascii(
+            subargs, personality, voices_dir, overlay,
+            on_voice_loaded=on_voice_loaded,
+        )
+
     return CommandResult(
         "Usage: /voice list | switch <name> | off | info"
         " | train <wiki> <character> | finetune <name>"
         " | finetune-setup | import <gguf_path>"
-        " | regenerate [name|--all]"
+        " | regenerate [name|--all] | ascii [name|--all]"
     )
 
 
@@ -1424,6 +1430,74 @@ def _start_voice_regenerate(
 
     regen_thread = threading.Thread(
         target=_regen, daemon=True, name="voice-regen",
+    )
+    regen_thread.start()
+    return CommandResult("")
+
+
+def _start_voice_regenerate_ascii(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    overlay: AbstractOverlay,
+    on_voice_loaded: Callable[[], None] | None = None,
+) -> CommandResult:
+    """Regenerate only the ASCII art frames for existing voice profiles."""
+    from tokenpal.tools.voice_profile import list_profiles, load_profile, slugify
+
+    do_all = args.strip().lower() == "--all"
+    if not args.strip():
+        if not personality.voice_name:
+            return CommandResult(
+                "No active voice. Usage: /voice ascii <name> or --all"
+            )
+        slugs = [slugify(personality.voice_name)]
+    elif do_all:
+        profiles = list_profiles(voices_dir)
+        slugs = [slug for slug, _, _ in profiles]
+        if not slugs:
+            return CommandResult("No voice profiles found.")
+    else:
+        slugs = [slugify(args.strip())]
+
+    def _regen() -> None:
+        try:
+            from tokenpal.tools.train_voice import regenerate_ascii_art
+
+            for slug in slugs:
+                try:
+                    profile = load_profile(slug, voices_dir)
+                except FileNotFoundError:
+                    _overlay_show(overlay, f"Voice '{slug}' not found.")
+                    continue
+
+                def _on_progress(step: str) -> None:
+                    _overlay_show(overlay, step, persistent=True)
+
+                regenerate_ascii_art(
+                    profile, voices_dir, progress_callback=_on_progress,
+                )
+
+            count = len(slugs)
+            msg = f"Regenerated ASCII for {count} voice{'s' if count != 1 else ''}."
+            _overlay_finalize(overlay, msg)
+            log.info("Voice ASCII regeneration complete: %s", slugs)
+
+            current = slugify(personality.voice_name) if personality.voice_name else ""
+            if current in slugs:
+                profile = load_profile(current, voices_dir)
+                personality.set_voice(profile)
+                if on_voice_loaded:
+                    overlay.schedule_callback(on_voice_loaded)
+        except Exception:
+            log.exception("Voice ASCII regeneration failed")
+            _overlay_finalize(overlay, "ASCII regeneration failed. Check logs.")
+
+    label = f"{len(slugs)} voices" if do_all else slugs[0]
+    _overlay_show(overlay, f"Regenerating ASCII for {label}...", persistent=True)
+
+    regen_thread = threading.Thread(
+        target=_regen, daemon=True, name="voice-ascii-regen",
     )
     regen_thread.start()
     return CommandResult("")
