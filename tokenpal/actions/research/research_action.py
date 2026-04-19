@@ -116,20 +116,29 @@ class ResearchAction(AbstractAction):
 
 def _build_cloud_backend(cfg: CloudLLMConfig | None) -> CloudBackend | None:
     """Construct an Anthropic-backed synth backend when /cloud is enabled and
-    a key is on disk. Silent returns None cover: cloud disabled, research_synth
-    site not enabled, no key stored, SDK missing, or model not in allowlist.
+    a key is on disk. Logs the reason on every None-return so a silent local
+    fallback is always traceable.
     """
-    if cfg is None or not cfg.enabled or not cfg.research_synth:
+    if cfg is None:
+        log.info("cloud: config not injected (None) - using local synth")
+        return None
+    if not cfg.enabled:
+        log.info("cloud: disabled in config - using local synth")
+        return None
+    if not cfg.research_synth:
+        log.info("cloud: research_synth flag off - using local synth")
         return None
     key = get_cloud_key()
     if not key:
-        log.info("cloud enabled but no API key stored; using local synth")
+        log.info("cloud: enabled but no API key stored - using local synth")
         return None
     try:
-        return CloudBackend(api_key=key, model=cfg.model, timeout_s=cfg.timeout_s)
+        backend = CloudBackend(api_key=key, model=cfg.model, timeout_s=cfg.timeout_s)
     except (ValueError, CloudBackendError) as e:
-        log.warning("cloud backend setup failed: %s", e)
+        log.warning("cloud: backend setup failed (%s) - using local synth", e)
         return None
+    log.info("cloud: backend ready (%s)", cfg.model)
+    return backend
 
 
 def _format_result(session: ResearchSession) -> str:
