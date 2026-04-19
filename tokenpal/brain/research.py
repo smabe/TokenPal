@@ -170,6 +170,15 @@ class ResearchRunner:
         self._cloud_search_active = bool(
             self._cloud_search.enabled and tavily_api_key
         )
+        log.info(
+            "research: init cloud_search_active=%s (enabled=%s key_present=%s) "
+            "cloud_synth=%s cloud_plan=%s",
+            self._cloud_search_active,
+            self._cloud_search.enabled,
+            bool(tavily_api_key),
+            cloud_backend is not None,
+            cloud_plan,
+        )
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -377,16 +386,31 @@ class ResearchRunner:
 
     def _resolve_backend(self, planned: str) -> BackendName:
         """Normalize planner/explicit backend choice + fall back safely when
-        an unsupported backend is chosen (unknown name, tavily without key)."""
-        name = (planned or "").strip().lower()
+        an unsupported backend is chosen (unknown name, tavily without key).
+
+        Silent downgrades are logged at INFO so users can see in --verbose
+        why an explicit planner choice didn't land on its intended backend.
+        """
+        original = (planned or "").strip()
+        name = original.lower()
         if not name:
             return self._default_backend()
         # The planner prompt uses "ddg" as shorthand; accept it.
         if name == "ddg":
             name = "duckduckgo"
         if name == "tavily" and not self._cloud_search_active:
+            log.info(
+                "research: planner chose tavily but cloud_search inactive "
+                "(enabled=%s, key_present=%s) - downgrading to duckduckgo",
+                self._cloud_search.enabled,
+                bool(self._tavily_api_key),
+            )
             return "duckduckgo"
         if name not in _BACKEND_CONCURRENCY:
+            log.info(
+                "research: unknown planner backend %r - falling back to default",
+                original,
+            )
             return self._default_backend()
         return name  # type: ignore[return-value]
 
