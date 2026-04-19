@@ -783,3 +783,125 @@ async def test_runner_synth_thinking_flag_off(
     )
     await runner.run("q")
     assert llm.call_kwargs[1].get("enable_thinking") is False
+
+
+# ---------------------------------------------------------------------------
+# Cloud synth path (Anthropic-backed /research synth stage)
+# ---------------------------------------------------------------------------
+
+
+class _FakeCloud:
+    """Stand-in for CloudBackend used in research runner tests."""
+
+    def __init__(self, response: LLMResponse | None = None,
+                 raise_on_call: Exception | None = None) -> None:
+        self.model = "claude-haiku-4-5"
+        self._response = response or LLMResponse(
+            text='{"kind": "factual", "answer": "Cloud [1].", "citations": [1]}',
+            tokens_used=42,
+            model_name="claude-haiku-4-5",
+            latency_ms=100.0,
+        )
+        self._raise = raise_on_call
+        self.calls: list[dict[str, Any]] = []
+
+    def synthesize(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        self.calls.append({"prompt": prompt, **kwargs})
+        if self._raise is not None:
+            raise self._raise
+        return self._response
+
+
+@pytest.mark.asyncio
+async def test_cloud_backend_handles_synth_and_bypasses_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Local LLM only serves the planner; synth must come from cloud.
+    llm = _ScriptedLLM([_ok('[{"query": "q1"}]', tokens=30)])
+    cloud = _FakeCloud()
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, cloud_backend=cloud,
+    )
+    session = await runner.run("q")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert len(cloud.calls) == 1, "cloud synth must have been invoked exactly once"
+    # Local LLM got planner only — one call total.
+    assert len(llm.prompts) == 1
+    # A log line flags that cloud path ran.
+    assert any("cloud" in line.lower() for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_cloud_backend_failure_falls_back_to_local_synth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tokenpal.llm.cloud_backend import CloudBackendError
+
+    # Local LLM serves planner AND local synth fallback.
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "Local [1].", "citations": [1]}',
+            tokens=50),
+    ])
+    cloud = _FakeCloud(
+        raise_on_call=CloudBackendError("boom", kind="network"),
+    )
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, cloud_backend=cloud,
+    )
+    session = await runner.run("q")
+
+    # Cloud was tried once, then local synth ran.
+    assert len(cloud.calls) == 1
+    assert len(llm.prompts) == 2  # planner + local synth fallback
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "Local" in session.answer
+    # Log flags the fallback.
+    assert any("falling back to local" in line for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_no_cloud_backend_uses_local_synth_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Control: omitting cloud_backend must behave byte-for-byte like before."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "Local only [1].", "citations": [1]}',
+            tokens=50),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb, max_queries=1,
+    )
+    session = await runner.run("q")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert len(llm.prompts) == 2
+    assert "Local only" in session.answer

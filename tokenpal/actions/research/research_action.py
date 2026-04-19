@@ -16,8 +16,10 @@ from tokenpal.actions.research.fetch_url import fetch_and_extract
 from tokenpal.brain.research import ResearchRunner, ResearchSession
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
-from tokenpal.config.schema import ResearchConfig
+from tokenpal.config.schema import CloudLLMConfig, ResearchConfig
+from tokenpal.config.secrets import get_cloud_key
 from tokenpal.llm.base import AbstractLLMBackend
+from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +54,7 @@ class ResearchAction(AbstractAction):
         super().__init__(config)
         self._llm: AbstractLLMBackend | None = None
         self._research_config: ResearchConfig | None = None
+        self._cloud_config: CloudLLMConfig | None = None
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         question = (kwargs.get("question") or "").strip()
@@ -73,6 +76,7 @@ class ResearchAction(AbstractAction):
             )
 
         cfg = self._research_config or ResearchConfig()
+        cloud_backend = _build_cloud_backend(self._cloud_config)
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
@@ -83,6 +87,7 @@ class ResearchAction(AbstractAction):
             per_search_timeout_s=cfg.per_search_timeout_s,
             per_fetch_timeout_s=cfg.per_fetch_timeout_s,
             synth_thinking=cfg.synth_thinking,
+            cloud_backend=cloud_backend,
         )
 
         try:
@@ -107,6 +112,24 @@ class ResearchAction(AbstractAction):
             success=True,
             display_urls=display_urls or None,
         )
+
+
+def _build_cloud_backend(cfg: CloudLLMConfig | None) -> CloudBackend | None:
+    """Construct an Anthropic-backed synth backend when /cloud is enabled and
+    a key is on disk. Silent returns None cover: cloud disabled, research_synth
+    site not enabled, no key stored, SDK missing, or model not in allowlist.
+    """
+    if cfg is None or not cfg.enabled or not cfg.research_synth:
+        return None
+    key = get_cloud_key()
+    if not key:
+        log.info("cloud enabled but no API key stored; using local synth")
+        return None
+    try:
+        return CloudBackend(api_key=key, model=cfg.model, timeout_s=cfg.timeout_s)
+    except (ValueError, CloudBackendError) as e:
+        log.warning("cloud backend setup failed: %s", e)
+        return None
 
 
 def _format_result(session: ResearchSession) -> str:

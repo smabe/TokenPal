@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.llm.base import AbstractLLMBackend
+from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
 from tokenpal.senses.web_search.client import (
     BackendName,
     SearchResult,
@@ -125,6 +126,7 @@ class ResearchRunner:
         per_search_timeout_s: float = 5.0,
         per_fetch_timeout_s: float = 8.0,
         synth_thinking: bool = True,
+        cloud_backend: CloudBackend | None = None,
     ) -> None:
         self._llm = llm
         self._fetch = fetch_url
@@ -136,6 +138,7 @@ class ResearchRunner:
         self._per_search_timeout_s = per_search_timeout_s
         self._per_fetch_timeout_s = per_fetch_timeout_s
         self._synth_thinking = synth_thinking
+        self._cloud_backend = cloud_backend
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -403,12 +406,32 @@ class ResearchRunner:
         # counts reasoning tokens against max_tokens, so give the synth a
         # bigger budget to avoid truncating the picks list.
         budget = 1800 if self._synth_thinking else 700
-        response = await self._llm.generate(
-            prompt,
-            max_tokens=budget,
-            enable_thinking=self._synth_thinking,
-            response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
-        )
+
+        if self._cloud_backend is not None:
+            try:
+                response = await asyncio.to_thread(
+                    self._cloud_backend.synthesize,
+                    prompt,
+                    max_tokens=budget,
+                    json_schema=SYNTH_SCHEMA,
+                )
+                self._log(f"  synth: cloud ({self._cloud_backend.model})")
+            except CloudBackendError as e:
+                self._log(f"  synth: cloud failed ({e.kind}), falling back to local")
+                log.warning("cloud synth failed (%s): %s", e.kind, e)
+                response = await self._llm.generate(
+                    prompt,
+                    max_tokens=budget,
+                    enable_thinking=self._synth_thinking,
+                    response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
+                )
+        else:
+            response = await self._llm.generate(
+                prompt,
+                max_tokens=budget,
+                enable_thinking=self._synth_thinking,
+                response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
+            )
         raw_text = response.text.strip()
         log.debug(
             "research synth: %d chars, finish=%s, tokens=%d",

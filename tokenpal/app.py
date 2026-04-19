@@ -211,7 +211,10 @@ def main() -> None:
             log_callback=_agent_log,
             confirm_callback=_agent_confirm,
         ),
-        research_bridge=ResearchBridge(config=config.research),
+        research_bridge=ResearchBridge(
+            config=config.research,
+            cloud_config=config.cloud_llm,
+        ),
         log_callback=_agent_log,
         idle_tools_config=config.idle_tools,
         target_latency_s=config.llm.target_latency_s,
