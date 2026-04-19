@@ -224,7 +224,7 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 | **Inline tool use** | Ask the buddy naturally — "what's 47 * 83?", "what's on Hacker News?", "what's the best fitness tracker for iPhone 17?" — and it picks the right tool (`do_math`, `search_web`, or the deeper `research`) mid-conversation. Source URLs render as clickable links under the reply |
 | **Research** | `research` tool chainable inline, or `/research <question>` standalone — plan → parallel multi-backend search → read → synthesize with numbered citations. Multi-backend fan-out: DuckDuckGo (default, keyless), Hacker News + StackExchange (keyless, planner-routed for tech topics), Tavily (premium, preloaded content, `/cloud tavily`), Brave (free-tier 2k/mo, `/cloud brave`). Current-year-aware queries, grounded picks with hallucination stripping, thin-pool top-up to DDG on any planner-routed miss, URL-tracking-param dedup, end-of-run telemetry (`mode=<backends> tried=<backends> sources=N stopped=<reason>`). 24h cache on the standalone command. Opt-in Anthropic cloud modes via `/cloud anthropic`: Haiku synth of locally-fetched sources (~$0.024/run), Sonnet-driven web search (~$0.15/run), or full deep mode with server-side fetch for SPAs/paywalled sites (~$1-3/run). See [docs/research-architecture.md](docs/research-architecture.md) |
 | **Agent mode** | `/agent <goal>` — multi-step tool-calling loop with confirm gate, step cap, token budget, in-run result cache. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
-| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
+| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1 help, F2 toggle chat log, F3 options, Ctrl+L clear). Chat log persists across restarts; tune the cap or wipe history via `/options` |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
@@ -256,6 +256,7 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 /gh prs                  open pull requests
 /gh issues               open issues
 /ask <question>          web search (DuckDuckGo + Wikipedia), buddy riffs on result
+/options                 umbrella settings modal (F3) — chat history cap + clear, launcher buttons for Cloud/Senses/Tools
 /tools                   open the Textual tool-picker modal (grouped sections)
 /tools list              plain-text list with on/off marks
 /tools describe <name>   full metadata for a tool (flags, consent, rate limit)
