@@ -178,7 +178,15 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 yield Button("Save", id="save-btn", variant="primary")
 
     def on_mount(self) -> None:
-        self.query_one("#save-btn", Button).focus()
+        # Focus the topmost editable widget so the scroll view stays at the
+        # top; focusing Save would yank it to the bottom.
+        try:
+            self.query_one("#max-persisted-input", Input).focus()
+        except Exception:
+            pass
+        self.query_one("#options-body", VerticalScroll).scroll_home(
+            animate=False
+        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""

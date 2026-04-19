@@ -24,6 +24,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import (
     Button,
     Checkbox,
@@ -317,15 +318,25 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
 
     def on_mount(self) -> None:
         self._refresh_deep_help()
-        # Land focus on the key input if there's no key yet (most common
-        # first-use path), otherwise on Save.
+        # Land focus on the key input when there's no key yet (most common
+        # first-use path), otherwise on the first toggle so the body stays
+        # scrolled to the top. Focusing Save here yanked the scroll to the
+        # bottom of the modal.
+        body = self.query_one("#cloud-body", VerticalScroll)
+        target: Widget | None = None
         if self._state.key_fingerprint is None:
             try:
-                self.query_one("#api-key-input", Input).focus()
-                return
+                target = self.query_one("#api-key-input", Input)
             except Exception:
-                pass
-        self.query_one("#save-btn", Button).focus()
+                target = None
+        if target is None:
+            try:
+                target = self.query_one("#toggle-enabled", Checkbox)
+            except Exception:
+                target = None
+        if target is not None:
+            target.focus()
+        body.scroll_home(animate=False)
 
     def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         # Re-gate the search + deep checkboxes when the user picks a
