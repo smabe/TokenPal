@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BackendName = Literal["duckduckgo", "wikipedia", "brave", "tavily"]
+BackendName = Literal["duckduckgo", "wikipedia", "brave", "tavily", "hn", "stackexchange"]
 
 log = logging.getLogger(__name__)
 
@@ -285,6 +285,78 @@ class BraveBackend(SearchBackend):
         ]
 
 
+class HNBackend(SearchBackend):
+    """Hacker News search via Algolia. Free, keyless. Good fit for
+    tech-news / show-HN / ask-HN flavored queries."""
+
+    def __init__(self, *, hits_per_page: int = 6, timeout_s: float = 10.0) -> None:
+        self._hits_per_page = hits_per_page
+        self._timeout_s = timeout_s
+
+    def search(self, query: str) -> SearchResult | None:
+        results = self._search_all(query, limit=1)
+        return results[0] if results else None
+
+    def _search_all(self, query: str, limit: int) -> list[SearchResult]:
+        from tokenpal.senses.web_search.hn import hn_search
+
+        hits = hn_search(
+            query,
+            hits_per_page=min(limit, self._hits_per_page),
+            timeout_s=self._timeout_s,
+        )
+        return [
+            SearchResult(
+                query=query,
+                backend="hn",
+                title=hit["title"],
+                text=_truncate(hit["description"]),
+                source_url=hit["url"],
+            )
+            for hit in hits
+        ]
+
+
+class StackExchangeBackend(SearchBackend):
+    """Stack Exchange search via API 2.3 (default site: stackoverflow).
+    Keyless; anonymous quota ~300/day per IP, 429 → empty list."""
+
+    def __init__(
+        self,
+        *,
+        site: str = "stackoverflow",
+        pagesize: int = 6,
+        timeout_s: float = 10.0,
+    ) -> None:
+        self._site = site
+        self._pagesize = pagesize
+        self._timeout_s = timeout_s
+
+    def search(self, query: str) -> SearchResult | None:
+        results = self._search_all(query, limit=1)
+        return results[0] if results else None
+
+    def _search_all(self, query: str, limit: int) -> list[SearchResult]:
+        from tokenpal.senses.web_search.stackexchange import stackexchange_search
+
+        hits = stackexchange_search(
+            query,
+            site=self._site,
+            pagesize=min(limit, self._pagesize),
+            timeout_s=self._timeout_s,
+        )
+        return [
+            SearchResult(
+                query=query,
+                backend="stackexchange",
+                title=hit["title"],
+                text=_truncate(hit["description"]),
+                source_url=hit["url"],
+            )
+            for hit in hits
+        ]
+
+
 class TavilyBackend(SearchBackend):
     """Tavily Search API. Returns results with `preloaded_content` populated
     (full pre-extracted article body), so the /research pipeline can skip its
@@ -460,6 +532,20 @@ def search_many(
             )._search_all(query, limit=limit)
         except Exception as e:  # noqa: BLE001
             log.debug("Brave multi-result error: %s", e)
+            return []
+
+    if name == "hn":
+        try:
+            return HNBackend(hits_per_page=limit)._search_all(query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.debug("HN multi-result error: %s", e)
+            return []
+
+    if name == "stackexchange":
+        try:
+            return StackExchangeBackend(pagesize=limit)._search_all(query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.debug("StackExchange multi-result error: %s", e)
             return []
 
     # Single-result backends wrap their 0-or-1 result.

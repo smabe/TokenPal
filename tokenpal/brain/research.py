@@ -104,6 +104,10 @@ _BACKEND_CONCURRENCY: dict[BackendName, int] = {
     "wikipedia": 5,
     "brave": 1,
     "tavily": 3,
+    # Algolia HN API is generous; SE anonymous is ~300/day per IP so run
+    # single-file to stay well under the limit.
+    "hn": 3,
+    "stackexchange": 1,
 }
 
 # Per-source excerpt cap handed to the synthesizer. Bigger = better picks

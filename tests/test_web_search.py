@@ -559,6 +559,194 @@ def test_search_route_tavily_no_key_returns_empty():
     assert hits == []
 
 
+# ---------------------------------------------------------------------------
+# HNBackend
+# ---------------------------------------------------------------------------
+
+
+def test_hn_parses_story_results():
+    from tokenpal.senses.web_search.client import HNBackend
+
+    payload = {
+        "hits": [
+            {
+                "title": "Great rust release",
+                "url": "https://example.com/rust",
+                "objectID": "12345",
+                "points": 100,
+                "num_comments": 42,
+            },
+            {
+                "title": "Ask HN: why widgets?",
+                "story_text": "body of the ask post",
+                "url": "",
+                "objectID": "67890",
+                "points": 5,
+                "num_comments": 3,
+            },
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = HNBackend()._search_all("rust", limit=5)
+
+    assert len(hits) == 2
+    assert hits[0].backend == "hn"
+    assert hits[0].source_url == "https://example.com/rust"
+    assert hits[0].title == "Great rust release"
+    # Link-post snippet includes HN discussion signal.
+    assert "100 points" in hits[0].text
+    # Ask HN falls back to item permalink when `url` is empty.
+    assert hits[1].source_url == "https://news.ycombinator.com/item?id=67890"
+    assert "body of the ask post" in hits[1].text
+    # HN does not pre-extract article bodies.
+    assert hits[0].preloaded_content == ""
+
+
+def test_hn_skips_hits_without_title_or_url():
+    from tokenpal.senses.web_search.client import HNBackend
+
+    payload = {
+        "hits": [
+            {"title": "", "url": "https://x", "objectID": "1"},  # no title
+            {"title": "ok", "url": "", "objectID": ""},  # no url and no objectID
+            {"title": "good", "url": "https://good", "objectID": "2", "points": 1},
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = HNBackend()._search_all("q", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].source_url == "https://good"
+
+
+def test_hn_network_error_returns_empty():
+    from tokenpal.senses.web_search.client import HNBackend
+
+    def raiser(*a: Any, **kw: Any) -> Any:
+        raise OSError("network down")
+
+    with patch("urllib.request.urlopen", raiser):
+        assert HNBackend()._search_all("q", limit=5) == []
+
+
+def test_hn_malformed_response_returns_empty():
+    from tokenpal.senses.web_search.client import HNBackend
+
+    mocked = _urlopen_returning({"unexpected": "shape"})
+    with patch("urllib.request.urlopen", mocked):
+        assert HNBackend()._search_all("q", limit=5) == []
+
+
+def test_search_many_routes_to_hn():
+    from tokenpal.senses.web_search.client import search_many
+
+    payload = {
+        "hits": [
+            {"title": "story", "url": "https://x", "objectID": "1", "points": 1},
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = search_many("q", backend="hn", limit=3)
+
+    assert len(hits) == 1
+    assert hits[0].backend == "hn"
+
+
+# ---------------------------------------------------------------------------
+# StackExchangeBackend
+# ---------------------------------------------------------------------------
+
+
+def test_stackexchange_parses_items():
+    from tokenpal.senses.web_search.client import StackExchangeBackend
+
+    payload = {
+        "items": [
+            {
+                "title": "How do I parse JSON in Python?",
+                "link": "https://stackoverflow.com/q/1",
+                "tags": ["python", "json"],
+                "score": 42,
+                "answer_count": 5,
+                "is_answered": True,
+            },
+            {
+                "title": "Unanswered question",
+                "link": "https://stackoverflow.com/q/2",
+                "tags": [],
+                "score": 0,
+                "answer_count": 0,
+                "is_answered": False,
+            },
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = StackExchangeBackend()._search_all("python json", limit=5)
+
+    assert len(hits) == 2
+    assert hits[0].backend == "stackexchange"
+    assert hits[0].source_url == "https://stackoverflow.com/q/1"
+    assert hits[0].title == "How do I parse JSON in Python?"
+    assert "42 votes" in hits[0].text
+    assert "python, json" in hits[0].text
+    assert "unanswered" in hits[1].text
+    assert hits[0].preloaded_content == ""
+
+
+def test_stackexchange_skips_items_without_title_or_link():
+    from tokenpal.senses.web_search.client import StackExchangeBackend
+
+    payload = {
+        "items": [
+            {"title": "", "link": "https://so/x"},
+            {"title": "no link", "link": ""},
+            {"title": "good", "link": "https://so/good", "score": 1},
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = StackExchangeBackend()._search_all("q", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].source_url == "https://so/good"
+
+
+def test_stackexchange_honors_backoff_signal():
+    """SE signals throttle via `backoff`; we return [] so the dispatcher
+    can fall back to DDG."""
+    from tokenpal.senses.web_search.client import StackExchangeBackend
+
+    payload = {"backoff": 10, "items": [{"title": "t", "link": "https://x"}]}
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = StackExchangeBackend()._search_all("q", limit=5)
+
+    assert hits == []
+
+
+def test_stackexchange_network_error_returns_empty():
+    from tokenpal.senses.web_search.client import StackExchangeBackend
+
+    def raiser(*a: Any, **kw: Any) -> Any:
+        raise OSError("down")
+
+    with patch("urllib.request.urlopen", raiser):
+        assert StackExchangeBackend()._search_all("q", limit=5) == []
+
+
+def test_search_many_routes_to_stackexchange():
+    from tokenpal.senses.web_search.client import search_many
+
+    payload = {
+        "items": [
+            {"title": "q", "link": "https://so/q", "score": 3, "answer_count": 1},
+        ]
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = search_many("q", backend="stackexchange", limit=3)
+
+    assert len(hits) == 1
+    assert hits[0].backend == "stackexchange"
+
+
 def test_preloaded_content_default_is_empty_string():
     """Sanity: backends that don't pre-extract (DDG, Wikipedia) leave
     preloaded_content as the empty string default, signalling to the
