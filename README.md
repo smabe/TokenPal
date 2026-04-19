@@ -120,7 +120,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Commentary** | Topic roulette (no 3+ same-topic), change detection ("switched from Chrome"), composite observations, dynamic pacing |
 | **Actions** | Timers, system info, open apps, safe math eval — plus opt-in local (git/grep/read_file), utility (currency, weather forecast, CoinGecko, etc.), and focus (pomodoro, water/stretch reminders) tools. All gated through a Textual picker with per-category consent. Optional per-tool rate limits + usage stats in `memory.db` |
 | **Inline tool use** | Ask the buddy naturally — "what's 47 * 83?", "what's on Hacker News?", "what's the best fitness tracker for iPhone 17?" — and it picks the right tool (`do_math`, `search_web`, or the deeper `research`) mid-conversation. Source URLs render as clickable links under the reply |
-| **Research** | `research` tool chainable inline, or `/research <question>` standalone — plan → parallel multi-result search → read → synthesize with numbered citations. Current-year-aware queries, grounded picks with hallucination stripping, thin-pool warnings. 24h cache on the standalone command. DuckDuckGo Lite + Wikipedia free/keyless; Brave optional. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
+| **Research** | `research` tool chainable inline, or `/research <question>` standalone — plan → parallel multi-result search → read → synthesize with numbered citations. Current-year-aware queries, grounded picks with hallucination stripping, thin-pool warnings. 24h cache on the standalone command. DuckDuckGo Lite + Wikipedia free/keyless; Brave optional. Opt-in cloud modes via `/cloud`: Sonnet/Opus synth of locally-fetched sources (~$0.05/run), Sonnet-driven web search (~$0.10/run), or full deep mode with server-side fetch for SPAs/paywalled sites (~$1-3/run). See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
 | **Agent mode** | `/agent <goal>` — multi-step tool-calling loop with confirm gate, step cap, token budget, in-run result cache. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
 | **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1, F2, Ctrl+L) |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character |
@@ -129,7 +129,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
 | **Executive function** | Periodic session-handoff notes read back on boot ("last session you were debugging migration on branch X"), `/intent` ambient goal with drift nudges into Twitter/Reddit/etc., `/summary` daily reflection bubble, opt-in rage detect (typing-burst → pause → distraction-app), proactive WIP-commit nudge on stale dirty branches |
 | **Server** | Remote GPU inference + training over HTTP (NVIDIA CUDA, AMD Vulkan) |
-| **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized |
+| **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized. Any cloud calls are opt-in per-category (`/cloud`, `/ask`, weather, HN) with fingerprint-only key storage at 0o600 |
 
 ## Commands
 
@@ -160,6 +160,11 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /consent                 open the consent-category picker (web/location/keyed/research)
 /agent <goal>            multi-step agent loop (chains tools toward a goal)
 /research <question>     plan-search-read-synthesize with numbered citations
+/refine <follow-up>      re-analyze the last research with a follow-up question (cloud)
+/cloud                   open the Anthropic cloud-LLM settings modal
+/cloud enable <api-key>  store an Anthropic key and route /research synth via Sonnet/Haiku/Opus
+/cloud search on         Sonnet drives web_search (mid-tier, ~$0.10/run)
+/cloud deep on           Sonnet drives web_search + web_fetch (expensive, $1-3/run — use for SPAs/paywalls)
 /intent finish auth PR   set an ambient goal; buddy nudges on drift
 /intent status           show current intent + age
 /intent clear            remove the active intent
@@ -404,5 +409,6 @@ tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 - Session memory stores only app names and timestamps, never content
 - Conversation history is ephemeral (in-memory only, cleared after ~2 min silence or on sensitive app detection)
 - Log files restricted to owner-only (0o600)
-- Everything local — no cloud. Optional LAN server for GPU offload
-- Weather is the only sense that makes network requests (opt-in, Open-Meteo)
+- Local by default — LAN GPU server is the main optional network path
+- Cloud LLM (Anthropic) is **opt-in** and scoped to `/research` only — never observations, conversation, or any other path. Key at `~/.tokenpal/.secrets.json` (0o600), fingerprint-only in status output. Toggle anytime via `/cloud disable` or `/cloud forget`
+- Other opt-in network senses/commands (all free/keyless by default): weather (Open-Meteo), world_awareness (HN Algolia), `/ask` (DuckDuckGo + Wikipedia). Untrusted external text is wrapped in delimiters and content-filtered before reaching the prompt

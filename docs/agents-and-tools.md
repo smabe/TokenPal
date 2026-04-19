@@ -294,6 +294,52 @@ Gated on the `research_mode` and `web_fetches` consent categories. Sensitive-app
 
 ---
 
+## Cloud LLM (opt-in Anthropic)
+
+`/research` (and the inline `research` tool) can optionally route some or all of its LLM calls through Anthropic. Off by default; toggle per-category with `/cloud`.
+
+```
+/cloud                      open the settings modal
+/cloud enable <api-key>     store the key (~/.tokenpal/.secrets.json, 0o600) and flip on
+/cloud disable              flip off (key retained)
+/cloud forget               wipe key + disable
+/cloud model <id>           claude-haiku-4-5 | claude-sonnet-4-6 | claude-opus-4-7
+/cloud plan on|off          use cloud for the planner stage (opt-in)
+/cloud search on|off        Sonnet drives web_search (snippets only, ~$0.10/run, Sonnet+ only)
+/cloud deep on|off          Sonnet drives web_search + web_fetch (WARNING $1-3/run, Sonnet+ only)
+/refine <follow-up>         re-synthesize the last /research against a follow-up (cloud)
+```
+
+### Three cloud modes
+
+| mode | what cloud does | typical cost | when to use |
+|---|---|---|---|
+| **synth only** (default when `/cloud enable`) | Local plan+search+fetch → cloud synthesizes | ~$0.05/run (Haiku) to ~$0.15/run (Sonnet) | Better pick justifications and verdicts than local LLM can manage |
+| **search** (`/cloud search on`) | Sonnet drives `web_search_20260209` — no fetch | ~$0.10-0.20/run | Fresh-web awareness without full page dumps |
+| **deep** (`/cloud deep on`) | Sonnet drives `web_search_20260209` + `web_fetch_20260209` | **$1-3/run** (each fetch loads full page content into the tool-loop context and re-bills on every step) | Last resort: JS-heavy SPAs, bot-blocked sites, paywalled previews the local pipeline can't touch |
+
+If both `deep` and `search` are on, **deep wins**. Both require a Sonnet 4.6+ model — Haiku doesn't support the dynamic-filtering web tools.
+
+### What crosses the wire
+
+Only `/research` paths. Never observations, conversation turns, planner (unless you flip `/cloud plan on`), `/ask`, or idle-tool rolls — those stay local. Payload is the question plus either bundled local source excerpts (synth-only mode) or just the question (search/deep modes; Sonnet fetches server-side).
+
+### Fallback + warnings
+
+Any `CloudBackendError` (auth, rate limit, network, timeout, `no_credit` for an unfunded workspace) falls back to local synth with identical prompt + schema. Deep-mode activation prints a cost warning; the modal checkbox carries the warning in its label.
+
+### /refine
+
+`/refine <follow-up>` re-runs the synth stage against the last research's cached sources with the follow-up included. Requires cloud. Refuses after a deep-or-search run because those modes don't cache source excerpts (Anthropic read pages server-side) — re-run `/research` with your refined question instead.
+
+### Cache
+
+Cache keys separate by mode: `""` (local), `"search:"`, `"deep:"`. Same question run in different modes keeps distinct entries so follow-ups see their own provenance. 24h TTL per mode.
+
+Full architecture + cost model + design rationale in [`docs/research-architecture.md`](research-architecture.md) and `plans/shipped/cloud-native-web-search.md`.
+
+---
+
 ## Slash-command reference
 
 | command | what it does |
@@ -304,6 +350,12 @@ Gated on the `research_mode` and `web_fetches` consent categories. Sensitive-app
 | `/consent` | open the consent-category picker |
 | `/agent <goal>` | run the multi-step agent loop |
 | `/research <question>` | run the plan-search-read-synthesize pipeline |
+| `/refine <follow-up>` | re-synthesize the last /research against a follow-up (cloud) |
+| `/cloud` | open the Anthropic cloud-LLM settings modal |
+| `/cloud enable <key>` | store key + flip on; `/cloud disable`, `/cloud forget`, `/cloud model <id>` |
+| `/cloud plan on`\|`off` | route /research planner through cloud (opt-in) |
+| `/cloud search on`\|`off` | Sonnet drives web_search only (~$0.10/run, Sonnet+) |
+| `/cloud deep on`\|`off` | Sonnet drives web_search + web_fetch (WARNING $1-3/run, Sonnet+) |
 | `/math <expr>` | evaluate arithmetic without the LLM (AST walker; safe) |
 | `/ask <question>` | one-shot web search (DuckDuckGo IA + Wikipedia fallback) |
 
