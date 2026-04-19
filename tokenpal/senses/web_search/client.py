@@ -17,6 +17,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -476,6 +477,7 @@ def search_many(
     backend: str = "duckduckgo",
     limit: int = 5,
     *,
+    api_keys: Mapping[str, str] | None = None,
     tavily_api_key: str = "",
     tavily_search_depth: str = "advanced",
     tavily_timeout_s: float = 15.0,
@@ -492,6 +494,12 @@ def search_many(
         return []
 
     name = (backend or "duckduckgo").lower()
+
+    # api_keys (from load_search_keys) is the new plumbing path. Per-key kwargs
+    # stay as a fallback so existing callers/tests keep working.
+    _keys: Mapping[str, str] = api_keys or {}
+    tavily_api_key = tavily_api_key or _keys.get("tavily", "")
+    brave_api_key = brave_api_key or _keys.get("brave", "")
 
     if name == "duckduckgo":
         try:

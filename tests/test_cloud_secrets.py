@@ -17,6 +17,7 @@ from tokenpal.config.secrets import (
     get_brave_key,
     get_cloud_key,
     get_tavily_key,
+    load_search_keys,
     set_brave_key,
     set_cloud_key,
     set_tavily_key,
@@ -201,3 +202,30 @@ def test_fingerprint_preserves_tavily_prefix() -> None:
 def test_fingerprint_opaque_key_has_no_prefix() -> None:
     # Brave keys have no stable prefix — fall back to generic redaction.
     assert fingerprint("BSA_randomopaquekey1234") == "...1234"
+
+
+def test_load_search_keys_empty_when_unset(secrets_path: Path) -> None:
+    assert load_search_keys(True, secrets_path) == {}
+    assert load_search_keys(False, secrets_path) == {}
+
+
+def test_load_search_keys_tavily_gated_on_cloud_search(secrets_path: Path) -> None:
+    set_tavily_key("tvly-" + "a" * 32, secrets_path)
+    assert load_search_keys(False, secrets_path) == {}
+    assert load_search_keys(True, secrets_path) == {"tavily": "tvly-" + "a" * 32}
+
+
+def test_load_search_keys_brave_not_gated(secrets_path: Path) -> None:
+    # Brave is "presence = active" per the cloud-modal design; cloud_search
+    # enabled/disabled must not influence whether the key is returned.
+    brave_key = "B" * 32
+    set_brave_key(brave_key, secrets_path)
+    assert load_search_keys(False, secrets_path) == {"brave": brave_key}
+    assert load_search_keys(True, secrets_path) == {"brave": brave_key}
+
+
+def test_load_search_keys_both_keys_present(secrets_path: Path) -> None:
+    set_tavily_key("tvly-" + "a" * 32, secrets_path)
+    set_brave_key("B" * 32, secrets_path)
+    keys = load_search_keys(True, secrets_path)
+    assert keys == {"tavily": "tvly-" + "a" * 32, "brave": "B" * 32}

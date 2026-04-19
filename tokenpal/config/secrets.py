@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -176,6 +177,39 @@ def set_brave_key(key: str, path: Path | None = None) -> Path:
 
 def clear_brave_key(path: Path | None = None) -> Path:
     return _clear(_BRAVE_KEY_FIELD, path)
+
+
+# ---- Search-key bundle -----------------------------------------------------
+# One entry per search backend that needs a stored key. Adding a new backend
+# means: write the get/set/clear pair above, then one tuple here — the research
+# pipeline picks it up automatically via load_search_keys(). The cs_gated flag
+# marks keys that only activate under `cloud_search.enabled` (Tavily today);
+# keys without the flag are "presence = active" (Brave today).
+_SEARCH_KEY_GETTERS: tuple[
+    tuple[str, Callable[[Path | None], str | None], bool], ...
+] = (
+    ("tavily", get_tavily_key, True),
+    ("brave",  get_brave_key,  False),
+)
+
+
+def load_search_keys(
+    cloud_search_enabled: bool, path: Path | None = None,
+) -> dict[str, str]:
+    """Return {backend_name: key} for every stored search-backend key.
+
+    Gated keys (Tavily) are omitted unless *cloud_search_enabled* is True.
+    Empty/missing keys are omitted. Values are ready to hand to `search_many`
+    via its `api_keys=` kwarg with no further filtering.
+    """
+    out: dict[str, str] = {}
+    for name, getter, gated in _SEARCH_KEY_GETTERS:
+        if gated and not cloud_search_enabled:
+            continue
+        key = getter(path)
+        if key:
+            out[name] = key
+    return out
 
 
 # ---- Fingerprint -----------------------------------------------------------

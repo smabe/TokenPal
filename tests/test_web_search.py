@@ -280,6 +280,25 @@ def test_search_many_routes_to_brave(monkeypatch: pytest.MonkeyPatch):
     assert hits[0].backend == "brave"
 
 
+def test_search_many_picks_up_brave_from_api_keys(monkeypatch: pytest.MonkeyPatch):
+    """Regression guard: the Brave key plumbed via load_search_keys()'s
+    api_keys bundle must reach BraveBackend just like the legacy per-key
+    kwarg. Without this, /cloud brave enable stores a key that research
+    never sees — the exact bug that motivated the refactor."""
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    from tokenpal.senses.web_search.client import search_many
+
+    payload = {"web": {"results": [{"url": "https://x", "title": "X", "description": "b"}]}}
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)) as urlopen:
+        hits = search_many("q", backend="brave", limit=3, api_keys={"brave": "BSA-from-bundle"})
+
+    assert len(hits) == 1
+    assert hits[0].backend == "brave"
+    # The key landed on the outbound Brave request header, not silently dropped.
+    sent_request = urlopen.call_args_list[0].args[0]
+    assert sent_request.headers.get("X-subscription-token") == "BSA-from-bundle"
+
+
 # ---------------------------------------------------------------------------
 # search() router
 # ---------------------------------------------------------------------------

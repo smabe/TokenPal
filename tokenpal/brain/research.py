@@ -13,7 +13,7 @@ import logging
 import re
 import time
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
@@ -199,6 +199,7 @@ class ResearchRunner:
         cloud_backend: CloudBackend | None = None,
         cloud_plan: bool = False,
         cloud_search: CloudSearchConfig | None = None,
+        api_keys: Mapping[str, str] | None = None,
         tavily_api_key: str = "",
     ) -> None:
         self._llm = llm
@@ -216,9 +217,13 @@ class ResearchRunner:
         # Cloud search layer — active only when the user opted in AND a key
         # resolved. Thin Tavily pools top up from DDG.
         self._cloud_search = cloud_search or CloudSearchConfig()
-        self._tavily_api_key = tavily_api_key
+        # Merge the bundle with the legacy scalar kwarg; explicit scalars
+        # win so tests that pass tavily_api_key="..." keep their behavior.
+        self._api_keys: dict[str, str] = dict(api_keys or {})
+        if tavily_api_key:
+            self._api_keys["tavily"] = tavily_api_key
         self._cloud_search_active = bool(
-            self._cloud_search.enabled and tavily_api_key
+            self._cloud_search.enabled and self._api_keys.get("tavily")
         )
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
@@ -235,7 +240,7 @@ class ResearchRunner:
             "cloud_synth=%s cloud_plan=%s",
             self._cloud_search_active,
             self._cloud_search.enabled,
-            bool(self._tavily_api_key),
+            bool(self._api_keys.get("tavily")),
             self._cloud_backend is not None,
             self._cloud_plan,
         )
@@ -460,7 +465,7 @@ class ResearchRunner:
                 "research: planner chose tavily but cloud_search inactive "
                 "(enabled=%s, key_present=%s) - downgrading to duckduckgo",
                 self._cloud_search.enabled,
-                bool(self._tavily_api_key),
+                bool(self._api_keys.get("tavily")),
             )
             return "duckduckgo"
         if name not in _BACKEND_CONCURRENCY:
@@ -548,7 +553,7 @@ class ResearchRunner:
                 return await asyncio.wait_for(
                     asyncio.to_thread(
                         search_many, query, backend, limit,
-                        tavily_api_key=self._tavily_api_key,
+                        api_keys=self._api_keys,
                         tavily_search_depth=self._cloud_search.search_depth,
                         tavily_timeout_s=self._cloud_search.timeout_s,
                     ),

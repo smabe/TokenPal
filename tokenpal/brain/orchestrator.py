@@ -1827,14 +1827,12 @@ class Brain:
         # cloud build failed) falls back to the local path cleanly.
         if cloud_mode and cloud_backend is None:
             cloud_mode = ""
-        # Resolve Tavily key the same way research_action does: only read
-        # from secrets when cloud_search is enabled (key presence alone
-        # doesn't activate the layer).
+        # Resolve search-backend keys the same way research_action does. The
+        # Tavily gate lives inside load_search_keys; Brave (presence=active)
+        # and any future backend flow through without extra wiring here.
         cs_cfg = self._research.cloud_search_config
-        tavily_key = ""
-        if cs_cfg is not None and cs_cfg.enabled:
-            from tokenpal.config.secrets import get_tavily_key
-            tavily_key = get_tavily_key() or ""
+        from tokenpal.config.secrets import load_search_keys
+        api_keys = load_search_keys(bool(cs_cfg and cs_cfg.enabled))
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=_fetch,
@@ -1849,7 +1847,7 @@ class Brain:
             cloud_backend=cloud_backend,
             cloud_plan=cloud_plan,
             cloud_search=cs_cfg,
-            tavily_api_key=tavily_key,
+            api_keys=api_keys,
         )
 
         self._mode = BrainMode.RESEARCH

@@ -17,7 +17,7 @@ from tokenpal.brain.research import ResearchRunner, ResearchSession
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import CloudLLMConfig, CloudSearchConfig, ResearchConfig
-from tokenpal.config.secrets import get_cloud_key, get_tavily_key
+from tokenpal.config.secrets import get_cloud_key, load_search_keys
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import (
     DEEP_MODE_MODELS,
@@ -103,8 +103,8 @@ class ResearchAction(AbstractAction):
         # Tavily handles search+extract; synth still routes through whatever
         # cloud_llm decides (Haiku by default, local if cloud_llm is off).
         cs_cfg = self._cloud_search_config or CloudSearchConfig()
-        tavily_key = get_tavily_key() if cs_cfg.enabled else ""
-        if cs_cfg.enabled and not tavily_key:
+        api_keys = load_search_keys(cs_cfg.enabled)
+        if cs_cfg.enabled and "tavily" not in api_keys:
             log.info("cloud_search: enabled but no tavily key - using local search")
 
         runner = ResearchRunner(
@@ -123,7 +123,7 @@ class ResearchAction(AbstractAction):
             cloud_backend=cloud_backend,
             cloud_plan=cloud_plan,
             cloud_search=cs_cfg,
-            tavily_api_key=tavily_key or "",
+            api_keys=api_keys,
         )
 
         try:
