@@ -25,19 +25,59 @@ callable so tests can swap in mocks without touching the network.
 ### 1. Plan
 
 `_plan(question)` calls the LLM once with `_PLANNER_PROMPT` and parses
-a JSON array of 1-N queries (`[{"query": "...", "intent": "..."}]`).
+a JSON array of 1-N queries (`[{"query": "...", "intent": "...", "backend": "..."}]`).
 `_parse_planner_output` handles prose-bracketed JSON, bare strings, and
 a bare-question fallback.
+
+The `backend` field is optional. The prompt advertises routing hints
+(stackexchange for code, hn for tech-news, tavily for product reviews,
+brave/ddg for general web) so well-tuned LLMs pick the best source per
+query. The dispatcher falls back safely on hallucinated / unconfigured
+backends — see Stage 2.
 
 Model is *not* asked to think on this stage. Fast is the goal.
 
 ### 2. Search
 
-`_search_all` fans queries out to DuckDuckGo Lite via `asyncio.gather`
-with a per-backend semaphore (rate-limit protection). Duplicate URLs
-are collapsed. Cap is `max_fetches` (default 8).
+`_search_all` fans planner queries out via `asyncio.gather` with a
+per-backend semaphore (`_BACKEND_CONCURRENCY`) for rate-limit protection.
+Duplicate URLs are collapsed across queries. Cap is `max_fetches`
+(default 8).
 
-Wikipedia is deliberately NOT in the fan-out. Its REST
+**Per-query backend routing.** Each `PlannedQuery` carries an optional
+`backend` field emitted by the planner (see the Plan stage). The runner
+normalizes it through `_resolve_backend`:
+
+1. Empty → runtime default (`tavily` when cloud search is on, else `duckduckgo`)
+2. `"ddg"` → alias for `duckduckgo`
+3. `"tavily"` without a configured key → downgrades to `duckduckgo`
+4. Unknown / typo → runtime default
+
+**Backend table.**
+
+| Backend       | Cost             | Key required | Preloaded content | When the planner picks it |
+|---------------|------------------|--------------|-------------------|---------------------------|
+| duckduckgo    | free             | no           | no                | default when cloud search off; "ddg" alias |
+| tavily        | 2 credits/query (adv) | yes     | yes (full article body) | product comparisons, reviews, "best X" queries; default when cloud search on |
+| brave         | free tier 2k/mo  | yes          | no                | general-web second opinion; keyed via `/cloud brave` or `TOKENPAL_BRAVE_KEY` |
+| hn            | free             | no           | no                | tech-news / Show HN / startup launch discussion |
+| stackexchange | free (300/day IP)| no           | no                | programming / code / API / error-message questions |
+| wikipedia     | free             | no           | full article extract | NOT in fan-out (see below); `/ask` path only |
+
+**Preloaded content short-circuit.** When a backend populates
+`SearchResult.preloaded_content` (currently Tavily only), Stage 3 skips
+`fetch_url` entirely and uses the field verbatim as the excerpt, running
+the same sensitive-content filter inline. This is why Tavily runs are
+~3× faster than DDG+fetch runs on the same question.
+
+**Thin-pool top-up.** When cloud search is active and the Tavily batch
+returns fewer than `_THIN_POOL_THRESHOLD=3` results, `_search_all`
+refetches every query against DDG and merges the results (deduping by
+URL). A visible warning lands in `session.warnings` and the transcript
+so the user knows coverage was degraded. The top-up is Tavily-specific —
+empty HN / SE / Brave batches do NOT trigger it.
+
+**Wikipedia is deliberately NOT in the fan-out.** Its REST
 `/page/summary/` endpoint requires exact article titles, while the
 planner emits search-engine phrasings ("best X for Y 2026") which are
 never article slugs. Every Wikipedia call 404'd. The `/ask` tool still
@@ -265,6 +305,18 @@ Structured output from synth goes through `_finalize_answer`:
 
 Rendered output goes to `session.answer`, which the `research` action
 wraps in `<tool_result>` delimiters for the conversation LLM.
+
+## Telemetry
+
+Every `run()` emits a one-line summary at exit (success, crash, or
+early-return): `telemetry: mode=<backend>=<N>,... sources=<N> stopped=<reason>`.
+The line lands in the session log (visible under `--verbose`) and is
+the knob for measuring the actual backend mix post-ship. If
+`mode=duckduckgo=3` dominates on runs where the planner picked Tavily,
+that's the signal to investigate — either Tavily misconfiguration or
+topical mismatch. If `mode=tavily=3` dominates with `sources < 3`
+frequently, the thin-pool top-up is carrying more weight than we'd
+like and Playwright becomes worth a look.
 
 ## Per-call thinking override
 

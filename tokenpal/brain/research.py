@@ -180,6 +180,14 @@ class ResearchRunner:
 
     async def run(self, question: str) -> ResearchSession:
         session = ResearchSession(question=question)
+        try:
+            return await self._run_inner(question, session)
+        finally:
+            self._log_telemetry(session)
+
+    async def _run_inner(
+        self, question: str, session: ResearchSession,
+    ) -> ResearchSession:
         self._log(f"? {question}")
         self._set_status("researching: planning")
 
@@ -242,6 +250,25 @@ class ResearchRunner:
         session.answer = self._finalize_answer(result, raw_text, session.sources)
         session.stopped_reason = ResearchStopReason.COMPLETE
         return session
+
+    def _log_telemetry(self, session: ResearchSession) -> None:
+        """End-of-run one-liner for measuring post-ship backend mix.
+
+        Surfaces to the session log + the transcript so users with logs
+        off can still see the summary. Data we want over time: the split
+        between tavily/brave/hn/stackexchange/ddg in the sources that
+        actually landed, so we can judge whether Playwright/SPA retry is
+        worth adding.
+        """
+        mix: dict[str, int] = {}
+        for src in session.sources:
+            key = src.backend or "unknown"
+            mix[key] = mix.get(key, 0) + 1
+        mix_str = ",".join(f"{k}={v}" for k, v in sorted(mix.items())) or "none"
+        self._log(
+            f"  telemetry: mode={mix_str} sources={len(session.sources)} "
+            f"stopped={session.stopped_reason or 'unknown'}"
+        )
 
     def _finalize_answer(
         self,
@@ -600,6 +627,18 @@ class ResearchRunner:
         server) and skip ``_validate_picks``.
         """
         session = ResearchSession(question=question)
+        try:
+            return await self._run_deep_inner(question, session, mode=mode)
+        finally:
+            self._log_telemetry(session)
+
+    async def _run_deep_inner(
+        self,
+        question: str,
+        session: ResearchSession,
+        *,
+        mode: Literal["deep", "search"],
+    ) -> ResearchSession:
         self._log(f"? {question}")
         label = "deep" if mode == "deep" else "search"
         self._set_status(

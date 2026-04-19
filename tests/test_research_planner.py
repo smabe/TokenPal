@@ -204,6 +204,68 @@ def test_resolve_backend_ddg_alias_for_duckduckgo() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_emits_end_of_run_telemetry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Phase 5 telemetry: a one-line summary lands in the session log so we
+    can measure post-ship backend mix and judge whether Playwright is worth
+    adding."""
+    llm = _ScriptedLLM([
+        _ok(
+            '[{"query": "a", "backend": "stackexchange"},'
+            ' {"query": "b", "backend": "hn"}]'
+        ),
+        _ok('{"kind": "factual", "answer": "Summary.", "citations": []}'),
+    ])
+
+    def fake_search_many(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
+        return [SearchResult(
+            query=q, backend=backend,  # type: ignore[arg-type]
+            title="t", text="body", source_url=f"https://ex/{q}",
+        )]
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs: list[str] = []
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=logs.append,
+        max_queries=2,
+        max_fetches=3,
+    )
+    await runner.run("mixed")
+
+    telemetry = [ln for ln in logs if "telemetry:" in ln]
+    assert len(telemetry) == 1
+    line = telemetry[0]
+    assert "mode=" in line
+    assert "hn=" in line and "stackexchange=" in line
+    assert "sources=2" in line
+    assert "stopped=" in line
+
+
+@pytest.mark.asyncio
+async def test_runner_telemetry_fires_on_no_queries() -> None:
+    """Telemetry fires even when the run exits early; empty mix is reported
+    as `mode=none` so analysis scripts can still count the run."""
+    llm = _ScriptedLLM([_ok("")])
+    logs: list[str] = []
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=logs.append,
+        max_queries=2,
+    )
+    await runner.run("?")
+
+    telemetry = [ln for ln in logs if "telemetry:" in ln]
+    assert len(telemetry) == 1
+    assert "mode=none" in telemetry[0]
+    assert "sources=0" in telemetry[0]
+
+
+@pytest.mark.asyncio
 async def test_runner_preserves_backend_routing_through_plan_stage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

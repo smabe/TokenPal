@@ -112,51 +112,105 @@ Auto-falls back to local Ollama if the server goes down. Works with [Tailscale](
 
 See [docs/server-setup.md](docs/server-setup.md) for details.
 
-## Cloud LLM for /research (opt-in)
+## Cloud integrations for /research (opt-in)
 
-TokenPal is local-first — observations, conversation, idle-tool rolls, `/ask`, and everything else run on your own hardware. **`/research` alone** can optionally route some of its LLM calls through Anthropic's API when you want better synthesis than a local model can manage. It's off by default and scoped to that one command.
+TokenPal is local-first — observations, conversation, idle-tool rolls, `/ask`, and everything else run on your own hardware. **`/research` alone** can optionally route pieces of its pipeline through commercial APIs when you want better synthesis or better search than local/free tools can deliver. Every cloud path is off by default, scoped to `/research`, and managed via the `/cloud <backend> <action>` two-level dispatcher.
 
-### Setup
+Three backends, each independent:
 
-1. Grab an API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). A $5 workspace credit is enough to experiment.
-2. From inside TokenPal: `/cloud enable sk-ant-api03-…`
+- **Anthropic** — cloud synthesizer. Haiku/Sonnet/Opus produces the final answer JSON instead of the local model.
+- **Tavily** — LLM-optimized search. Returns results with pre-extracted article content, so TokenPal skips its own fetch+extract stage.
+- **Brave** — free-tier commercial search (2k queries/month). An alternative to the default DuckDuckGo index when the planner wants a second opinion.
 
-The key is written to `~/.tokenpal/.secrets.json` at mode `0o600` (owner-only). It's **never** written to `config.toml` and never echoed — `/cloud` status output shows a fingerprint only.
+Keys all live at `~/.tokenpal/.secrets.json` (mode `0o600`, owner-only). Never written to `config.toml`, never echoed — `/cloud status` shows a fingerprint only.
 
-Or use the modal UI: run bare `/cloud` to open a full settings picker with model radio, toggle checkboxes, and key entry.
+### Anthropic (cloud synth)
 
-### Three cost tiers
+Grab a key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). A $5 workspace credit is enough to experiment.
+
+```
+/cloud anthropic enable sk-ant-api03-…
+```
+
+or the legacy shorthand (still works, deprecation-logged):
+
+```
+/cloud enable sk-ant-api03-…
+```
+
+Three cost tiers:
 
 | mode | what cloud does | typical cost | when to use |
 |---|---|---|---|
-| **synth only** (default after `/cloud enable`) | Local plan + search + fetch → cloud synthesizes | ~$0.05/run (Haiku) to ~$0.15/run (Sonnet) | The cheap upgrade. Better pick justifications and verdicts than local Qwen can produce. Works with Haiku. |
-| **search** (`/cloud search on`) | Sonnet drives `web_search` tool — no fetching full pages | ~$0.10-0.20/run | Want fresh-web-aware Sonnet without the snowball cost. **Sonnet 4.6+ only**. |
-| **deep** (`/cloud deep on`) | Sonnet drives `web_search` + `web_fetch` — reads pages server-side | **$1-3/run** | Last resort for JS-heavy SPAs (rtings), bot-blocked sites (Forbes), or paywalled previews. The tool-loop re-bills accumulated context on every step, which is why it's expensive. Warning prints on activation. **Sonnet 4.6+ only**. |
+| **synth only** (default after enable) | Local plan + search + fetch → cloud synthesizes | ~$0.05/run (Haiku) to ~$0.15/run (Sonnet) | Cheap upgrade. Better pick justifications and verdicts than local Qwen. Works with Haiku. |
+| **search** (`/cloud search on`) | Sonnet drives `web_search` tool — no fetching full pages | ~$0.10-0.20/run | Fresh-web-aware Sonnet without the snowball cost. **Sonnet 4.6+ only**. |
+| **deep** (`/cloud deep on`) | Sonnet drives `web_search` + `web_fetch` — reads pages server-side | **$1-3/run** | Last resort for JS-heavy SPAs (rtings), bot-blocked sites (Forbes), paywalled previews. Warning prints on activation. **Sonnet 4.6+ only**. |
 
 If both `search` and `deep` are on, deep wins.
+
+### Tavily (cloud search with preloaded content)
+
+Tavily is a search API purpose-built for LLMs: one call returns ranked results with the article body already extracted. When Tavily is on, `/research` uses it as the default search backend and skips the local newspaper4k/aiohttp extractor chain entirely — runs drop from 15-25s to under 8s on typical queries.
+
+Grab a key from [tavily.com](https://tavily.com) (free tier: ~1,000 credits/month; `/research` uses 2 credits per query on `advanced` depth).
+
+```
+/cloud tavily enable tvly-…
+/cloud tavily status          # fingerprint + config
+/cloud tavily forget          # wipe key
+```
+
+If Tavily returns fewer than 3 results for a query batch, TokenPal refetches via DuckDuckGo and merges — a visible warning lands in the transcript so you know coverage was degraded.
+
+### Brave (free-tier web search)
+
+Brave's Web Search API has a free tier of 2,000 queries/month. No flag to flip — presence of a key = active. The planner routes to Brave when it picks `backend: "brave"` for a query.
+
+```
+/cloud brave enable BSA-…
+/cloud brave status
+/cloud brave forget
+```
+
+Key also readable from the `TOKENPAL_BRAVE_KEY` environment variable.
+
+### Smart routing (automatic)
+
+Once you have keys configured, the `/research` planner decides which backend to use per query:
+
+- **stackexchange** for programming / code / API / error-message questions
+- **hn** for tech news, Show HN, startup discussion
+- **tavily** for product comparisons, reviews, "best X for Y"
+- **brave** / **ddg** for general web queries
+
+Misconfigured or hallucinated backends fall back safely — you'll never get a hard error because the LLM emitted a typo. An end-of-run telemetry line (`telemetry: mode=<backend>=<N>,... sources=<N> stopped=<reason>`) in the session log lets you see the actual backend mix.
 
 ### Common commands
 
 ```
-/cloud                      open the settings modal
-/cloud enable <api-key>     store key + flip on
-/cloud status               show state, model, key fingerprint
-/cloud model <id>           claude-haiku-4-5 (default) | claude-sonnet-4-6 | claude-opus-4-7
-/cloud search on|off        mid-tier Sonnet-driven search
-/cloud deep on|off          expensive full deep mode (cost warning on activation)
-/cloud plan on|off          also route /research planner through cloud (niche)
-/cloud disable              flip off (key retained)
-/cloud forget               wipe key + disable
-/refine <follow-up>         re-synthesize last /research with a follow-up (cloud)
+/cloud                              open the settings modal
+/cloud anthropic enable <key>       store Anthropic key + flip on synth
+/cloud tavily enable <key>          store Tavily key + enable cloud_search
+/cloud brave enable <key>           store Brave key
+/cloud status                       aggregate status (all backends + fingerprints)
+/cloud anthropic model <id>         claude-haiku-4-5 (default) | claude-sonnet-4-6 | claude-opus-4-7
+/cloud search on|off                mid-tier Sonnet-driven search (Anthropic)
+/cloud deep on|off                  expensive full deep mode (cost warning on activation)
+/cloud plan on|off                  also route /research planner through cloud (niche)
+/cloud anthropic disable            flip synth off (key retained)
+/cloud anthropic forget             wipe Anthropic key + disable
+/refine <follow-up>                 re-synthesize last /research with a follow-up (cloud)
 ```
+
+Legacy bare subcommands (`/cloud enable`, `/cloud disable`, `/cloud forget`, `/cloud model`, `/cloud plan`, `/cloud deep`, `/cloud search`) continue to work as sugar for `/cloud anthropic …` with a deprecation log line.
 
 ### What crosses the wire
 
-Only `/research` paths. **Never** observations, conversation, idle-tool rolls, `/ask`, or any sense. Payload is your question plus either bundled local source excerpts (synth-only mode) or just the question (search/deep modes; Sonnet fetches server-side).
+Only `/research` paths. **Never** observations, conversation, idle-tool rolls, `/ask`, or any sense. Payload is your question plus either bundled local source excerpts (Anthropic synth-only) or the raw query (Tavily/Brave/HN/SE search layer). Anthropic search/deep modes ship only the question; Sonnet fetches server-side.
 
 ### Fallback
 
-Any failure (auth, rate limit, network, timeout, `no_credit`) falls back to local synth with identical prompt + schema. The research log line flags the fallback so you always know which path ran.
+Any failure (auth, rate limit, network, timeout, `no_credit`) falls back to local synth + local search with identical prompt + schema. The research log line flags the fallback so you always know which path ran.
 
 See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.md) and [docs/research-architecture.md](docs/research-architecture.md) for the full design, provenance model, and cost breakdown.
 
@@ -209,8 +263,10 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 /agent <goal>            multi-step agent loop (chains tools toward a goal)
 /research <question>     plan-search-read-synthesize with numbered citations
 /refine <follow-up>      re-analyze the last research with a follow-up question (cloud)
-/cloud                   open the Anthropic cloud-LLM settings modal
-/cloud enable <api-key>  store an Anthropic key and route /research synth via Sonnet/Haiku/Opus
+/cloud                   open the cloud settings modal (Anthropic / Tavily / Brave)
+/cloud anthropic enable <key>  cloud synth via Sonnet/Haiku/Opus (legacy `/cloud enable` still works)
+/cloud tavily enable <key>     LLM-optimized search with preloaded content (~$0.05/run, free tier 1k/mo)
+/cloud brave enable <key>      free-tier web search (2k queries/month)
 /cloud search on         Sonnet drives web_search (mid-tier, ~$0.10/run)
 /cloud deep on           Sonnet drives web_search + web_fetch (expensive, $1-3/run — use for SPAs/paywalls)
 /intent finish auth PR   set an ambient goal; buddy nudges on drift
