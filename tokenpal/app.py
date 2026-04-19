@@ -36,6 +36,7 @@ from tokenpal.config.senses_writer import (
 from tokenpal.config.tools_writer import set_enabled_tools
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
+from tokenpal.nl_commands import match_nl_command
 from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
@@ -1001,6 +1002,11 @@ def main() -> None:
             _overlay_show(overlay, result.message)
 
     def _on_user_input(text: str) -> None:
+        nl = match_nl_command(text)
+        if nl is not None:
+            name, args = nl
+            _on_command(f"/{name} {args}".rstrip())
+            return
         brain.submit_user_input(text)
 
     overlay.set_command_callback(_on_command)

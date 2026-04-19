@@ -98,6 +98,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `/research <question>` — plan → search → fetch → synth → validate pipeline with JSON-structured synth output, substring-grounded claim validation, two-stage fetch (newspaper4k primary, aiohttp fallback). Full architecture in `docs/research-architecture.md` — read before editing any of `tokenpal/brain/research.py`, `tokenpal/actions/research/fetch_url.py`, or the conversation system prompt in `tokenpal/brain/personality.py`.
 - `/intent <text>` — set an ambient goal; buddy nudges on drift into configured distraction apps. `/intent status` shows current intent + age; `/intent clear` removes it. See `plans/shipped/buddy-utility-wedges.md` Phase 2 for drift rules.
 - `/summary [today|yesterday]` — on-demand end-of-day reflection bubble. Yesterday also fires automatically once on first startup of a new local day.
+- `/intent` and `/summary` also respond to plain-English phrasings ("remind me to X", "what am I working on", "give me a summary", "what did I do yesterday"). Regex matcher in `tokenpal/nl_commands.py` hooks into `_on_user_input`; on hit it re-dispatches through the slash pipeline so behavior is identical to typing the slash.
 
 ## LLM Notes
 - Default model: `Qwen3-14B-Q4_K_M` on llamacpp path (12-16 GB VRAM tier), `gemma4` on Ollama path. Both support tool calling.
