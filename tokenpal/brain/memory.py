@@ -1040,6 +1040,19 @@ class MemoryStore:
             )
             self._conn.commit()
 
+    @staticmethod
+    def research_cache_key(question: str, mode: str = "") -> str:
+        """Canonical cache key for research answers.
+
+        Mode matters: a slash-invoked run in "search" mode produces
+        different provenance than a local run for the same question.
+        Keying on mode keeps result sets separate so /refine follows a
+        consistent trust model per entry."""
+        import hashlib
+        prefix = f"{mode}:" if mode else ""
+        raw = f"{prefix}{question.strip().lower()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
     def get_research_answer(
         self, question_hash: str, max_age_s: float
     ) -> tuple[str, str, float] | None:

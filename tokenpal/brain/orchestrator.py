@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import random
@@ -27,9 +26,9 @@ from tokenpal.brain.git_nudge import GitNudgeDetector, GitNudgeSignal
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
-from tokenpal.brain.rage_detector import RageDetector, RageSignal
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
+from tokenpal.brain.rage_detector import RageDetector, RageSignal
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
 from tokenpal.brain.session_summarizer import SessionSummarizer
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
@@ -1923,16 +1922,19 @@ class Brain:
             self._ui_callback("/refine: no cached sources to re-analyze.")
             return
 
-        # Deep-mode sources are summaries only — Anthropic read the pages
-        # server-side, we never stored excerpts. Re-synthesizing against
-        # empty excerpts would send an empty context block to the cloud
-        # and produce hallucinated follow-ups. Block with a clear message
-        # pointing at a fresh /research instead.
+        # Cloud-web modes (/cloud search on and /cloud deep on) both
+        # summarize server-side, so cached sources carry URLs + titles but
+        # no excerpts. Re-synthesizing against empty excerpts would send an
+        # empty context block to the cloud and produce hallucinated
+        # follow-ups. Block with a clear message pointing at a fresh
+        # /research instead. Only the local-search path (Tavily/DDG/HN/SE)
+        # and Anthropic-synth-only path cache excerpts refine can use.
         if all(not s.excerpt.strip() for s in sources):
             self._ui_callback(
-                "/refine can't re-analyze deep-mode results — source "
-                "excerpts weren't cached. Run /research again with your "
-                "refined question instead."
+                "/refine can't re-analyze cloud-web results — source "
+                "excerpts weren't cached (Sonnet summarized server-side). "
+                "Turn off `/cloud search` and `/cloud deep` and re-run "
+                "/research with your refined question instead."
             )
             return
 
@@ -2026,13 +2028,10 @@ class Brain:
         )
 
     def _research_cache_key(self, question: str, mode: str = "") -> str:
-        # Each mode (local / cloud search-only / cloud deep) produces
-        # materially different answers: different sources, different trust
-        # model on excerpts. Keying on ``mode`` keeps the result sets
-        # separate so a follow-up in any mode sees its own provenance.
-        prefix = f"{mode}:" if mode else ""
-        raw = f"{prefix}{question.strip().lower()}"
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        # Shared helper so slash-invoked and tool-invoked research paths
+        # produce identical keys. See MemoryStore.research_cache_key.
+        from tokenpal.brain.memory import MemoryStore
+        return MemoryStore.research_cache_key(question, mode=mode)
 
     def _research_cache_ttl(self) -> float | None:
         """Return the cache TTL in seconds, or None when the cache is off."""

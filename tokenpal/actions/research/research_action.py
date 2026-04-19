@@ -60,6 +60,7 @@ class ResearchAction(AbstractAction):
         self._research_config: ResearchConfig | None = None
         self._cloud_config: CloudLLMConfig | None = None
         self._cloud_search_config: CloudSearchConfig | None = None
+        self._memory: Any = None  # MemoryStore, injected by orchestrator
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         question = (kwargs.get("question") or "").strip()
@@ -141,6 +142,34 @@ class ResearchAction(AbstractAction):
             return ActionResult(
                 output=f"research: incomplete ({reason})", success=False,
             )
+
+        # Cache the completed session so /refine finds it when the agent
+        # tool-path (not /research slash) completed the run. The slash
+        # path caches via orchestrator._save_research_cache; tool-invoked
+        # runs previously dropped through untracked, and /refine fell
+        # back to the latest cached *slash* run — which is rarely what
+        # the user meant.
+        if self._memory is not None and getattr(self._memory, "enabled", False):
+            import json as _json
+            payload = _json.dumps([
+                {
+                    "number": s.number,
+                    "url": s.url,
+                    "title": s.title,
+                    "excerpt": s.excerpt,
+                    "backend": s.backend,
+                }
+                for s in session.sources
+            ])
+            try:
+                self._memory.cache_research_answer(
+                    self._memory.research_cache_key(question, mode=cloud_mode),
+                    question,
+                    session.answer,
+                    payload,
+                )
+            except Exception:
+                log.exception("research: cache_research_answer failed (non-fatal)")
 
         display_urls = [
             (f"[{s.number}] {s.title}" if s.title else f"[{s.number}] {s.url}", s.url)
