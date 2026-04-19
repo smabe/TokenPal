@@ -156,6 +156,15 @@ enabled = true
 interval_s = 300      # 5min — cache-friendly + bounded data loss on crash
 max_lookback_h = 24   # don't surface notes older than this on boot
 
+[git_nudge]
+# Proactive WIP-commit nudge. Fires once per cooldown_s when HEAD is a WIP
+# commit (message matches one of wip_markers) older than wip_stale_hours
+# AND the tree is dirty. Requires [senses] git = true.
+enabled = true
+wip_stale_hours = 3
+cooldown_s = 7200        # 2h between nudges
+wip_markers = ["wip", "tmp", "todo", "fixup!"]
+
 [rage_detect]
 # Post-burst-pause-then-distraction detector (stuck?). Opt-in. Uses only
 # typing_cadence + app_awareness. Requires `[senses] typing_cadence = true`

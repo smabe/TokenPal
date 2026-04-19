@@ -276,6 +276,21 @@ class ConversationConfig:
 
 
 @dataclass
+class GitNudgeConfig:
+    # Nudge the user when they've been sitting on a WIP commit + uncommitted
+    # changes for > wip_stale_hours. Only fires when the HEAD commit message
+    # matches one of wip_markers (case-insensitive substring) — that's how
+    # we identify a commit the user intended to amend / follow up. Opt-in
+    # via config; requires [senses] git = true to have any signal.
+    enabled: bool = True
+    wip_stale_hours: float = 3.0
+    cooldown_s: float = 7200.0   # 2 hours between nudges
+    wip_markers: list[str] = field(
+        default_factory=lambda: ["wip", "tmp", "todo", "fixup!"]
+    )
+
+
+@dataclass
 class RageDetectConfig:
     # When the user has been typing fast, then pauses for 1-3 minutes, then
     # retreats to a distraction app, the buddy pops one gentle in-character
@@ -354,3 +369,4 @@ class TokenPalConfig:
     session_summary: SessionSummaryConfig = field(default_factory=SessionSummaryConfig)
     intent: IntentConfig = field(default_factory=IntentConfig)
     rage_detect: RageDetectConfig = field(default_factory=RageDetectConfig)
+    git_nudge: GitNudgeConfig = field(default_factory=GitNudgeConfig)

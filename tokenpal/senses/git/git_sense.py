@@ -71,11 +71,27 @@ class GitSense(AbstractSense):
         self._last_branch = branch
         self._last_dirty = dirty
 
+        # Pull the HEAD commit timestamp + message on every poll so the
+        # proactive-git detector can compute staleness without an extra
+        # subprocess round-trip. Cheap: one `git log -1` call.
+        last_commit_ts_raw, last_commit_msg = await asyncio.gather(
+            self._git("log", "-1", "--format=%ct"),
+            self._git("log", "-1", "--format=%s"),
+        )
+        try:
+            last_commit_ts: float | None = float(last_commit_ts_raw)
+        except ValueError:
+            last_commit_ts = None
+
         if not changed_from:
             # Keep returning the reading long enough for the gate to open (~2 min)
             # but clear changed_from so the urgent bypass only fires once
             if self._pending_reading and time.monotonic() < self._pending_expires:
                 self._pending_reading.changed_from = ""
+                # Refresh the fields that can drift under a pending reading.
+                self._pending_reading.data["dirty"] = dirty
+                self._pending_reading.data["last_commit_ts"] = last_commit_ts
+                self._pending_reading.data["last_commit_msg"] = last_commit_msg
                 return self._pending_reading
             self._pending_reading = None
             return None
@@ -93,6 +109,8 @@ class GitSense(AbstractSense):
                 "branch": branch,
                 "dirty": dirty,
                 "new_commits": new_commits,
+                "last_commit_ts": last_commit_ts,
+                "last_commit_msg": last_commit_msg,
             },
             summary=summary,
             changed_from=changed_from,

@@ -23,6 +23,7 @@ from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
+from tokenpal.brain.git_nudge import GitNudgeDetector, GitNudgeSignal
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
@@ -36,6 +37,7 @@ from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
     AgentConfig,
     ConversationConfig,
+    GitNudgeConfig,
     IdleToolsConfig,
     IntentConfig,
     MinTokensPerPathConfig,
@@ -217,6 +219,7 @@ class Brain:
         session_summary_config: SessionSummaryConfig | None = None,
         intent_config: IntentConfig | None = None,
         rage_detect_config: RageDetectConfig | None = None,
+        git_nudge_config: GitNudgeConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -345,6 +348,13 @@ class Brain:
         self._rage_config: RageDetectConfig = rage_detect_config or RageDetectConfig()
         self._rage: RageDetector = RageDetector(config=self._rage_config)
 
+        # Proactive WIP-commit nudge.
+        self._git_nudge_config: GitNudgeConfig = git_nudge_config or GitNudgeConfig()
+        self._git_nudge: GitNudgeDetector = GitNudgeDetector(
+            config=self._git_nudge_config
+        )
+        self._user_present: bool = False
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -386,6 +396,12 @@ class Brain:
         # EOD: if yesterday has unfrozen activity and we haven't shown the
         # bubble yet, fire it off-thread. Startup should not block on it.
         self._maybe_fire_pending_eod()
+
+        # Git nudge: hydrate initial state in the background so a WIP
+        # branch that was already stale at launch can nudge without
+        # waiting for the next git change.
+        if self._git_nudge.enabled:
+            asyncio.create_task(self._git_nudge.hydrate())
 
         await self._run_loop()
 
@@ -549,18 +565,38 @@ class Brain:
                 # fires rarely and the user explicitly enabled the feature.
                 rage = self._rage.ingest(readings)
 
+                # Proactive-git: consume readings, then ask the detector.
+                # user_present flips to True on any reading this tick — a
+                # cheap "computer is live" proxy so we don't nudge into a
+                # quiet dark room.
+                self._git_nudge.ingest(readings)
+                if readings:
+                    self._user_present = True
+                git_sig = (
+                    self._git_nudge.check(user_present=self._user_present)
+                    if self._git_nudge.enabled
+                    else None
+                )
+
                 # High-signal events bypass the normal gate
                 has_urgent = any(
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
-                can_comment = rage is not None or has_urgent or self._should_comment()
+                can_comment = (
+                    rage is not None
+                    or git_sig is not None
+                    or has_urgent
+                    or self._should_comment()
+                )
                 drift = (
                     self._intent.check_drift() if self._intent is not None else None
                 )
                 emitted = False
                 if rage is not None:
                     emitted = await self._generate_rage_check(rage)
+                elif git_sig is not None:
+                    emitted = await self._generate_git_nudge(git_sig)
                 elif drift is not None and can_comment:
                     emitted = await self._generate_drift_nudge(drift)
                 elif can_comment:
@@ -949,6 +985,60 @@ class Brain:
             return False
         except Exception:
             log.exception("Drift nudge generation failed")
+            self._push_status()
+            return False
+
+    async def _generate_git_nudge(self, sig: GitNudgeSignal) -> bool:
+        """Emit a single in-character nudge about a stale WIP commit."""
+        snapshot = self._context.snapshot()
+        if self._personality.check_sensitive_app(snapshot):
+            # Sensitive-app context suppresses all commentary; still start
+            # the cooldown so we don't busy-loop.
+            self._git_nudge.mark_emitted()
+            return False
+        prompt = self._personality.build_git_nudge_prompt(
+            branch=sig.branch,
+            commit_msg=sig.last_commit_msg,
+            stale_hours=sig.stale_hours,
+        )
+        try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            log.debug(
+                "Generating git nudge: branch=%r, commit=%r, stale=%.0fh",
+                sig.branch,
+                sig.last_commit_msg,
+                sig.stale_hours,
+            )
+            response = await self._llm.generate(
+                prompt,
+                target_latency_s=self._budgets.observation,
+                min_tokens=self._min_tokens.observation,
+            )
+            self._push_status()
+            filtered = self._personality.filter_response(response.text)
+            if filtered and self._is_near_duplicate(filtered):
+                log.info(
+                    "TokenPal (git-nudge suppressed near-duplicate): %s", filtered
+                )
+                self._handle_suppressed_output("git-nudge near-duplicate")
+                self._git_nudge.mark_emitted()
+                return False
+            if filtered:
+                log.info(
+                    "TokenPal (git nudge): %s (%.0fms)",
+                    filtered,
+                    response.latency_ms,
+                )
+                self._emit_comment(filtered, acknowledge=True)
+                self._recent_outputs.append(filtered)
+                self._git_nudge.mark_emitted()
+                return True
+            log.debug("Git nudge filtered out: %r", response.text[:80])
+            self._git_nudge.mark_emitted()
+            return False
+        except Exception:
+            log.exception("Git nudge generation failed")
             self._push_status()
             return False
 

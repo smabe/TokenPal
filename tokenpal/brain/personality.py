@@ -487,6 +487,38 @@ Rules:
 Your line:"""
 
 
+_GIT_NUDGE_TEMPLATE = """\
+{identity}
+
+The user has a WIP commit ("{commit_msg}") on branch {branch} that has
+been sitting for about {stale_hours:.0f} hours with uncommitted changes
+on top. They probably meant to amend or follow up on it. Give ONE short
+in-character nudge. Do NOT explain git, do NOT use command syntax, do
+NOT suggest anything specific. Just a line that mentions the stale WIP
+with the affection/dryness of your voice.
+
+{mood_line}
+
+Examples of your voice:
+{examples}
+
+{voice_reminder}Your line:"""
+
+
+_FINETUNED_GIT_NUDGE_TEMPLATE = """\
+Rules:
+1. ONE short in-character line.
+2. Reference the stale WIP commit without being preachy.
+3. No git commands, no explanations.
+
+The user has a WIP commit ("{commit_msg}") on {branch} that has been
+sitting for ~{stale_hours:.0f} hours with uncommitted changes on top.
+
+{mood_line}
+
+Your line:"""
+
+
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
 
@@ -875,6 +907,29 @@ class PersonalityEngine:
         return _RAGE_CHECK_TEMPLATE.format(
             identity=self._identity_block(),
             app_name=app_name,
+            mood_line=self._mood_line(),
+            examples=self._sample_examples(),
+            voice_reminder=self._voice_reminder(),
+        )
+
+    def build_git_nudge_prompt(
+        self, branch: str, commit_msg: str, stale_hours: float
+    ) -> str:
+        """Prompt for the proactive-git WIP nudge. See
+        plans/buddy-utility-wedges.md.
+        """
+        if self.is_finetuned:
+            return _FINETUNED_GIT_NUDGE_TEMPLATE.format(
+                branch=branch,
+                commit_msg=commit_msg,
+                stale_hours=stale_hours,
+                mood_line=self._mood_line(),
+            )
+        return _GIT_NUDGE_TEMPLATE.format(
+            identity=self._identity_block(),
+            branch=branch,
+            commit_msg=commit_msg,
+            stale_hours=stale_hours,
             mood_line=self._mood_line(),
             examples=self._sample_examples(),
             voice_reminder=self._voice_reminder(),

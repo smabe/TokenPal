@@ -218,6 +218,7 @@ def main() -> None:
         session_summary_config=config.session_summary,
         intent_config=config.intent,
         rage_detect_config=config.rage_detect,
+        git_nudge_config=config.git_nudge,
     )
 
     # Load voice-specific buddy art into the overlay
