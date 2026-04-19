@@ -178,6 +178,10 @@ def main() -> None:
     def _agent_log(
         text: str, *, markup: bool = False, url: str | None = None,
     ) -> None:
+        if url is not None:
+            log.info("ui: %s (url=%s)", text, url)
+        else:
+            log.info("ui: %s", text)
         overlay.schedule_callback(
             lambda t=text, m=markup, u=url: overlay.log_buddy_message(
                 t, markup=m, url=u,

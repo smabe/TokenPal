@@ -359,6 +359,7 @@ class ResearchRunner:
         else:
             response = await self._llm.generate(prompt, max_tokens=400)
         session.tokens_used += response.tokens_used
+        log.debug("planner raw output: %s", response.text[:800])
         return _parse_planner_output(response.text, self._max_queries)
 
     # ---- Stage 2: search --------------------------------------------------
