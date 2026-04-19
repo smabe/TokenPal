@@ -89,10 +89,28 @@ def test_status_enabled_with_key_shows_fingerprint(
 # ---------------------------------------------------------------------------
 
 
-def test_enable_requires_key_arg(isolated, cfg: TokenPalConfig) -> None:
+def test_enable_requires_key_arg_when_none_stored(
+    isolated, cfg: TokenPalConfig
+) -> None:
     msg = _handle_cloud_command("enable", cfg).message
     assert "Usage:" in msg
     assert "console.anthropic.com" in msg
+
+
+def test_bare_enable_re_enables_when_key_already_stored(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    # First enable stores + flips on; disable flips off but retains key.
+    key = "sk-ant-api03-" + "r" * 40
+    _handle_cloud_command(f"enable {key}", cfg)
+    _handle_cloud_command("disable", cfg)
+    assert cfg.cloud_llm.enabled is False
+    # Bare "enable" should flip back on using the stored key (no key re-paste).
+    result = _handle_cloud_command("enable", cfg)
+    assert cfg.cloud_llm.enabled is True
+    assert "enabled" in result.message.lower()
+    # Fingerprint of the stored key appears in status.
+    assert key[-4:] in result.message
 
 
 def test_enable_rejects_bad_shape(isolated, cfg: TokenPalConfig) -> None:

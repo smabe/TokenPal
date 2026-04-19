@@ -1172,23 +1172,28 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         return CommandResult(_status_line())
 
     if subcmd == "enable":
-        if not target:
-            return CommandResult(
-                "Usage: /cloud enable <api-key>\n"
-                "Get a key at https://console.anthropic.com/settings/keys "
-                "(workspace needs at least $5 credit)."
-            )
-        try:
-            set_cloud_key(target)
-        except ValueError as e:
-            # Scrub raw key from any echo - the handler input may be in logs.
-            return CommandResult(f"/cloud enable rejected: {e}")
+        if target:
+            try:
+                set_cloud_key(target)
+            except ValueError as e:
+                # Scrub raw key from any echo - handler input may be in logs.
+                return CommandResult(f"/cloud enable rejected: {e}")
+            stored = target
+        else:
+            # Bare /cloud enable - re-enable using the already-stored key.
+            stored = get_cloud_key() or ""
+            if not stored:
+                return CommandResult(
+                    "Usage: /cloud enable <api-key>\n"
+                    "Get a key at https://console.anthropic.com/settings/keys "
+                    "(workspace needs at least $5 credit)."
+                )
         try:
             set_cloud_enabled(True)
         except OSError as e:
             return CommandResult(f"/cloud: could not persist enabled flag: {e}")
         cfg.enabled = True  # live runtime flip, no restart required
-        fp = fingerprint(target)
+        fp = fingerprint(stored)
         return CommandResult(
             f"Cloud LLM enabled - {cfg.model}, key {fp}. "
             "Next /research will route synth through Anthropic."
