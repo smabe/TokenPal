@@ -127,6 +127,7 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 | **Moods** | Custom mood names per character, context-triggered shifts, easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
 | **Memory** | Cross-session app visit history, injected into prompts for continuity |
+| **Executive function** | Periodic session-handoff notes read back on boot ("last session you were debugging migration on branch X"), `/intent` ambient goal with drift nudges into Twitter/Reddit/etc., `/summary` daily reflection bubble, opt-in rage detect (typing-burst → pause → distraction-app), proactive WIP-commit nudge on stale dirty branches |
 | **Server** | Remote GPU inference + training over HTTP (NVIDIA CUDA, AMD Vulkan) |
 | **Privacy** | No clipboard, no screen capture, silent near banking/health apps, browser titles sanitized |
 
@@ -159,6 +160,11 @@ See [docs/server-setup.md](docs/server-setup.md) for details.
 /consent                 open the consent-category picker (web/location/keyed/research)
 /agent <goal>            multi-step agent loop (chains tools toward a goal)
 /research <question>     plan-search-read-synthesize with numbered citations
+/intent finish auth PR   set an ambient goal; buddy nudges on drift
+/intent status           show current intent + age
+/intent clear            remove the active intent
+/summary                 end-of-day reflection bubble (yesterday)
+/summary today           today's reflection on demand
 /mood                    current mood
 /status                  model, senses, actions
 ```
