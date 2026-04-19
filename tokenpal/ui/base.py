@@ -98,6 +98,16 @@ class AbstractOverlay(abc.ABC):
         """Open the /options umbrella modal. Returns True if supported."""
         return False
 
+    def open_voice_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /voice management modal. Returns True if supported.
+        Caller falls back to the text /voice usage string when the
+        overlay has no modal support."""
+        return False
+
     def load_chat_history(
         self,
         entries: list[tuple[float, str, str, str | None]],

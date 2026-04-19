@@ -297,6 +297,8 @@ def main() -> None:
         return result
 
     def _cmd_voice(args: str) -> CommandResult:
+        if not args.strip() and _open_voice_modal():
+            return CommandResult("")
         prev_voice = personality.voice_name
         result = _handle_voice_command(
             args, personality, data_dir / "voices", overlay, brain,
@@ -305,6 +307,108 @@ def main() -> None:
         if personality.voice_name != prev_voice:
             brain.reset_conversation()
         return result
+
+    def _run_voice_action(action: Callable[[], CommandResult]) -> None:
+        """Run a voice helper and preserve /voice slash semantics — log the
+        command result and reset conversation on voice change."""
+        prev_voice = personality.voice_name
+        result = action()
+        if personality.voice_name != prev_voice:
+            brain.reset_conversation()
+        if result.message:
+            overlay.log_buddy_message(result.message)
+
+    def _open_voice_modal() -> bool:
+        from tokenpal.tools.voice_profile import (
+            list_profile_summaries,
+            slugify,
+        )
+        from tokenpal.ui.voice_modal import (
+            VoiceModalResult,
+            VoiceModalState,
+        )
+
+        voices_dir = data_dir / "voices"
+        saved = list_profile_summaries(voices_dir)
+        active_summary = None
+        if personality.voice_name:
+            active_slug = slugify(personality.voice_name)
+            active_summary = next(
+                (s for s in saved if s.slug == active_slug), None,
+            )
+        state = VoiceModalState(active_voice=active_summary, saved=saved)
+
+        def on_result(result: VoiceModalResult | None) -> None:
+            if result is None:
+                return
+            action = result.action
+            payload = result.payload
+            if action == "off":
+                _run_voice_action(lambda: _voice_off(personality, llm, config))
+            elif action == "switch":
+                name = payload.get("name", "")
+                if name:
+                    _run_voice_action(
+                        lambda: _voice_switch(
+                            name, personality, voices_dir,
+                            llm, config, _load_voice_art,
+                        )
+                    )
+            elif action == "train":
+                wiki = payload.get("wiki", "")
+                character = payload.get("character", "")
+                if wiki and character:
+                    _run_voice_action(
+                        lambda: _start_voice_training(
+                            f"{wiki} {character}",
+                            personality, voices_dir, overlay, brain,
+                            on_voice_loaded=_load_voice_art,
+                        )
+                    )
+            elif action == "finetune":
+                name = payload.get("name", "")
+                if name:
+                    _run_voice_action(
+                        lambda: _start_voice_finetune(
+                            name, personality, voices_dir, overlay,
+                            brain, llm, config,
+                        )
+                    )
+            elif action == "finetune_setup":
+                _run_voice_action(
+                    lambda: _start_finetune_setup(overlay, config)
+                )
+            elif action == "regenerate":
+                def _do_regen() -> None:
+                    _run_voice_action(
+                        lambda: _start_voice_regenerate(
+                            "", personality, voices_dir, overlay,
+                            on_voice_loaded=_load_voice_art,
+                        )
+                    )
+                if not overlay.open_confirm_modal(
+                    "Regenerate all voice assets?",
+                    "This runs a ~60s LLM job. Continue?",
+                    lambda ok: _do_regen() if ok else None,
+                ):
+                    _do_regen()
+            elif action == "ascii":
+                _run_voice_action(
+                    lambda: _start_voice_regenerate_ascii(
+                        "", personality, voices_dir, overlay,
+                        on_voice_loaded=_load_voice_art,
+                    )
+                )
+            elif action == "import":
+                path = payload.get("path", "")
+                if path:
+                    _run_voice_action(
+                        lambda: _import_gguf(
+                            path, personality, voices_dir, overlay, llm,
+                        )
+                    )
+
+        return overlay.open_voice_modal(state, on_result)
 
     def _cmd_server(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
@@ -439,6 +543,9 @@ def main() -> None:
                 return
             if nav == "tools":
                 _open_tools_modal()
+                return
+            if nav == "voice":
+                _open_voice_modal()
                 return
 
             # Navigation was None — apply field edits.
@@ -1943,6 +2050,72 @@ def _handle_model_command(
     return CommandResult(f"Switched to {subcmd} (remembered for {llm.api_url})")
 
 
+_VOICE_USAGE = (
+    "Usage: /voice list | switch <name> | off | info"
+    " | train <wiki> <character> | finetune <name>"
+    " | finetune-setup | import <gguf_path>"
+    " | regenerate [name|--all] | ascii [name|--all]"
+)
+
+
+def _voice_list(voices_dir: Path) -> CommandResult:
+    from tokenpal.tools.voice_profile import list_profiles
+    profiles = list_profiles(voices_dir)
+    if not profiles:
+        return CommandResult("No voices saved yet.")
+    items = [f"{name} ({count} lines)" for _, name, count in profiles]
+    return CommandResult("Voices: " + ", ".join(items))
+
+
+def _voice_info(personality: PersonalityEngine) -> CommandResult:
+    name = personality.voice_name
+    if not name:
+        return CommandResult("Using default TokenPal voice.")
+    ft = " (fine-tuned)" if personality.is_finetuned else ""
+    return CommandResult(f"Voice: {name}{ft}")
+
+
+def _voice_off(
+    personality: PersonalityEngine,
+    llm: AbstractLLMBackend | None = None,
+    config: TokenPalConfig | None = None,
+) -> CommandResult:
+    from tokenpal.tools.train_voice import activate_voice
+    personality.set_voice(None)
+    if llm and config:
+        llm.set_model(config.llm.model_name)
+    activate_voice("")
+    return CommandResult("Back to default TokenPal.")
+
+
+def _voice_switch(
+    args: str,
+    personality: PersonalityEngine,
+    voices_dir: Path,
+    llm: AbstractLLMBackend | None = None,
+    config: TokenPalConfig | None = None,
+    on_voice_loaded: Callable[[], None] | None = None,
+) -> CommandResult:
+    from tokenpal.tools.train_voice import activate_voice
+    from tokenpal.tools.voice_profile import load_profile, slugify
+    if not args:
+        return CommandResult("Usage: /voice switch <name>")
+    try:
+        slug = slugify(args)
+        profile = load_profile(slug, voices_dir)
+        personality.set_voice(profile)
+        if on_voice_loaded:
+            on_voice_loaded()
+        if profile.finetuned_model and llm:
+            llm.set_model(profile.finetuned_model)
+        elif llm and config:
+            llm.set_model(config.llm.model_name)
+        activate_voice(slug)
+        return CommandResult(f"Switched to {profile.character}.")
+    except FileNotFoundError:
+        return CommandResult(f"Voice '{args}' not found.")
+
+
 def _handle_voice_command(
     args: str,
     personality: PersonalityEngine,
@@ -1953,93 +2126,49 @@ def _handle_voice_command(
     config: TokenPalConfig | None = None,
     on_voice_loaded: Callable[[], None] | None = None,
 ) -> CommandResult:
-    """Handle /voice subcommands."""
-    from tokenpal.tools.voice_profile import list_profiles, load_profile
+    """Dispatch /voice subcommands to per-action helpers.
 
+    The VoiceModal result handler calls the same helpers directly, so
+    modal and slash command share one implementation — never forking.
+    """
     parts = args.strip().split(maxsplit=1)
     subcmd = parts[0].lower() if parts else ""
     subargs = parts[1].strip() if len(parts) > 1 else ""
 
     if subcmd == "list":
-        profiles = list_profiles(voices_dir)
-        if not profiles:
-            return CommandResult("No voices saved yet.")
-        items = [f"{name} ({count} lines)" for _, name, count in profiles]
-        return CommandResult("Voices: " + ", ".join(items))
-
+        return _voice_list(voices_dir)
     if subcmd == "info":
-        name = personality.voice_name
-        if not name:
-            return CommandResult("Using default TokenPal voice.")
-        ft = " (fine-tuned)" if personality.is_finetuned else ""
-        return CommandResult(f"Voice: {name}{ft}")
-
+        return _voice_info(personality)
     if subcmd == "off":
-        from tokenpal.tools.train_voice import activate_voice
-        personality.set_voice(None)
-        if llm and config:
-            llm.set_model(config.llm.model_name)
-        activate_voice("")
-        return CommandResult("Back to default TokenPal.")
-
+        return _voice_off(personality, llm, config)
     if subcmd == "switch":
-        from tokenpal.tools.train_voice import activate_voice
-        from tokenpal.tools.voice_profile import slugify
-        if not subargs:
-            return CommandResult("Usage: /voice switch <name>")
-        try:
-            slug = slugify(subargs)
-            profile = load_profile(slug, voices_dir)
-            personality.set_voice(profile)
-            if on_voice_loaded:
-                on_voice_loaded()
-            if profile.finetuned_model and llm:
-                llm.set_model(profile.finetuned_model)
-            elif llm and config:
-                llm.set_model(config.llm.model_name)
-            activate_voice(slug)
-            return CommandResult(f"Switched to {profile.character}.")
-        except FileNotFoundError:
-            return CommandResult(f"Voice '{subargs}' not found.")
-
+        return _voice_switch(
+            subargs, personality, voices_dir, llm, config, on_voice_loaded,
+        )
     if subcmd == "train":
         return _start_voice_training(
             subargs, personality, voices_dir, overlay, brain,
             on_voice_loaded=on_voice_loaded,
         )
-
     if subcmd == "finetune":
         return _start_voice_finetune(
-            subargs, personality, voices_dir, overlay, brain,
-            llm, config,
+            subargs, personality, voices_dir, overlay, brain, llm, config,
         )
-
     if subcmd == "finetune-setup":
         return _start_finetune_setup(overlay, config)
-
     if subcmd == "import":
-        return _import_gguf(
-            subargs, personality, voices_dir, overlay, llm,
-        )
-
+        return _import_gguf(subargs, personality, voices_dir, overlay, llm)
     if subcmd == "regenerate":
         return _start_voice_regenerate(
             subargs, personality, voices_dir, overlay,
             on_voice_loaded=on_voice_loaded,
         )
-
     if subcmd == "ascii":
         return _start_voice_regenerate_ascii(
             subargs, personality, voices_dir, overlay,
             on_voice_loaded=on_voice_loaded,
         )
-
-    return CommandResult(
-        "Usage: /voice list | switch <name> | off | info"
-        " | train <wiki> <character> | finetune <name>"
-        " | finetune-setup | import <gguf_path>"
-        " | regenerate [name|--all] | ascii [name|--all]"
-    )
+    return CommandResult(_VOICE_USAGE)
 
 
 def _overlay_show(overlay: AbstractOverlay, msg: str, persistent: bool = False) -> None:

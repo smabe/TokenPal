@@ -33,7 +33,7 @@ from tokenpal.config.chatlog_writer import (
     clamp_max_persisted,
 )
 
-NavigateTo = Literal["cloud", "senses", "tools"]
+NavigateTo = Literal["cloud", "senses", "tools", "voice"]
 
 
 @dataclass(frozen=True)
@@ -169,6 +169,7 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 yield Button("Cloud LLM...", id="launch-cloud-btn")
                 yield Button("Senses...", id="launch-senses-btn")
                 yield Button("Tools...", id="launch-tools-btn")
+                yield Button("Voice...", id="launch-voice-btn")
 
             # --------------------------------------------------------------
             # Bottom save / cancel
@@ -205,6 +206,8 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             self.dismiss(self._nav("senses"))
         elif btn_id == "launch-tools-btn":
             self.dismiss(self._nav("tools"))
+        elif btn_id == "launch-voice-btn":
+            self.dismiss(self._nav("voice"))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

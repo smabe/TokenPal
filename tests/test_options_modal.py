@@ -36,6 +36,11 @@ def test_result_defaults_navigate_none_no_clear() -> None:
     assert r.clear_history is False
 
 
+def test_result_accepts_voice_navigate_target() -> None:
+    r = OptionsModalResult(max_persisted=42, navigate_to="voice")
+    assert r.navigate_to == "voice"
+
+
 def test_clamp_enforces_min_max() -> None:
     assert clamp_max_persisted(-1) == MIN_PERSISTED
     assert clamp_max_persisted(0) == MIN_PERSISTED

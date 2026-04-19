@@ -148,6 +148,13 @@ class OpenOptionsModal(Message):
         super().__init__()
 
 
+class OpenVoiceModal(Message):
+    def __init__(self, state: Any, on_result: Callable[[Any], None]) -> None:
+        self.state = state
+        self.on_result = on_result
+        super().__init__()
+
+
 class LoadChatHistory(Message):
     def __init__(
         self, entries: list[tuple[float, str, str, str | None]],
@@ -455,6 +462,7 @@ class TokenPalApp(App[None]):
         Binding("f1", "command_help", "Help", show=False, priority=True),
         Binding("f2", "toggle_chat_log", "Toggle chat log", show=False, priority=True),
         Binding("f3", "command_options", "Options", show=False, priority=True),
+        Binding("f4", "command_voice", "Voice", show=False, priority=True),
         Binding("ctrl+l", "command_clear", "Clear", show=False, priority=True),
     ]
 
@@ -586,6 +594,10 @@ class TokenPalApp(App[None]):
     def action_command_options(self) -> None:
         if self._overlay._command_callback:
             self._overlay._command_callback("/options")
+
+    def action_command_voice(self) -> None:
+        if self._overlay._command_callback:
+            self._overlay._command_callback("/voice")
 
     def action_toggle_chat_log(self) -> None:
         chat_log = self.query_one("#chat-log", VerticalScroll)
@@ -884,6 +896,14 @@ class TokenPalApp(App[None]):
         modal = OptionsModal(message.state)
         self.push_screen(modal, message.on_result)
 
+    def on_open_voice_modal(self, message: OpenVoiceModal) -> None:
+        if self._modal_already_active():
+            return
+        from tokenpal.ui.voice_modal import VoiceModal
+
+        modal = VoiceModal(message.state)
+        self.push_screen(modal, message.on_result)
+
     # --- Divider drag ---
 
     def on_divider_bar_drag_start(self, _message: DividerBar.DragStart) -> None:
@@ -1048,6 +1068,17 @@ class TextualOverlay(AbstractOverlay):
         if not (self._app and self._is_running):
             return False
         self._post(OpenOptionsModal(state, on_result))
+        return True
+
+    def open_voice_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /voice management modal. Result is VoiceModalResult or None."""
+        if not (self._app and self._is_running):
+            return False
+        self._post(OpenVoiceModal(state, on_result))
         return True
 
     def load_chat_history(

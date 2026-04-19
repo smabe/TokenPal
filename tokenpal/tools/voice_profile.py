@@ -104,18 +104,42 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
     )
 
 
-def list_profiles(voices_dir: Path) -> list[tuple[str, str, int]]:
-    """List all saved profiles. Returns (slug, character_name, line_count) tuples."""
+@dataclass(frozen=True)
+class ProfileSummary:
+    """Lightweight profile metadata used by the VoiceModal status block."""
+
+    slug: str
+    character: str
+    line_count: int
+    source: str
+    finetuned_model: str
+
+
+def list_profile_summaries(voices_dir: Path) -> list[ProfileSummary]:
+    """One-pass read of every voice profile's display metadata."""
     if not voices_dir.exists():
         return []
-    results = []
+    results: list[ProfileSummary] = []
     for path in sorted(voices_dir.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            results.append((path.stem, data["character"], len(data["lines"])))
+            results.append(
+                ProfileSummary(
+                    slug=path.stem,
+                    character=data["character"],
+                    line_count=len(data["lines"]),
+                    source=data.get("source", ""),
+                    finetuned_model=data.get("finetuned_model", ""),
+                )
+            )
         except (json.JSONDecodeError, KeyError):
             continue
     return results
+
+
+def list_profiles(voices_dir: Path) -> list[tuple[str, str, int]]:
+    """List all saved profiles. Returns (slug, character_name, line_count) tuples."""
+    return [(s.slug, s.character, s.line_count) for s in list_profile_summaries(voices_dir)]
 
 
 def make_profile(
