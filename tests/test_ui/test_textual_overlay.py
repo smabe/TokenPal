@@ -99,7 +99,10 @@ async def test_status_bar_via_message(app: TokenPalApp) -> None:
         app.post_message(UpdateStatus("snarky | Ghostty | 54F clear"))
         await pilot.pause()
         bar = app.query_one(StatusBarWidget)
-        assert "snarky" in bar.render().plain
+        main = bar.query_one("#status-main", expect_type=Static)
+        hint = bar.query_one("#status-hint", expect_type=Static)
+        assert "snarky" in main.render().plain
+        assert "F3 options" in hint.render().plain
 
 
 async def test_input_dispatches_text(

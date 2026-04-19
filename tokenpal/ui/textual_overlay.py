@@ -14,7 +14,7 @@ from rich.markup import escape as _esc_markup
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -387,11 +387,19 @@ _MOOD_COLORS: dict[str, str] = {
 }
 
 
-class StatusBarWidget(Static):
-    """Bottom status text with mood-colored first segment."""
+class StatusBarWidget(Horizontal):
+    """Bottom status row: mood-colored status on the left, fixed key hints dock-right."""
+
+    _HINT_TEXT = "F3 options \u00b7 Ctrl+L clear"
 
     def __init__(self) -> None:
-        super().__init__("Ctrl+C to quit", id="status-bar", markup=True)
+        super().__init__(id="status-bar")
+        self._main = Static("Ctrl+C to quit", id="status-main", markup=True)
+        self._hint = Static(f"[#666666]{self._HINT_TEXT}[/]", id="status-hint", markup=True)
+
+    def compose(self) -> ComposeResult:
+        yield self._main
+        yield self._hint
 
     def set_text(self, text: str) -> None:
         parts = text.split(" | ", maxsplit=1)
@@ -401,7 +409,7 @@ class StatusBarWidget(Static):
             markup = f"[{color}]{parts[0]}[/] | {parts[1]}"
         else:
             markup = f"[{color}]{text}[/]"
-        self.update(markup)
+        self._main.update(markup)
 
 
 # --- Divider ---

@@ -64,8 +64,25 @@ Screen {
 
 #status-bar {
     height: 1;
+    layout: horizontal;
+}
+
+#status-main {
+    width: 1fr;
+    height: 1;
     color: #666666;
     padding: 0 2;
+    overflow-x: hidden;
+    text-wrap: nowrap;
+}
+
+#status-hint {
+    width: auto;
+    height: 1;
+    dock: right;
+    color: #666666;
+    padding: 0 2;
+    text-wrap: nowrap;
 }
 
 #divider {
