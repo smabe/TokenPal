@@ -228,12 +228,6 @@ RESEARCH_SECTION = CatalogSection(
             consent_category="research_mode",
         ),
         CatalogEntry(
-            "search_web",
-            "Search DuckDuckGo or Wikipedia for a single query.",
-            kind="research",
-            consent_category="web_fetches",
-        ),
-        CatalogEntry(
             "research",
             "Deep research: plans queries, searches, reads, cites sources.",
             kind="research",

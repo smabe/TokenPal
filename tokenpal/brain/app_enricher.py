@@ -1,12 +1,12 @@
 """Fetch one-line descriptions of unfamiliar apps for richer context.
 
 First time we see an app name we don't have cached, we block the
-observation tick on a search_web call (3s timeout), grab the first
+observation tick on a `search()` call (3s timeout), grab the first
 sentence, and cache it in memory.db. Subsequent ticks for the same
 app are instant cache hits. Cache is 30d; failures retry after 24h.
 
-Privacy posture matches search_web: consent-gated, sensitive-term
-filtered, sensitive apps never touch the network.
+Privacy posture matches /ask: consent-gated, sensitive-term filtered,
+sensitive apps never touch the network.
 """
 
 from __future__ import annotations

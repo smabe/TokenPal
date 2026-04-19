@@ -190,7 +190,7 @@ class Brain:
 
     # Max tool call rounds per comment to prevent infinite loops.
     # Matches the agent-mode step cap so research + a couple of follow-up
-    # search_web/fetch_url calls all fit in one conversation turn.
+    # fetch_url calls all fit in one conversation turn.
     _MAX_TOOL_ROUNDS = 8
     # Max follow-up calls to finish a conversation reply that hit max_tokens
     _MAX_CONTINUATIONS = 2

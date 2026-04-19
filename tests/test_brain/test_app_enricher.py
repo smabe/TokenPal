@@ -194,7 +194,7 @@ async def test_in_flight_dedup_shares_fetch(
     enricher: AppEnricher,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Two concurrent enrich() calls for the same app share one search_web call."""
+    """Two concurrent enrich() calls for the same app share one search() call."""
     import asyncio
 
     calls: list[str] = []
