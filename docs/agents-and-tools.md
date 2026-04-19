@@ -3,7 +3,7 @@
 TokenPal ships four layers of LLM-driven action on top of the observation buddy:
 
 1. **Tools** — single-shot LLM-callable actions. Registry-backed, opt-in via a Textual picker, consent-gated for anything that touches the network.
-2. **Inline research in conversation** — when you ask the buddy a "best X" / comparison / look-it-up question, it automatically calls `search_web` or the deeper `research` tool mid-conversation. No slash command, just ask naturally.
+2. **Inline research in conversation** — when you ask the buddy a "best X" / comparison / look-it-up question, it automatically calls the `research` tool mid-conversation. No slash command, just ask naturally.
 3. **Agent mode** (`/agent <goal>`) — multi-step tool-calling loop with a confirm gate, step cap, and token budget.
 4. **Research mode** (`/research <question>`) — Claude-style plan → search → read → synthesize pipeline with citations and a 24h cache.
 
@@ -66,7 +66,7 @@ The catalog (`tokenpal/actions/catalog.py`) groups tools into six sections. Ever
 | **Utilities** | `convert`, `timezone`, `sunrise_sunset`, `moon_phase`, `currency`, `weather_forecast_week`, `pollen_count`, `air_quality`, `random_fact`, `joke_of_the_day`, `word_of_the_day`, `on_this_day`, `random_recipe`, `trivia_question`, `sports_score`, `crypto_price`, `book_suggestion` | opt-in + `web_fetches` for network ones |
 | **Focus** | `pomodoro`, `stretch_reminder`, `water_reminder`, `eye_break`, `bedtime_wind_down`, `hydration_log`, `habit_streak`, `mood_check` | opt-in |
 | **Agent** | `agent_mode` flag | opt-in |
-| **Research** | `research_mode` flag, `search_web`, `fetch_url`, `research` | opt-in + `research_mode` consent |
+| **Research** | `research_mode` flag, `fetch_url`, `research` | opt-in + `research_mode` consent |
 
 ### Rate limits
 
@@ -110,22 +110,18 @@ The buddy can call tools mid-conversation without a slash command. Ask a questio
 You: what's 47 * 83?
 Buddy: [calls do_math(expr="47 * 83")] → 3901
 
-You: hey what's on hacker news?
-Buddy: [calls search_web(query="...")] → one snippet + clickable source link
-
 You: hey what's the best fitness tracker for iPhone 17?
 Buddy: [calls research(question="...")] → plans 3 queries, searches, reads 5 pages,
                                             synthesizes a cited bullet list + verdict
 ```
 
+The LLM only has one web-touching tool: `research`. The older single-shot `search_web` was removed because the model kept reaching for it on deep questions where it should have escalated. `/ask` (human-typed slash command) still provides a fast keyless one-shot lookup path for users; it never goes through the tool loop.
+
 ### How it picks the right tool
 
-Three signals in the conversation system prompt (`PersonalityEngine.build_conversation_system_message`) steer the model:
+Two signals in the conversation system prompt (`PersonalityEngine.build_conversation_system_message`) steer the model:
 
-- **Rule 6** lists the actual tool names loaded for the user (`research`, `search_web`, `do_math`, …) and says: "for 'best X' or comparison questions, call `research` — do NOT chain multiple `search_web` calls. For casual chat, just answer."
-- **Tool descriptions** carry the narrower guidance:
-  - `search_web`: "Single-query web lookup for ONE fact or ONE page. Do NOT use for comparisons or 'best X' questions."
-  - `research`: "Deep research for comparison, recommendation, or 'best of' questions. Always use for 'best X', 'compare X vs Y', or anything that needs weighing multiple sources."
+- **Rule 6** lists the actual tool names loaded for the user (`research`, `do_math`, …) and says: "for any factual lookup, comparison, or 'best X' question, call `research`. For casual chat, just answer." Since `research` is the only web-touching tool, there's no branch the LLM can take wrong.
 - **Rule 7** governs the reply format after `research` returns: 2-4 bullets of specific picks + a one-line verdict in the buddy's character voice.
 
 ### The `research` tool
@@ -176,7 +172,7 @@ If fewer than `_THIN_POOL_THRESHOLD = 3` sources make it through fetching, the r
 ### Enabling
 
 ```
-/tools       # enable: research, search_web, fetch_url (all opt-in, in the Research section)
+/tools       # enable: research, fetch_url (both opt-in, in the Research section)
 /consent     # grant: research_mode, web_fetches
 # restart
 ```
@@ -440,6 +436,6 @@ Phase 2 ships 15+ tools total, past the gemma4 cliff. If you enable the full uti
 - **Research returns an empty answer with sources listed** — synthesizer hit the token budget before writing. Increase `[research] token_budget`, or drop `max_fetches` so fewer excerpts land in the prompt.
 - **Cached research answer is stale after an event you care about** — edit the question to bypass the cache, or set `[research] cache_ttl_s = 0` to disable. The plan logs `> research: ... (cached)` when a hit fires, so you can always tell.
 - **Rate limit tripped inside an agent run** — the invoker's state is per-run, not per-session. Start a new `/agent` to reset, or remove the `rate_limit` ClassVar temporarily.
-- **Buddy says "let me search" but doesn't actually call a tool** — the tool isn't loaded. Check `/tools list` and make sure `search_web` / `research` are enabled, then restart. The conversation system prompt only lists tools actually resolved at startup, so if a tool is absent the model may narrate without calling.
+- **Buddy says "let me search" but doesn't actually call a tool** — the tool isn't loaded. Check `/tools list` and make sure `research` is enabled, then restart. The conversation system prompt only lists tools actually resolved at startup, so if `research` is absent the model may narrate without calling.
 - **Buddy recommends stale/old products after `research`** — this happens when the synthesizer fills gaps from training data. The log line `citations: N kept, M stripped` is the smoking gun. Workarounds: (a) check for a `thin source pool` warning — if fewer than 3 sources landed, the answer is single-source-biased; (b) try a larger planner/synth model in `[research]`; (c) the JSON-output synthesizer (parked; see recent plan files) is the real fix.
 - **Research returns nothing and logs `NO_SOURCES`** — all fetches failed. Common causes: offline, all five DDG Lite results were JS-heavy SPAs that trafilatura couldn't extract, or the sensitive-term filter tripped on every result. Enable `--verbose` to see per-URL extract failures at DEBUG level.

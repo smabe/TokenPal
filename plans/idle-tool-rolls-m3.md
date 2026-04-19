@@ -210,9 +210,11 @@ def _m3_tool_spec(action: AbstractAction) -> dict[str, Any]:
 ```
 
 Excluded explicitly: `timer`, `open_app`, `do_math`, `system_info`,
-`list_processes`, `research`, `search_web`, `fetch_url`, `read_file`,
-`grep_codebase`, `git_*`. These are either side-effectful, privacy
-sensitive, or too heavyweight for an idle quip.
+`list_processes`, `research`, `fetch_url`, `read_file`, `grep_codebase`,
+`git_*`. These are either side-effectful, privacy sensitive, or too
+heavyweight for an idle quip. (`search_web` used to live in this list
+but was removed from the registry entirely — see `tokenpal/actions/
+research/__init__.py` for the rationale.)
 
 ## Prompt shape
 
