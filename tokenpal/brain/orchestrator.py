@@ -1798,7 +1798,11 @@ class Brain:
                     pass
             self._push_status()
 
-        log.debug("Research used model %s (%d tokens)", active_model, session.tokens_used)
+        synth_note = f", cloud synth={cloud_backend.model}" if cloud_backend else ""
+        log.debug(
+            "Research: planner model=%s, %d total tokens%s",
+            active_model, session.tokens_used, synth_note,
+        )
 
         summary = _format_research_summary(session)
         log_cb(f"= {summary}")

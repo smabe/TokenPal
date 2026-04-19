@@ -408,6 +408,8 @@ class ResearchRunner:
         budget = 1800 if self._synth_thinking else 700
 
         if self._cloud_backend is not None:
+            log.info("research synth: dispatching to cloud (%s)",
+                     self._cloud_backend.model)
             try:
                 response = await asyncio.to_thread(
                     self._cloud_backend.synthesize,
@@ -416,6 +418,8 @@ class ResearchRunner:
                     json_schema=SYNTH_SCHEMA,
                 )
                 self._log(f"  synth: cloud ({self._cloud_backend.model})")
+                log.info("research synth: cloud returned %d tokens in %.1fs",
+                         response.tokens_used, response.latency_ms / 1000.0)
             except CloudBackendError as e:
                 self._log(f"  synth: cloud failed ({e.kind}), falling back to local")
                 log.warning("cloud synth failed (%s): %s", e.kind, e)
@@ -426,6 +430,7 @@ class ResearchRunner:
                     response_format={"type": "json_schema", "schema": SYNTH_SCHEMA},
                 )
         else:
+            log.info("research synth: local (no cloud backend)")
             response = await self._llm.generate(
                 prompt,
                 max_tokens=budget,
