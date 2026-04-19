@@ -15,6 +15,7 @@ from tokenpal.llm.cloud_backend import (
     CloudBackend,
     CloudBackendError,
     _extract_text,
+    _harden_schema_for_anthropic,
     _map_stop_reason,
 )
 
@@ -85,15 +86,20 @@ def test_happy_path_returns_text_and_tokens(fake_anthropic: dict[str, Any]) -> N
     assert fake_anthropic["last_init_kwargs"]["timeout"] == 5.0
 
 
-def test_synthesize_passes_json_schema_as_output_config(fake_anthropic: dict[str, Any]) -> None:
+def test_synthesize_passes_json_schema_as_output_config(
+    fake_anthropic: dict[str, Any]
+) -> None:
     client = _FakeClient(result=_fake_message("{}"))
     fake_anthropic["client"] = client
     b = CloudBackend(api_key="sk-ant-test")
     schema = {"type": "object", "properties": {"kind": {"type": "string"}}}
     b.synthesize("prompt", max_tokens=100, json_schema=schema)
-    assert client.last_kwargs["output_config"] == {
-        "format": {"type": "json_schema", "schema": schema},
-    }
+    sent = client.last_kwargs["output_config"]
+    assert sent["format"]["type"] == "json_schema"
+    # Schema is hardened at send-time - properties preserved, additionalProperties
+    # added. See test_synthesize_hardens_schema_before_send for the invariant.
+    assert sent["format"]["schema"]["properties"] == schema["properties"]
+    assert sent["format"]["schema"]["additionalProperties"] is False
 
 
 def test_synthesize_omits_output_config_when_no_schema(fake_anthropic: dict[str, Any]) -> None:
@@ -188,6 +194,68 @@ def test_extract_text_joins_text_blocks_only() -> None:
 def test_extract_text_empty_content() -> None:
     assert _extract_text(SimpleNamespace(content=None)) == ""
     assert _extract_text(SimpleNamespace(content=[])) == ""
+
+
+def test_harden_schema_injects_additional_properties_false() -> None:
+    """Anthropic 400s a schema without additionalProperties on any object.
+    We must inject false on every nested object, including items + combinators.
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string"},
+            "picks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+            },
+            "verdict": {
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+            },
+        },
+        "required": ["kind"],
+    }
+    hardened = _harden_schema_for_anthropic(schema)
+    assert hardened["additionalProperties"] is False
+    assert hardened["properties"]["picks"]["items"]["additionalProperties"] is False
+    assert hardened["properties"]["verdict"]["additionalProperties"] is False
+    # Original schema must not be mutated
+    assert "additionalProperties" not in schema
+
+
+def test_harden_schema_preserves_explicit_true() -> None:
+    """If someone set additionalProperties: true, don't overwrite it."""
+    schema = {"type": "object", "additionalProperties": True}
+    assert _harden_schema_for_anthropic(schema)["additionalProperties"] is True
+
+
+def test_harden_schema_walks_anyof_combinators() -> None:
+    schema = {
+        "anyOf": [
+            {"type": "object", "properties": {"a": {"type": "string"}}},
+            {"type": "string"},
+        ],
+    }
+    hardened = _harden_schema_for_anthropic(schema)
+    assert hardened["anyOf"][0]["additionalProperties"] is False
+
+
+def test_synthesize_hardens_schema_before_send(fake_anthropic: dict[str, Any]) -> None:
+    """End-to-end: the schema sent to Anthropic has the required field."""
+    client = _FakeClient(result=_fake_message("{}"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test")
+    # Schema without additionalProperties - matches our local SYNTH_SCHEMA shape
+    b.synthesize("p", max_tokens=100, json_schema={
+        "type": "object",
+        "properties": {"x": {"type": "string"}},
+    })
+    sent = client.last_kwargs["output_config"]["format"]["schema"]
+    assert sent["additionalProperties"] is False
 
 
 def test_stop_reason_mapping() -> None:

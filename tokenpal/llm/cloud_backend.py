@@ -102,11 +102,13 @@ class CloudBackend:
         if json_schema is not None:
             # Constrain output to valid JSON matching the synth schema. This
             # replaces the fragile ``response_format`` advisory we use for
-            # Ollama; Anthropic enforces the schema server-side.
+            # Ollama; Anthropic enforces the schema server-side, but requires
+            # additionalProperties: false on every object - the local schema
+            # omits it because Ollama/llama-server don't require it.
             kwargs["output_config"] = {
                 "format": {
                     "type": "json_schema",
-                    "schema": json_schema,
+                    "schema": _harden_schema_for_anthropic(json_schema),
                 },
             }
 
@@ -173,6 +175,36 @@ class CloudBackend:
             latency_ms=latency_ms,
             finish_reason=_map_stop_reason(getattr(msg, "stop_reason", None)),
         )
+
+
+def _harden_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:
+    """Recursively add additionalProperties: false to every object schema.
+
+    Anthropic's output_config.format rejects object schemas that don't set
+    this explicitly. Our local SYNTH_SCHEMA omits it because Ollama and
+    llama-server both ignore the field. We harden a copy at send-time so
+    the local schema stays untouched.
+    """
+    if not isinstance(schema, dict):
+        return schema
+    out = dict(schema)
+    if out.get("type") == "object":
+        out.setdefault("additionalProperties", False)
+        props = out.get("properties")
+        if isinstance(props, dict):
+            out["properties"] = {
+                k: _harden_schema_for_anthropic(v) for k, v in props.items()
+            }
+    items = out.get("items")
+    if isinstance(items, dict):
+        out["items"] = _harden_schema_for_anthropic(items)
+    elif isinstance(items, list):
+        out["items"] = [_harden_schema_for_anthropic(i) for i in items]
+    for combinator in ("anyOf", "allOf", "oneOf"):
+        vals = out.get(combinator)
+        if isinstance(vals, list):
+            out[combinator] = [_harden_schema_for_anthropic(v) for v in vals]
+    return out
 
 
 def _extract_text(msg: Any) -> str:
