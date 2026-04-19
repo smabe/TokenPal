@@ -2081,8 +2081,9 @@ def _voice_off(
     config: TokenPalConfig | None = None,
 ) -> CommandResult:
     from tokenpal.tools.train_voice import activate_voice
+    was_finetuned = personality.is_finetuned
     personality.set_voice(None)
-    if llm and config:
+    if was_finetuned and llm and config:
         llm.set_model(config.llm.model_name)
     activate_voice("")
     return CommandResult("Back to default TokenPal.")
@@ -2103,12 +2104,13 @@ def _voice_switch(
     try:
         slug = slugify(args)
         profile = load_profile(slug, voices_dir)
+        was_finetuned = personality.is_finetuned
         personality.set_voice(profile)
         if on_voice_loaded:
             on_voice_loaded()
         if profile.finetuned_model and llm:
             llm.set_model(profile.finetuned_model)
-        elif llm and config:
+        elif was_finetuned and llm and config:
             llm.set_model(config.llm.model_name)
         activate_voice(slug)
         return CommandResult(f"Switched to {profile.character}.")

@@ -145,18 +145,31 @@ def test_info_custom_voice_finetuned(
     assert "fine-tuned" in r.message
 
 
-def test_off_resets_voice(
+def test_off_from_plain_voice_leaves_server_model_alone(
     personality, voices_dir, overlay, llm, config
 ) -> None:
     personality.voice_name = "Finn"
+    personality.is_finetuned = False
     with patch("tokenpal.tools.train_voice.activate_voice") as activate:
         r = _call(
             "off", personality, voices_dir, overlay, llm=llm, config=config,
         )
     personality.set_voice.assert_called_once_with(None)
-    llm.set_model.assert_called_once_with("gemma4")
+    llm.set_model.assert_not_called()
     activate.assert_called_once_with("")
     assert "default TokenPal" in r.message
+
+
+def test_off_from_finetuned_voice_reverts_to_base_model(
+    personality, voices_dir, overlay, llm, config
+) -> None:
+    personality.voice_name = "Jake"
+    personality.is_finetuned = True
+    with patch("tokenpal.tools.train_voice.activate_voice"):
+        _call(
+            "off", personality, voices_dir, overlay, llm=llm, config=config,
+        )
+    llm.set_model.assert_called_once_with("gemma4")
 
 
 def test_switch_missing_arg(personality, voices_dir, overlay) -> None:
@@ -169,9 +182,10 @@ def test_switch_unknown_voice(personality, voices_dir, overlay) -> None:
     assert "not found" in r.message
 
 
-def test_switch_loads_profile(
+def test_switch_loads_profile_without_clobbering_server_model(
     personality, voices_dir, overlay, llm, config, saved_profile,
 ) -> None:
+    personality.is_finetuned = False
     loaded: dict[str, bool] = {"called": False}
     def _on_loaded() -> None:
         loaded["called"] = True
@@ -185,15 +199,29 @@ def test_switch_loads_profile(
     called_profile = personality.set_voice.call_args.args[0]
     assert called_profile.character == "Finn"
     assert loaded["called"] is True
-    # non-finetuned profile → llm resets to base model
-    llm.set_model.assert_called_once_with("gemma4")
+    # Non-finetuned previous AND non-finetuned new: server's auto-adopted
+    # model must not be overwritten.
+    llm.set_model.assert_not_called()
     activate.assert_called_once_with("finn")
     assert "Switched to Finn" in r.message
+
+
+def test_switch_from_finetuned_to_plain_reverts_to_base_model(
+    personality, voices_dir, overlay, llm, config, saved_profile,
+) -> None:
+    personality.is_finetuned = True
+    with patch("tokenpal.tools.train_voice.activate_voice"):
+        _call(
+            "switch finn", personality, voices_dir, overlay,
+            llm=llm, config=config,
+        )
+    llm.set_model.assert_called_once_with("gemma4")
 
 
 def test_switch_finetuned_profile_swaps_model(
     personality, voices_dir, overlay, llm, config, finetuned_profile,
 ) -> None:
+    personality.is_finetuned = False
     with patch("tokenpal.tools.train_voice.activate_voice"):
         _call(
             "switch jake", personality, voices_dir, overlay,
