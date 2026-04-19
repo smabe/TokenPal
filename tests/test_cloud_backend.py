@@ -110,6 +110,37 @@ def test_synthesize_omits_output_config_when_no_schema(fake_anthropic: dict[str,
     assert "output_config" not in client.last_kwargs
 
 
+def test_synthesize_haiku_does_not_send_thinking(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    """Haiku 4.5 errors on thinking param - must be absent."""
+    client = _FakeClient(result=_fake_message("{}"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    b.synthesize("p", max_tokens=500)
+    assert "thinking" not in client.last_kwargs
+
+
+def test_synthesize_sonnet_enables_adaptive_thinking(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("{}"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    b.synthesize("p", max_tokens=500)
+    assert client.last_kwargs["thinking"] == {"type": "adaptive"}
+
+
+def test_synthesize_opus_enables_adaptive_thinking(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("{}"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-opus-4-7")
+    b.synthesize("p", max_tokens=500)
+    assert client.last_kwargs["thinking"] == {"type": "adaptive"}
+
+
 def test_auth_error_raises_cloud_backend_error_with_auth_kind(
     fake_anthropic: dict[str, Any],
 ) -> None:

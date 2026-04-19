@@ -422,8 +422,12 @@ class ResearchRunner:
         )
         # Thinking can burn ~900 tokens before the JSON starts; llama-server
         # counts reasoning tokens against max_tokens, so give the synth a
-        # bigger budget to avoid truncating the picks list.
+        # bigger budget to avoid truncating the picks list. On the cloud path
+        # Sonnet/Opus adaptive-thinking tokens also count against max_tokens,
+        # so we give cloud a larger ceiling - typical Haiku output is
+        # ~300 tokens, but Sonnet with thinking can use 1-2K on hard syntheses.
         budget = 1800 if self._synth_thinking else 700
+        cloud_budget = 4000
 
         if self._cloud_backend is not None:
             log.info("research synth: dispatching to cloud (%s)",
@@ -432,7 +436,7 @@ class ResearchRunner:
                 response = await asyncio.to_thread(
                     self._cloud_backend.synthesize,
                     prompt,
-                    max_tokens=budget,
+                    max_tokens=cloud_budget,
                     json_schema=SYNTH_SCHEMA,
                 )
                 self._log(f"  synth: cloud ({self._cloud_backend.model})")
@@ -774,9 +778,9 @@ For comparison / "best X" / "which X should I buy" questions, emit:
 {{
   "kind": "comparison",
   "picks": [
-    {{"name": "<brand + model>", "reason": "<one-line why>", "citation": <N>}}
+    {{"name": "<brand + model>", "reason": "<1-2 sentence why, naming specifics>", "citation": <N>}}
   ],
-  "verdict": {{"text": "<one-line winner>", "citation": <N>}}
+  "verdict": {{"text": "<2-3 sentences, name the winner and the key tradeoff>", "citation": <N>}}
 }}
 
 Rules for comparison:
@@ -784,10 +788,12 @@ Rules for comparison:
 - BEFORE picking, scan the excerpts for product names. If fewer than 2
   specific product names actually appear in the text, DO NOT invent picks
   from memory. Use the factual shape instead.
+- Verdict should name the winner and explain WHY it won vs the runner-up
+  (not just "X wins" - call out the specific tradeoff).
 
 For factual / explanatory questions OR when sources lack the specifics the
 question asks for, emit:
-{{"kind": "factual", "answer": "<under 6 sentences>", "citations": [<N>, ...]}}
+{{"kind": "factual", "answer": "<3-8 sentences>", "citations": [<N>, ...]}}
 
 Use the factual shape when:
 - The question assumes context the sources don't address (e.g. a specific

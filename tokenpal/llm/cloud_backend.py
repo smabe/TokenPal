@@ -31,6 +31,15 @@ ALLOWED_MODELS: tuple[str, ...] = (
     "claude-opus-4-7",
 )
 
+# Models that support adaptive thinking. Haiku 4.5 errors if sent thinking
+# params; Sonnet 4.6 and Opus 4.7 both support it and benefit from it on
+# synthesis tasks (deeper reasoning, better pick justifications, more
+# nuanced verdicts). See shared/models.md in the claude-api skill.
+_THINKING_MODELS: frozenset[str] = frozenset({
+    "claude-sonnet-4-6",
+    "claude-opus-4-7",
+})
+
 
 class CloudBackendError(Exception):
     """Raised for any failure calling the cloud backend.
@@ -99,6 +108,11 @@ class CloudBackend:
             "max_tokens": max_tokens,
             "messages": [{"role": "user", "content": prompt}],
         }
+        if self.model in _THINKING_MODELS:
+            # Adaptive thinking lets the model allocate reasoning budget
+            # dynamically - better synth quality on nuanced questions.
+            # Haiku 4.5 errors if sent thinking params, so only on Sonnet/Opus.
+            kwargs["thinking"] = {"type": "adaptive"}
         if json_schema is not None:
             # Constrain output to valid JSON matching the synth schema. This
             # replaces the fragile ``response_format`` advisory we use for
