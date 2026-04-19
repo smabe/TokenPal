@@ -413,6 +413,83 @@ class MemoryStore:
             self._conn.commit()
 
     # ------------------------------------------------------------------
+    # End-of-day summary tracking — see plans/buddy-utility-wedges.md
+    # ------------------------------------------------------------------
+
+    def has_shown_eod(self, date_str: str) -> bool:
+        """True when we've already fired an EOD summary bubble for date_str."""
+        if not self._enabled or not self._conn:
+            return False
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT 1 FROM observations "
+                "WHERE sense_name = 'system' AND event_type = 'eod_shown' "
+                "AND summary = ? LIMIT 1",
+                (date_str,),
+            ).fetchone()
+        return row is not None
+
+    def mark_eod_shown(self, date_str: str) -> None:
+        """Record that we displayed the EOD bubble for date_str."""
+        self.record_observation("system", "eod_shown", date_str)
+
+    def get_day_digest(self, date_str: str) -> dict[str, Any]:
+        """Per-date rollup for the EOD summarizer.
+
+        Returns top apps by visit count, session count + total minutes,
+        idle_return count, and the most recent session summary text (if any)
+        landed during the date.  Empty apps list means nothing to report.
+        """
+        empty: dict[str, Any] = {
+            "date": date_str,
+            "apps": [],
+            "session_count": 0,
+            "active_minutes": 0,
+            "idle_returns": 0,
+            "last_summary": None,
+        }
+        if not self._enabled or not self._conn:
+            return empty
+        with self._lock:
+            app_rows = self._conn.execute(
+                "SELECT summary, COUNT(*) FROM observations "
+                "WHERE event_type = 'app_switch' "
+                "AND date(timestamp, 'unixepoch', 'localtime') = ? "
+                "GROUP BY summary ORDER BY COUNT(*) DESC LIMIT 5",
+                (date_str,),
+            ).fetchall()
+            session_rows = self._conn.execute(
+                "SELECT session_id, MIN(timestamp), MAX(timestamp) "
+                "FROM observations "
+                "WHERE date(timestamp, 'unixepoch', 'localtime') = ? "
+                "GROUP BY session_id",
+                (date_str,),
+            ).fetchall()
+            idle_row = self._conn.execute(
+                "SELECT COUNT(*) FROM observations "
+                "WHERE event_type = 'idle_return' "
+                "AND date(timestamp, 'unixepoch', 'localtime') = ?",
+                (date_str,),
+            ).fetchone()
+            summary_row = self._conn.execute(
+                "SELECT summary FROM session_summaries "
+                "WHERE date(timestamp, 'unixepoch', 'localtime') = ? "
+                "ORDER BY timestamp DESC LIMIT 1",
+                (date_str,),
+            ).fetchone()
+        active_min = int(
+            sum((end - start) / 60 for _, start, end in session_rows if end > start)
+        )
+        return {
+            "date": date_str,
+            "apps": [(str(r[0]), int(r[1])) for r in app_rows],
+            "session_count": len(session_rows),
+            "active_minutes": active_min,
+            "idle_returns": int(idle_row[0]) if idle_row else 0,
+            "last_summary": str(summary_row[0]) if summary_row else None,
+        }
+
+    # ------------------------------------------------------------------
     # LLM throughput estimator persistence — see plans/gpu-scaling.md
     # ------------------------------------------------------------------
 

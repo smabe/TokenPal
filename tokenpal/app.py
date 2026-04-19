@@ -544,6 +544,27 @@ def main() -> None:
 
         return overlay.open_selection_modal("Tools", groups, on_save)
 
+    def _cmd_summary(args: str) -> CommandResult:
+        if brain._loop is None:
+            return CommandResult("/summary: brain loop not running yet.")
+        which = (args.strip().lower() or "yesterday")
+        if which not in ("today", "yesterday"):
+            return CommandResult("Usage: /summary [today|yesterday]")
+        future = asyncio.run_coroutine_threadsafe(
+            brain.run_eod_summary(which), brain._loop
+        )
+        try:
+            message = future.result(timeout=30)
+        except TimeoutError:
+            return CommandResult("/summary: LLM timed out.")
+        except Exception as e:
+            log.exception("/summary failed")
+            return CommandResult(f"/summary failed: {e}")
+        if message is None:
+            # Bubble already emitted.
+            return CommandResult("")
+        return CommandResult(message)
+
     def _cmd_intent(args: str) -> CommandResult:
         from tokenpal.brain.intent import IntentError
 
@@ -969,6 +990,7 @@ def main() -> None:
     dispatcher.register("agent", _cmd_agent)
     dispatcher.register("research", _cmd_research)
     dispatcher.register("intent", _cmd_intent)
+    dispatcher.register("summary", _cmd_summary)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

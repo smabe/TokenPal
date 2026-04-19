@@ -22,6 +22,7 @@ from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
+from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
@@ -322,6 +323,20 @@ class Brain:
         )
         self._last_app_for_intent: str = ""
 
+        # End-of-day summary — fires once per local date on first boot of
+        # the day (async post-startup) and on /summary command.
+        self._eod: EODSummary | None = (
+            EODSummary(
+                memory=self._memory,
+                llm=self._llm,
+                personality=self._personality,
+                target_latency_s=self._budgets.observation,
+                min_tokens=self._min_tokens.observation,
+            )
+            if self._memory is not None and self._memory.enabled
+            else None
+        )
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -360,7 +375,52 @@ class Brain:
         self._load_previous_session_note()
         self._start_session_summarizer()
 
+        # EOD: if yesterday has unfrozen activity and we haven't shown the
+        # bubble yet, fire it off-thread. Startup should not block on it.
+        self._maybe_fire_pending_eod()
+
         await self._run_loop()
+
+    def _maybe_fire_pending_eod(self) -> None:
+        """Spawn the EOD bubble for yesterday if it hasn't been shown yet."""
+        if self._eod is None or self._memory is None:
+            return
+        date_str = yesterday_str()
+        if self._memory.has_shown_eod(date_str):
+            return
+        asyncio.create_task(self._emit_eod_bubble(date_str, mark_shown=True))
+
+    async def _emit_eod_bubble(
+        self, date_str: str, *, mark_shown: bool
+    ) -> bool:
+        """Render and emit an EOD bubble for date_str. Returns True on emit."""
+        if self._eod is None or self._memory is None:
+            return False
+        line = await self._eod.generate(date_str)
+        if not line:
+            log.debug("EOD: nothing to say for %s", date_str)
+            return False
+        log.info("TokenPal (EOD %s): %s", date_str, line)
+        self._emit_comment(line, acknowledge=True)
+        self._recent_outputs.append(line)
+        if mark_shown:
+            self._memory.mark_eod_shown(date_str)
+        return True
+
+    async def run_eod_summary(self, which: str = "yesterday") -> str | None:
+        """Public async entry for the /summary slash command.
+
+        ``which`` is 'today' or 'yesterday'. Returns a status line for the
+        command output. Does NOT mark the day as shown — the slash command
+        is on-demand and may be invoked multiple times.
+        """
+        if self._eod is None:
+            return "/summary needs memory enabled."
+        date_str = today_str() if which == "today" else yesterday_str()
+        emitted = await self._emit_eod_bubble(date_str, mark_shown=False)
+        if emitted:
+            return None
+        return f"Nothing to summarize for {date_str}."
 
     def _load_previous_session_note(self) -> None:
         """Pull the most recent session summary within the lookback window."""
