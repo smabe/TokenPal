@@ -19,7 +19,9 @@ from tokenpal.llm.cloud_backend import (
 )
 
 
-def _fake_message(text: str, stop_reason: str = "end_turn", output_tokens: int = 42) -> SimpleNamespace:
+def _fake_message(
+    text: str, stop_reason: str = "end_turn", output_tokens: int = 42,
+) -> SimpleNamespace:
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
         stop_reason=stop_reason,
@@ -69,7 +71,9 @@ def test_allowlist_is_frozen() -> None:
 
 
 def test_happy_path_returns_text_and_tokens(fake_anthropic: dict[str, Any]) -> None:
-    fake_anthropic["client"] = _FakeClient(result=_fake_message('{"kind":"factual"}', output_tokens=17))
+    fake_anthropic["client"] = _FakeClient(
+        result=_fake_message('{"kind":"factual"}', output_tokens=17),
+    )
     b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5", timeout_s=5.0)
     resp = b.synthesize("prompt", max_tokens=500)
     assert resp.text == '{"kind":"factual"}'
@@ -100,7 +104,9 @@ def test_synthesize_omits_output_config_when_no_schema(fake_anthropic: dict[str,
     assert "output_config" not in client.last_kwargs
 
 
-def test_auth_error_raises_cloud_backend_error_with_auth_kind(fake_anthropic: dict[str, Any]) -> None:
+def test_auth_error_raises_cloud_backend_error_with_auth_kind(
+    fake_anthropic: dict[str, Any],
+) -> None:
     import anthropic
     err = anthropic.AuthenticationError.__new__(anthropic.AuthenticationError)
     Exception.__init__(err, "invalid api key")

@@ -8,7 +8,6 @@ touching the user's real ~/.tokenpal.
 from __future__ import annotations
 
 import json
-import re
 import stat
 from pathlib import Path
 from typing import Any

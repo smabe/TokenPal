@@ -109,6 +109,49 @@ picks from memory — emit `kind=factual` describing what the sources
 cover and what the user could clarify. This is the anti-hallucination
 fence.
 
+### Cloud synth (opt-in Anthropic-backed path)
+
+When `[cloud_llm] enabled = true` in `config.toml` AND an Anthropic API
+key is stored at `~/.tokenpal/.secrets.json` (0o600), the synth stage
+routes through `tokenpal/llm/cloud_backend.py:CloudBackend` instead of
+the local LLM. Everything else in the pipeline (plan, search, fetch,
+validate, render) is unchanged - the cloud path is a drop-in replacement
+for stage 4 only.
+
+**Enable via slash command, not by editing TOML:**
+```
+/cloud                     # status + fingerprint
+/cloud enable <api-key>    # stores key, flips [cloud_llm] enabled = true
+/cloud disable             # flip off, key retained
+/cloud forget              # wipe key + disable
+/cloud model <id>          # haiku-4-5 (default) | sonnet-4-6 | opus-4-7
+```
+
+**What crosses the wire:** only the `question` (already in the user's
+chat log) and `sources_block` (public article text from the search
+pool, already run through `contains_sensitive_content_term`). No
+observations, app names, memory rows, voice profile, or conversation
+history ever touch the cloud backend.
+
+**Fallback is silent.** Any `CloudBackendError` (auth, rate limit,
+network, timeout, bad request, or `no_credit` for an unfunded
+workspace) logs a warning and falls back to local synth with identical
+prompt + budget + schema. The user sees a one-line
+`synth: cloud failed (<kind>), falling back to local` in the research
+log; the answer still arrives.
+
+**Schema enforcement.** `CloudBackend.synthesize` sends the
+`SYNTH_SCHEMA` via `output_config.format` so Anthropic enforces valid
+JSON server-side. This replaces the fragile `response_format` advisory
+Ollama ignores - the cloud path almost never hits the prose-fallback
+branch of `_parse_synth_json`.
+
+**Cost.** Haiku 4.5 default runs ~$0.024 per research call at ~16K
+input + ~1.5K output (3x cheaper than Sonnet, 5x cheaper than Opus).
+
+See `plans/shipped/claude-api-research-synth.md` for the full
+design rationale.
+
 ### 5. Validate + render
 
 Structured output from synth goes through `_finalize_answer`:
