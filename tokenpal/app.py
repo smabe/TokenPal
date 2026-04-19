@@ -452,6 +452,8 @@ def main() -> None:
                 try:
                     set_max_persisted(new_max)
                     cl.max_persisted = new_max
+                    if memory is not None and cl.persist:
+                        memory.set_chat_log_max_persisted(new_max)
                     overlay.log_buddy_message(
                         f"/options: saved max_persisted = {new_max}."
                     )
@@ -1165,21 +1167,19 @@ def main() -> None:
     overlay.set_input_callback(_on_user_input)
 
     # Chat-log persistence: write-through on every buddy/user line, plus a
-    # clear hook for Ctrl+L. Reads cfg.chat_log.max_persisted at call time so
-    # a live /options save takes effect without a restart.
+    # clear hook for Ctrl+L. MemoryStore holds the cap so the hot path
+    # doesn't pay a config lookup or SELECT COUNT per insert.
     if memory is not None:
+        memory.set_chat_log_max_persisted(
+            config.chat_log.max_persisted if config.chat_log.persist else 0
+        )
         _overlay_setter = getattr(overlay, "set_chat_persist_callback", None)
         if callable(_overlay_setter):
             def _persist_chat(
                 speaker: str, text: str, url: str | None,
             ) -> None:
-                if not config.chat_log.persist:
-                    return
                 memory.record_chat_entry(
-                    speaker=speaker,
-                    text=text,
-                    url=url,
-                    max_persisted=config.chat_log.max_persisted,
+                    speaker=speaker, text=text, url=url,
                 )
 
             def _clear_chat() -> None:

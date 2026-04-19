@@ -614,6 +614,14 @@ class TokenPalApp(App[None]):
 
     _MAX_CHAT_LOG_LINES = 500
 
+    @staticmethod
+    def _format_chat_ts(ts_val: float, today_ymd: str) -> str:
+        """Short time-of-day for today, ``Mon DD HH:MM`` prefix otherwise."""
+        dt = datetime.fromtimestamp(ts_val)
+        if dt.strftime("%Y%m%d") == today_ymd:
+            return dt.strftime("%I:%M %p")
+        return dt.strftime("%b %d %I:%M %p")
+
     def _compose_log_line(
         self,
         name: str,
@@ -634,18 +642,64 @@ class TokenPalApp(App[None]):
             )
         return line
 
+    def _trim_chat_log_lines(self) -> None:
+        """Trim _chat_log_lines to the cap and garbage-collect _link_urls.
+
+        URL indices embedded in retained lines are rewritten in-place so
+        _link_urls doesn't grow unbounded over a long session.
+        """
+        lines = self._chat_log_lines
+        if len(lines) <= self._MAX_CHAT_LOG_LINES:
+            return
+        del lines[: len(lines) - self._MAX_CHAT_LOG_LINES]
+        self._rebuild_link_urls()
+
+    def _rebuild_link_urls(self) -> None:
+        """Re-walk surviving lines, re-number any @click indices, and drop
+        unreferenced URLs. Cheap — called only on trim."""
+        lines = self._chat_log_lines
+        if not self._link_urls:
+            return
+        prefix = '@click=app.open_chat_link("'
+        new_urls: list[str] = []
+        for i, line in enumerate(lines):
+            start = 0
+            while True:
+                at = line.find(prefix, start)
+                if at == -1:
+                    break
+                idx_start = at + len(prefix)
+                idx_end = line.find('"', idx_start)
+                if idx_end == -1:
+                    break
+                try:
+                    old_idx = int(line[idx_start:idx_end])
+                except ValueError:
+                    start = idx_end + 1
+                    continue
+                if 0 <= old_idx < len(self._link_urls):
+                    new_idx = len(new_urls)
+                    new_urls.append(self._link_urls[old_idx])
+                    line = (
+                        line[:idx_start] + str(new_idx) + line[idx_end:]
+                    )
+                    lines[i] = line
+                    start = idx_start + len(str(new_idx)) + 1
+                else:
+                    start = idx_end + 1
+        self._link_urls = new_urls
+
     def _append_log(
         self, name: str, text: str, *, markup: bool = False, url: str | None = None,
     ) -> None:
-        ts_label = datetime.now().strftime("%I:%M %p")
+        today = datetime.now().strftime("%Y%m%d")
+        ts_label = self._format_chat_ts(datetime.now().timestamp(), today)
         line = self._compose_log_line(
             name, text, markup=markup, url=url, ts_label=ts_label,
         )
-        lines = self._chat_log_lines
-        lines.append(line)
-        if len(lines) > self._MAX_CHAT_LOG_LINES:
-            del lines[: len(lines) - self._MAX_CHAT_LOG_LINES]
-        self._chat_log_widget.update("\n".join(lines))
+        self._chat_log_lines.append(line)
+        self._trim_chat_log_lines()
+        self._chat_log_widget.update("\n".join(self._chat_log_lines))
         self._chat_log_scroll.scroll_end(animate=False)
         cb = self._overlay._chat_persist_callback
         if cb is not None:
@@ -766,23 +820,18 @@ class TokenPalApp(App[None]):
         if len(entries) > self._MAX_CHAT_LOG_LINES:
             entries = entries[-self._MAX_CHAT_LOG_LINES:]
         today = datetime.now().strftime("%Y%m%d")
-        rendered: list[str] = []
-        for ts_val, speaker, text, url in entries:
-            dt = datetime.fromtimestamp(ts_val)
-            if dt.strftime("%Y%m%d") == today:
-                ts_label = dt.strftime("%I:%M %p")
-            else:
-                ts_label = dt.strftime("%b %d %I:%M %p")
-            rendered.append(
-                self._compose_log_line(
-                    speaker, text, markup=False, url=url, ts_label=ts_label,
-                )
+        rendered = [
+            self._compose_log_line(
+                speaker,
+                text,
+                markup=False,
+                url=url,
+                ts_label=self._format_chat_ts(ts_val, today),
             )
+            for ts_val, speaker, text, url in entries
+        ]
         self._chat_log_lines[:0] = rendered
-        if len(self._chat_log_lines) > self._MAX_CHAT_LOG_LINES:
-            del self._chat_log_lines[
-                : len(self._chat_log_lines) - self._MAX_CHAT_LOG_LINES
-            ]
+        self._trim_chat_log_lines()
         self._chat_log_widget.update("\n".join(self._chat_log_lines))
         self._chat_log_scroll.scroll_end(animate=False)
 

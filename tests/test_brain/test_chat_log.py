@@ -31,12 +31,11 @@ def test_chat_log_table_exists_after_setup(tmp_path: Path) -> None:
 def test_round_trip_insert_and_tail(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "m.db")
     store.setup()
+    store.set_chat_log_max_persisted(10)
     try:
-        store.record_chat_entry("You", "hello", None, max_persisted=10)
-        store.record_chat_entry("Buddy", "hi there", None, max_persisted=10)
-        store.record_chat_entry(
-            "Buddy", "found it", "https://example.com/a", max_persisted=10,
-        )
+        store.record_chat_entry("You", "hello")
+        store.record_chat_entry("Buddy", "hi there")
+        store.record_chat_entry("Buddy", "found it", "https://example.com/a")
         rows = store.get_recent_chat_entries(10)
     finally:
         store.teardown()
@@ -52,9 +51,10 @@ def test_round_trip_insert_and_tail(tmp_path: Path) -> None:
 def test_clear_wipes_all_rows(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "m.db")
     store.setup()
+    store.set_chat_log_max_persisted(10)
     try:
         for i in range(5):
-            store.record_chat_entry("You", f"msg {i}", None, max_persisted=10)
+            store.record_chat_entry("You", f"msg {i}")
         assert len(store.get_recent_chat_entries(10)) == 5
         store.clear_chat_log()
         assert store.get_recent_chat_entries(10) == []
@@ -68,9 +68,10 @@ def test_trim_on_insert_enforces_cap(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "m.db")
     store.setup()
     cap = 10
+    store.set_chat_log_max_persisted(cap)
     try:
         for i in range(cap * 2):
-            store.record_chat_entry("You", f"msg {i}", None, max_persisted=cap)
+            store.record_chat_entry("You", f"msg {i}")
         rows = store.get_recent_chat_entries(100)
     finally:
         store.teardown()
@@ -85,10 +86,9 @@ def test_sql_injection_safe(tmp_path: Path) -> None:
     """Parameterized placeholders — a malicious-looking text stays data."""
     store = MemoryStore(tmp_path / "m.db")
     store.setup()
+    store.set_chat_log_max_persisted(10)
     try:
-        store.record_chat_entry(
-            "You", "1); DROP TABLE chat_log; --", None, max_persisted=10,
-        )
+        store.record_chat_entry("You", "1); DROP TABLE chat_log; --")
         rows = store.get_recent_chat_entries(10)
     finally:
         store.teardown()
@@ -106,17 +106,36 @@ def test_sql_injection_safe(tmp_path: Path) -> None:
 def test_max_persisted_zero_skips_insert(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "m.db")
     store.setup()
+    store.set_chat_log_max_persisted(0)
     try:
-        store.record_chat_entry("You", "skipped", None, max_persisted=0)
+        store.record_chat_entry("You", "skipped")
         rows = store.get_recent_chat_entries(10)
     finally:
         store.teardown()
     assert rows == []
 
 
+def test_count_survives_restart(tmp_path: Path) -> None:
+    """In-memory counter is primed from SELECT COUNT(*) on setup, so a
+    fresh store instance keeps trim semantics intact."""
+    db = tmp_path / "m.db"
+    first = MemoryStore(db)
+    first.setup()
+    first.set_chat_log_max_persisted(3)
+    for i in range(5):
+        first.record_chat_entry("You", f"msg {i}")
+    first.teardown()
+
+    second = MemoryStore(db)
+    second.setup()
+    assert second._chat_log_count == len(second.get_recent_chat_entries(100))
+    second.teardown()
+
+
 def test_disabled_store_is_noop(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path / "m.db", enabled=False)
     store.setup()
-    store.record_chat_entry("You", "hello", None, max_persisted=10)
+    store.set_chat_log_max_persisted(10)
+    store.record_chat_entry("You", "hello")
     assert store.get_recent_chat_entries(10) == []
     store.clear_chat_log()

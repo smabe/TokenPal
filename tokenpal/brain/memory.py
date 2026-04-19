@@ -178,6 +178,10 @@ class MemoryStore:
         self._lock = threading.Lock()
         self._conn: sqlite3.Connection | None = None
         self._callback_cache: list[str] | None = None
+        # chat_log cap + in-memory row count. Loaded from SQLite on setup so
+        # per-insert writes don't pay a SELECT COUNT every call.
+        self._chat_log_max_persisted: int = 200
+        self._chat_log_count: int = 0
 
     @property
     def enabled(self) -> bool:
@@ -216,6 +220,13 @@ class MemoryStore:
 
         self._prune()
         self.aggregate_daily_summaries()
+        # Prime the in-memory chat_log counter once so record_chat_entry
+        # doesn't run SELECT COUNT(*) on every insert.
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM chat_log"
+            ).fetchone()
+        self._chat_log_count = int(row[0]) if row else 0
         log.info("MemoryStore ready — session %s, db at %s", self._session_id, self._db_path)
 
     def teardown(self) -> None:
@@ -283,20 +294,25 @@ class MemoryStore:
     # Chat log — UI-transcript persistence for cross-restart recall
     # ------------------------------------------------------------------
 
+    def set_chat_log_max_persisted(self, n: int) -> None:
+        """Update the in-memory cap used by ``record_chat_entry``. Callers
+        pass 0 to disable persistence without dropping existing rows."""
+        self._chat_log_max_persisted = max(0, int(n))
+
     def record_chat_entry(
         self,
         speaker: str,
         text: str,
         url: str | None = None,
-        max_persisted: int = 200,
     ) -> None:
-        """Insert one chat-log row. Trims when count exceeds max_persisted * 1.5
-        so the delete doesn't run on every insert. Parameterized — no SQL
-        injection even if speaker/text/url contain arbitrary characters.
+        """Insert one chat-log row. Trims when the in-memory count exceeds
+        ``max_persisted * 1.5`` so DELETE doesn't run on every insert.
+        Parameterized — no SQL injection even for arbitrary speaker/text/url.
         """
         if not self._enabled or not self._conn:
             return
-        if max_persisted <= 0:
+        cap = self._chat_log_max_persisted
+        if cap <= 0:
             return
         with self._lock:
             self._conn.execute(
@@ -304,17 +320,16 @@ class MemoryStore:
                 "VALUES (?, ?, ?, ?)",
                 (time.time(), speaker, text, url),
             )
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM chat_log"
-            ).fetchone()
-            count = int(row[0]) if row else 0
-            if count > int(max_persisted * 1.5):
+            self._chat_log_count += 1
+            if self._chat_log_count > int(cap * 1.5):
+                excess = self._chat_log_count - cap
                 self._conn.execute(
                     "DELETE FROM chat_log WHERE id IN ("
                     "SELECT id FROM chat_log ORDER BY id ASC LIMIT ?"
                     ")",
-                    (count - int(max_persisted),),
+                    (excess,),
                 )
+                self._chat_log_count = cap
             self._conn.commit()
 
     def get_recent_chat_entries(
@@ -343,6 +358,7 @@ class MemoryStore:
         with self._lock:
             self._conn.execute("DELETE FROM chat_log")
             self._conn.commit()
+        self._chat_log_count = 0
 
     # ------------------------------------------------------------------
     # Session summaries — see plans/buddy-utility-wedges.md
