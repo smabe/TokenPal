@@ -156,6 +156,20 @@ enabled = true
 interval_s = 300      # 5min — cache-friendly + bounded data loss on crash
 max_lookback_h = 24   # don't surface notes older than this on boot
 
+[rage_detect]
+# Post-burst-pause-then-distraction detector (stuck?). Opt-in. Uses only
+# typing_cadence + app_awareness. Requires `[senses] typing_cadence = true`
+# to have any signal.
+enabled = false
+distraction_apps = [
+    "twitter", "x", "reddit", "youtube", "tiktok",
+    "instagram", "facebook",
+]
+rage_post_pause_min_s = 60
+rage_post_pause_max_s = 180
+rage_burst_recency_s = 600
+cooldown_s = 600
+
 [intent]
 # /intent "<free text>" sets an ambient goal. The buddy watches for drift
 # into a distraction app and fires a single nudge after drift_min_dwell_s

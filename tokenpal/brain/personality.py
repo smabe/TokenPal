@@ -459,6 +459,34 @@ They have been on {app_name} for about {dwell_minutes:.0f} minutes.
 Your line:"""
 
 
+_RAGE_CHECK_TEMPLATE = """\
+{identity}
+
+The user was typing fast, then stopped, then switched to {app_name}. This
+often means they hit a wall on what they were working on. Give ONE short
+in-character check-in. No scolding, no questions about what broke, no
+accusatory phrasing. Something that just acknowledges you noticed, with
+the warmth of "hey, you okay?" filtered through your voice.
+
+{mood_line}
+
+Examples of your voice:
+{examples}
+
+{voice_reminder}Your line:"""
+
+
+_FINETUNED_RAGE_CHECK_TEMPLATE = """\
+Rules:
+1. ONE short in-character check-in.
+2. Warm but not saccharine. No questions. No scolding.
+3. Acknowledge the context — they were working, hit a wall, bailed to {app_name}.
+
+{mood_line}
+
+Your line:"""
+
+
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
 
@@ -830,6 +858,23 @@ class PersonalityEngine:
             intent=intent_text,
             app_name=app_name,
             dwell_minutes=dwell_minutes,
+            mood_line=self._mood_line(),
+            examples=self._sample_examples(),
+            voice_reminder=self._voice_reminder(),
+        )
+
+    def build_rage_check_prompt(self, app_name: str) -> str:
+        """Prompt for the frustration/rage check-in. See
+        plans/buddy-utility-wedges.md.
+        """
+        if self.is_finetuned:
+            return _FINETUNED_RAGE_CHECK_TEMPLATE.format(
+                app_name=app_name,
+                mood_line=self._mood_line(),
+            )
+        return _RAGE_CHECK_TEMPLATE.format(
+            identity=self._identity_block(),
+            app_name=app_name,
             mood_line=self._mood_line(),
             examples=self._sample_examples(),
             voice_reminder=self._voice_reminder(),

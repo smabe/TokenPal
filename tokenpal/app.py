@@ -217,6 +217,7 @@ def main() -> None:
         min_tokens_per_path=config.llm.min_tokens_per_path,
         session_summary_config=config.session_summary,
         intent_config=config.intent,
+        rage_detect_config=config.rage_detect,
     )
 
     # Load voice-specific buddy art into the overlay

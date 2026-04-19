@@ -26,6 +26,7 @@ from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
+from tokenpal.brain.rage_detector import RageDetector, RageSignal
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
@@ -38,6 +39,7 @@ from tokenpal.config.schema import (
     IdleToolsConfig,
     IntentConfig,
     MinTokensPerPathConfig,
+    RageDetectConfig,
     ResearchConfig,
     SessionSummaryConfig,
     TargetLatencyConfig,
@@ -214,6 +216,7 @@ class Brain:
         min_tokens_per_path: MinTokensPerPathConfig | None = None,
         session_summary_config: SessionSummaryConfig | None = None,
         intent_config: IntentConfig | None = None,
+        rage_detect_config: RageDetectConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -336,6 +339,11 @@ class Brain:
             if self._memory is not None and self._memory.enabled
             else None
         )
+
+        # Rage / frustration detector (opt-in). Consumes typing_cadence +
+        # app_awareness readings only.
+        self._rage_config: RageDetectConfig = rage_detect_config or RageDetectConfig()
+        self._rage: RageDetector = RageDetector(config=self._rage_config)
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -537,17 +545,23 @@ class Brain:
                 # its dwell timer stays accurate.
                 self._sync_intent_app()
 
+                # Rage detector (opt-in) — bypass the comment gate since it
+                # fires rarely and the user explicitly enabled the feature.
+                rage = self._rage.ingest(readings)
+
                 # High-signal events bypass the normal gate
                 has_urgent = any(
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
-                can_comment = has_urgent or self._should_comment()
+                can_comment = rage is not None or has_urgent or self._should_comment()
                 drift = (
                     self._intent.check_drift() if self._intent is not None else None
                 )
                 emitted = False
-                if drift is not None and can_comment:
+                if rage is not None:
+                    emitted = await self._generate_rage_check(rage)
+                elif drift is not None and can_comment:
                     emitted = await self._generate_drift_nudge(drift)
                 elif can_comment:
                     emitted = await self._generate_comment(snapshot)
@@ -935,6 +949,51 @@ class Brain:
             return False
         except Exception:
             log.exception("Drift nudge generation failed")
+            self._push_status()
+            return False
+
+    async def _generate_rage_check(self, rage: RageSignal) -> bool:
+        """Emit a single in-character check-in after a rage-quit pattern."""
+        snapshot = self._context.snapshot()
+        if self._personality.check_sensitive_app(snapshot):
+            # Never trigger a mental-health-adjacent nudge into a sensitive
+            # app context.
+            self._rage.mark_emitted()  # still start cooldown so we don't loop
+            return False
+        prompt = self._personality.build_rage_check_prompt(rage.app_name)
+        try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            log.debug(
+                "Generating rage check: app=%r, pause=%.0fs",
+                rage.app_name,
+                rage.pause_s,
+            )
+            response = await self._llm.generate(
+                prompt,
+                target_latency_s=self._budgets.observation,
+                min_tokens=self._min_tokens.observation,
+            )
+            self._push_status()
+            filtered = self._personality.filter_response(response.text)
+            if filtered and self._is_near_duplicate(filtered):
+                log.info("TokenPal (rage suppressed near-duplicate): %s", filtered)
+                self._handle_suppressed_output("rage near-duplicate")
+                self._rage.mark_emitted()
+                return False
+            if filtered:
+                log.info(
+                    "TokenPal (rage): %s (%.0fms)", filtered, response.latency_ms
+                )
+                self._emit_comment(filtered, acknowledge=True)
+                self._recent_outputs.append(filtered)
+                self._rage.mark_emitted()
+                return True
+            log.debug("Rage check filtered out: %r", response.text[:80])
+            self._rage.mark_emitted()
+            return False
+        except Exception:
+            log.exception("Rage check generation failed")
             self._push_status()
             return False
 

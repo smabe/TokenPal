@@ -276,6 +276,32 @@ class ConversationConfig:
 
 
 @dataclass
+class RageDetectConfig:
+    # When the user has been typing fast, then pauses for 1-3 minutes, then
+    # retreats to a distraction app, the buddy pops one gentle in-character
+    # check-in ("stuck?"). Default disabled — normal typing cadence varies
+    # enough that a user who's trying this feature out should opt in.
+    # Uses only typing_cadence + app_awareness signals. No keyboard bus.
+    enabled: bool = False
+    distraction_apps: list[str] = field(
+        default_factory=lambda: [
+            "twitter", "x", "reddit", "youtube", "tiktok",
+            "instagram", "facebook",
+        ]
+    )
+    # Window (seconds) between the end of a rapid/furious typing burst and a
+    # distraction-app switch for the pattern to count. Wider than the plan's
+    # exact "60s + 30s" so normal human pacing triggers it.
+    rage_post_pause_min_s: float = 60.0
+    rage_post_pause_max_s: float = 180.0
+    # How long a typing burst stays "recent" for the post-pause window —
+    # prevents ancient bursts from arming the detector forever.
+    rage_burst_recency_s: float = 600.0
+    # Cooldown between rage nudges in the same session.
+    cooldown_s: float = 600.0
+
+
+@dataclass
 class IntentConfig:
     # /intent <text> sets an ambient goal. When the user drifts to a
     # configured distraction app for more than drift_min_dwell_s seconds,
@@ -327,3 +353,4 @@ class TokenPalConfig:
     idle_tools: IdleToolsConfig = field(default_factory=IdleToolsConfig)
     session_summary: SessionSummaryConfig = field(default_factory=SessionSummaryConfig)
     intent: IntentConfig = field(default_factory=IntentConfig)
+    rage_detect: RageDetectConfig = field(default_factory=RageDetectConfig)
