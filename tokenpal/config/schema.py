@@ -131,6 +131,7 @@ class UIConfig:
     font_family: str = "Courier"
     font_size: int = 14
     position: str = "bottom_right"
+    chat_log_width: int = 40
 
 
 @dataclass

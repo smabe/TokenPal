@@ -92,6 +92,7 @@ overlay = "textual"
 buddy_name = "TokenPal"
 font_size = 14
 position = "bottom_right"
+chat_log_width = 40
 
 [brain]
 poll_interval_s = 2.0

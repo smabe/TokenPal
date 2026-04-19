@@ -15,7 +15,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
-from textual.events import Resize
+from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
 from textual.timer import Timer
 from textual.widgets import Input, Static
@@ -31,6 +31,8 @@ log = logging.getLogger(__name__)
 _CSS_PATH = Path(__file__).parent / "textual_overlay.tcss"
 _BUDDY_PANEL_PADDING = 4
 _CHAT_LOG_MIN_SPACE = 30
+_CHAT_LOG_MIN_WIDTH = 25
+_CHAT_LOG_DEFAULT_WIDTH = 40
 _SPEECH_SCROLL_PADDING = 4
 _MIN_BORDERED_REGION_WIDTH = 36
 _BUBBLE_HOLD_MIN_S = 2.5
@@ -379,6 +381,52 @@ class StatusBarWidget(Static):
         self.update(markup)
 
 
+# --- Divider ---
+
+
+class DividerBar(Static):
+    """1-cell vertical bar between buddy panel and chat log; drag to resize.
+
+    Drag math lives on the app (it owns the clamp bounds and persistence);
+    this widget just captures the mouse and translates screen-x deltas into
+    new chat-log widths.
+    """
+
+    class DragStart(Message):
+        pass
+
+    class DragMove(Message):
+        def __init__(self, screen_x: int) -> None:
+            self.screen_x = screen_x
+            super().__init__()
+
+    class DragEnd(Message):
+        pass
+
+    def __init__(self) -> None:
+        super().__init__("\u2502", id="divider")
+        self._dragging = False
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        event.stop()
+        self._dragging = True
+        self.capture_mouse()
+        self.post_message(self.DragStart())
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        if not self._dragging:
+            return
+        self.post_message(self.DragMove(event.screen_x))
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        if not self._dragging:
+            return
+        event.stop()
+        self._dragging = False
+        self.release_mouse()
+        self.post_message(self.DragEnd())
+
+
 # --- App ---
 
 
@@ -401,6 +449,10 @@ class TokenPalApp(App[None]):
         self._last_region_size: tuple[int, int] | None = None
         self._chat_log_lines: list[str] = []
         self._link_urls: list[str] = []
+        initial = int(overlay._chat_log_width or _CHAT_LOG_DEFAULT_WIDTH)
+        self._chat_log_width: int = max(_CHAT_LOG_MIN_WIDTH, initial)
+        self._drag_start_screen_x: int = 0
+        self._drag_start_width: int = self._chat_log_width
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -412,6 +464,7 @@ class TokenPalApp(App[None]):
                 yield BuddyWidget()
                 yield Input(placeholder="Type a message or /command...", id="user-input")
                 yield StatusBarWidget()
+        yield DividerBar()
         with VerticalScroll(id="chat-log"):
             yield Static(id="chat-log-content", markup=True)
 
@@ -426,6 +479,7 @@ class TokenPalApp(App[None]):
         else:
             buddy.show_frame(BuddyFrame.get("idle"))
         self._apply_buddy_panel_min_width()
+        self._apply_chat_log_width()
         log.info("TextualOverlay ready")
 
     def _apply_buddy_panel_min_width(self) -> None:
@@ -433,7 +487,25 @@ class TokenPalApp(App[None]):
         panel = self.query_one("#buddy-panel", Vertical)
         panel.styles.min_width = buddy.max_frame_width() + _BUDDY_PANEL_PADDING
 
+    def _buddy_min_width(self) -> int:
+        buddy = self.query_one(BuddyWidget)
+        return buddy.max_frame_width() + _BUDDY_PANEL_PADDING
+
+    def _clamp_chat_log_width(self, width: int) -> int:
+        """Floor at chat-log min; ceiling so buddy panel keeps its min-width + divider."""
+        total = self.size.width or (self._buddy_min_width() + _CHAT_LOG_MIN_WIDTH + 1)
+        max_w = max(_CHAT_LOG_MIN_WIDTH, total - self._buddy_min_width() - 1)
+        return max(_CHAT_LOG_MIN_WIDTH, min(int(width), max_w))
+
+    def _apply_chat_log_width(self) -> None:
+        chat_log = self.query_one("#chat-log", VerticalScroll)
+        chat_log.styles.width = self._chat_log_width
+
     def on_resize(self, _event: Resize) -> None:
+        clamped = self._clamp_chat_log_width(self._chat_log_width)
+        if clamped != self._chat_log_width:
+            self._chat_log_width = clamped
+            self._apply_chat_log_width()
         self._apply_chat_log_visibility()
         self._evict_oversized_bubble()
 
@@ -443,7 +515,9 @@ class TokenPalApp(App[None]):
         buddy = self.query_one(BuddyWidget)
         threshold = buddy.max_frame_width() + _BUDDY_PANEL_PADDING + _CHAT_LOG_MIN_SPACE
         chat_log = self.query_one("#chat-log", VerticalScroll)
-        chat_log.display = self.size.width >= threshold
+        show = self.size.width >= threshold
+        chat_log.display = show
+        self.query_one(DividerBar).display = show
 
     def _evict_oversized_bubble(self) -> None:
         speech = self.query_one(SpeechBubbleWidget)
@@ -490,8 +564,12 @@ class TokenPalApp(App[None]):
 
     def action_toggle_chat_log(self) -> None:
         chat_log = self.query_one("#chat-log", VerticalScroll)
-        chat_log.display = not chat_log.display
-        self._chat_log_user_hidden = not chat_log.display
+        new_display = not chat_log.display
+        chat_log.display = new_display
+        self.query_one(DividerBar).display = new_display
+        self._chat_log_user_hidden = not new_display
+        if new_display:
+            self._apply_chat_log_width()
 
     # --- Input handling ---
 
@@ -652,6 +730,29 @@ class TokenPalApp(App[None]):
         modal = CloudModal(message.state)
         self.push_screen(modal, message.on_result)
 
+    # --- Divider drag ---
+
+    def on_divider_bar_drag_start(self, _message: DividerBar.DragStart) -> None:
+        self._drag_start_width = self._chat_log_width
+        self._drag_start_screen_x = 0  # set on first DragMove
+
+    def on_divider_bar_drag_move(self, message: DividerBar.DragMove) -> None:
+        if self._drag_start_screen_x == 0:
+            self._drag_start_screen_x = message.screen_x
+            return
+        delta = message.screen_x - self._drag_start_screen_x
+        # Chat log is on the right edge: dragging right shrinks it.
+        proposed = self._drag_start_width - delta
+        clamped = self._clamp_chat_log_width(proposed)
+        if clamped == self._chat_log_width:
+            return
+        self._chat_log_width = clamped
+        self._apply_chat_log_width()
+
+    def on_divider_bar_drag_end(self, _message: DividerBar.DragEnd) -> None:
+        self._drag_start_screen_x = 0
+        self._overlay._persist_chat_log_width(self._chat_log_width)
+
 
 # --- Overlay ---
 
@@ -670,6 +771,18 @@ class TextualOverlay(AbstractOverlay):
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
         self._pending_voice_frames: dict[str, BuddyFrame] | None = None
+        self._chat_log_width: int = int(
+            config.get("chat_log_width") or _CHAT_LOG_DEFAULT_WIDTH
+        )
+
+    def _persist_chat_log_width(self, width: int) -> None:
+        """Write the user's chosen chat-log width to config.toml (fire-and-forget)."""
+        try:
+            from tokenpal.config.ui_writer import set_chat_log_width
+
+            set_chat_log_width(width)
+        except Exception as exc:
+            log.warning("failed to persist chat_log_width=%d: %s", width, exc)
 
     def _post(self, message: Message) -> None:
         """Post a message to the app. Thread-safe, no-op if app not ready."""

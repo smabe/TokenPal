@@ -68,12 +68,24 @@ Screen {
     padding: 0 2;
 }
 
+#divider {
+    width: 1;
+    height: 100%;
+    background: #333333;
+    color: #666666;
+    content-align: center middle;
+}
+
+#divider:hover {
+    background: #5599ff;
+    color: #ffffff;
+}
+
 #chat-log {
     width: 40;
     min-width: 25;
     height: 100%;
     background: #1a1a2e;
-    border-left: tall #333333;
     padding: 0 1;
     scrollbar-size: 1 1;
 }
