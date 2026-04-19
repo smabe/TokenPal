@@ -137,9 +137,26 @@ def _migration_2_active_intent(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_3_chat_log(conn: sqlite3.Connection) -> None:
+    """v2 -> v3: add chat_log for transcript persistence across restarts."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS chat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            speaker TEXT NOT NULL,
+            text TEXT NOT NULL,
+            url TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_chat_log_time ON chat_log(timestamp);
+        """
+    )
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_1_session_summaries,
     _migration_2_active_intent,
+    _migration_3_chat_log,
 ]
 
 CURRENT_SCHEMA_VERSION = len(_MIGRATIONS)
@@ -261,6 +278,71 @@ class MemoryStore:
 
     def record_session_start(self) -> None:
         self.record_observation("system", "session_start", "Session started")
+
+    # ------------------------------------------------------------------
+    # Chat log — UI-transcript persistence for cross-restart recall
+    # ------------------------------------------------------------------
+
+    def record_chat_entry(
+        self,
+        speaker: str,
+        text: str,
+        url: str | None = None,
+        max_persisted: int = 200,
+    ) -> None:
+        """Insert one chat-log row. Trims when count exceeds max_persisted * 1.5
+        so the delete doesn't run on every insert. Parameterized — no SQL
+        injection even if speaker/text/url contain arbitrary characters.
+        """
+        if not self._enabled or not self._conn:
+            return
+        if max_persisted <= 0:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO chat_log (timestamp, speaker, text, url) "
+                "VALUES (?, ?, ?, ?)",
+                (time.time(), speaker, text, url),
+            )
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM chat_log"
+            ).fetchone()
+            count = int(row[0]) if row else 0
+            if count > int(max_persisted * 1.5):
+                self._conn.execute(
+                    "DELETE FROM chat_log WHERE id IN ("
+                    "SELECT id FROM chat_log ORDER BY id ASC LIMIT ?"
+                    ")",
+                    (count - int(max_persisted),),
+                )
+            self._conn.commit()
+
+    def get_recent_chat_entries(
+        self, limit: int
+    ) -> list[tuple[float, str, str, str | None]]:
+        """Return up to *limit* most recent chat-log rows in chronological
+        order (oldest first) as (timestamp, speaker, text, url) tuples.
+        """
+        if not self._enabled or not self._conn or limit <= 0:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, speaker, text, url FROM chat_log "
+                "ORDER BY id DESC LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [
+            (float(r[0]), str(r[1]), str(r[2]), (str(r[3]) if r[3] is not None else None))
+            for r in reversed(rows)
+        ]
+
+    def clear_chat_log(self) -> None:
+        """Wipe every row in chat_log."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute("DELETE FROM chat_log")
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Session summaries — see plans/buddy-utility-wedges.md

@@ -414,6 +414,69 @@ def main() -> None:
         overlay.schedule_callback(overlay.toggle_chat_log)
         return CommandResult("")
 
+    def _open_options_modal() -> bool:
+        from tokenpal.ui.options_modal import OptionsModalResult, OptionsModalState
+
+        cl = config.chat_log
+        state = OptionsModalState(
+            max_persisted=cl.max_persisted,
+            persist_enabled=cl.persist,
+        )
+
+        def on_save(result: OptionsModalResult | None) -> None:
+            if result is None:
+                return
+
+            nav = result.navigate_to
+            if nav == "cloud":
+                _open_cloud_modal()
+                return
+            if nav == "senses":
+                flag_fields = [
+                    f.name for f in dataclasses.fields(config.senses)
+                ]
+                _open_senses_modal(flag_fields)
+                return
+            if nav == "tools":
+                _open_tools_modal()
+                return
+
+            # Navigation was None — apply field edits.
+            from tokenpal.config.chatlog_writer import (
+                clamp_max_persisted,
+                set_max_persisted,
+            )
+
+            new_max = clamp_max_persisted(result.max_persisted)
+            if new_max != cl.max_persisted:
+                try:
+                    set_max_persisted(new_max)
+                    cl.max_persisted = new_max
+                    overlay.log_buddy_message(
+                        f"/options: saved max_persisted = {new_max}."
+                    )
+                except OSError as e:
+                    overlay.log_buddy_message(
+                        f"/options: could not write config: {e}"
+                    )
+            if result.clear_history:
+                if memory is not None:
+                    try:
+                        memory.clear_chat_log()
+                    except Exception as e:
+                        log.warning("clear_chat_log failed: %s", e)
+                overlay.clear_log()
+                overlay.log_buddy_message("/options: chat history cleared.")
+
+        return overlay.open_options_modal(state, on_save)
+
+    def _cmd_options(_args: str) -> CommandResult:
+        if _open_options_modal():
+            return CommandResult("")
+        return CommandResult(
+            "/options: modal not available on this overlay."
+        )
+
     def _cmd_ask(args: str) -> CommandResult:
         from tokenpal.config.consent import Category, has_consent
 
@@ -1082,6 +1145,7 @@ def main() -> None:
     dispatcher.register("intent", _cmd_intent)
     dispatcher.register("summary", _cmd_summary)
     dispatcher.register("cloud", _cmd_cloud)
+    dispatcher.register("options", _cmd_options)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:
@@ -1099,6 +1163,40 @@ def main() -> None:
 
     overlay.set_command_callback(_on_command)
     overlay.set_input_callback(_on_user_input)
+
+    # Chat-log persistence: write-through on every buddy/user line, plus a
+    # clear hook for Ctrl+L. Reads cfg.chat_log.max_persisted at call time so
+    # a live /options save takes effect without a restart.
+    if memory is not None:
+        _overlay_setter = getattr(overlay, "set_chat_persist_callback", None)
+        if callable(_overlay_setter):
+            def _persist_chat(
+                speaker: str, text: str, url: str | None,
+            ) -> None:
+                if not config.chat_log.persist:
+                    return
+                memory.record_chat_entry(
+                    speaker=speaker,
+                    text=text,
+                    url=url,
+                    max_persisted=config.chat_log.max_persisted,
+                )
+
+            def _clear_chat() -> None:
+                memory.clear_chat_log()
+
+            _overlay_setter(_persist_chat, _clear_chat)
+
+        # Hydrate the chat log before the brain thread starts emitting.
+        if config.chat_log.persist and config.chat_log.hydrate_on_start > 0:
+            try:
+                entries = memory.get_recent_chat_entries(
+                    config.chat_log.hydrate_on_start
+                )
+                if entries:
+                    overlay.load_chat_history(entries)
+            except Exception as exc:
+                log.warning("chat log hydration failed: %s", exc)
 
     # Brain runs in a background thread with its own asyncio loop
     def _run_brain() -> None:

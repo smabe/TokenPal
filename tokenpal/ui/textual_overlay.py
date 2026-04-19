@@ -140,6 +140,21 @@ class OpenCloudModal(Message):
         super().__init__()
 
 
+class OpenOptionsModal(Message):
+    def __init__(self, state: Any, on_result: Callable[[Any], None]) -> None:
+        self.state = state
+        self.on_result = on_result
+        super().__init__()
+
+
+class LoadChatHistory(Message):
+    def __init__(
+        self, entries: list[tuple[float, str, str, str | None]],
+    ) -> None:
+        self.entries = entries
+        super().__init__()
+
+
 # --- Widgets ---
 
 
@@ -438,6 +453,7 @@ class TokenPalApp(App[None]):
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
         Binding("f1", "command_help", "Help", show=False, priority=True),
         Binding("f2", "toggle_chat_log", "Toggle chat log", show=False, priority=True),
+        Binding("f3", "command_options", "Options", show=False, priority=True),
         Binding("ctrl+l", "command_clear", "Clear", show=False, priority=True),
     ]
 
@@ -480,6 +496,10 @@ class TokenPalApp(App[None]):
             buddy.show_frame(BuddyFrame.get("idle"))
         self._apply_buddy_panel_min_width()
         self._apply_chat_log_width()
+        if self._overlay._pending_chat_history is not None:
+            pending = self._overlay._pending_chat_history
+            self._overlay._pending_chat_history = None
+            self.post_message(LoadChatHistory(pending))
         log.info("TextualOverlay ready")
 
     def _apply_buddy_panel_min_width(self) -> None:
@@ -562,6 +582,10 @@ class TokenPalApp(App[None]):
         if self._overlay._command_callback:
             self._overlay._command_callback("/clear")
 
+    def action_command_options(self) -> None:
+        if self._overlay._command_callback:
+            self._overlay._command_callback("/options")
+
     def action_toggle_chat_log(self) -> None:
         chat_log = self.query_one("#chat-log", VerticalScroll)
         new_display = not chat_log.display
@@ -590,12 +614,17 @@ class TokenPalApp(App[None]):
 
     _MAX_CHAT_LOG_LINES = 500
 
-    def _append_log(
-        self, name: str, text: str, *, markup: bool = False, url: str | None = None,
-    ) -> None:
-        ts = datetime.now().strftime("%I:%M %p")
+    def _compose_log_line(
+        self,
+        name: str,
+        text: str,
+        *,
+        markup: bool,
+        url: str | None,
+        ts_label: str,
+    ) -> str:
         safe = text if markup else _esc_markup(text)
-        line = f"──────────────────────\n\\[{ts}]\n{_esc_markup(name)}: {safe}"
+        line = f"──────────────────────\n\\[{ts_label}]\n{_esc_markup(name)}: {safe}"
         if url:
             idx = len(self._link_urls)
             self._link_urls.append(url)
@@ -603,12 +632,27 @@ class TokenPalApp(App[None]):
                 f"\n[underline #5599ff][@click=app.open_chat_link(\"{idx}\")]"
                 f"{_esc_markup(url)}[/][/underline #5599ff]"
             )
+        return line
+
+    def _append_log(
+        self, name: str, text: str, *, markup: bool = False, url: str | None = None,
+    ) -> None:
+        ts_label = datetime.now().strftime("%I:%M %p")
+        line = self._compose_log_line(
+            name, text, markup=markup, url=url, ts_label=ts_label,
+        )
         lines = self._chat_log_lines
         lines.append(line)
         if len(lines) > self._MAX_CHAT_LOG_LINES:
             del lines[: len(lines) - self._MAX_CHAT_LOG_LINES]
         self._chat_log_widget.update("\n".join(lines))
         self._chat_log_scroll.scroll_end(animate=False)
+        cb = self._overlay._chat_persist_callback
+        if cb is not None:
+            try:
+                cb(name, text, url)
+            except Exception as exc:
+                log.warning("chat persist callback failed: %s", exc)
 
     def action_open_chat_link(self, link_id: str) -> None:
         idx = int(link_id)
@@ -703,6 +747,44 @@ class TokenPalApp(App[None]):
         self._chat_log_lines.clear()
         self._link_urls.clear()
         self._chat_log_widget.update("")
+        cb = self._overlay._chat_clear_callback
+        if cb is not None:
+            try:
+                cb()
+            except Exception as exc:
+                log.warning("chat clear callback failed: %s", exc)
+
+    def on_load_chat_history(self, message: LoadChatHistory) -> None:
+        """Seed the chat-log widget with persisted rows. Entries are
+        (timestamp, speaker, text, url) in chronological order.
+        """
+        entries = message.entries
+        if not entries:
+            return
+        # Clamp to the widget's in-RAM cap so a big hydration payload doesn't
+        # blow past _MAX_CHAT_LOG_LINES.
+        if len(entries) > self._MAX_CHAT_LOG_LINES:
+            entries = entries[-self._MAX_CHAT_LOG_LINES:]
+        today = datetime.now().strftime("%Y%m%d")
+        rendered: list[str] = []
+        for ts_val, speaker, text, url in entries:
+            dt = datetime.fromtimestamp(ts_val)
+            if dt.strftime("%Y%m%d") == today:
+                ts_label = dt.strftime("%I:%M %p")
+            else:
+                ts_label = dt.strftime("%b %d %I:%M %p")
+            rendered.append(
+                self._compose_log_line(
+                    speaker, text, markup=False, url=url, ts_label=ts_label,
+                )
+            )
+        self._chat_log_lines[:0] = rendered
+        if len(self._chat_log_lines) > self._MAX_CHAT_LOG_LINES:
+            del self._chat_log_lines[
+                : len(self._chat_log_lines) - self._MAX_CHAT_LOG_LINES
+            ]
+        self._chat_log_widget.update("\n".join(self._chat_log_lines))
+        self._chat_log_scroll.scroll_end(animate=False)
 
     def on_toggle_chat_log(self, _message: ToggleChatLog) -> None:
         self.action_toggle_chat_log()
@@ -728,6 +810,12 @@ class TokenPalApp(App[None]):
         from tokenpal.ui.cloud_modal import CloudModal
 
         modal = CloudModal(message.state)
+        self.push_screen(modal, message.on_result)
+
+    def on_open_options_modal(self, message: OpenOptionsModal) -> None:
+        from tokenpal.ui.options_modal import OptionsModal
+
+        modal = OptionsModal(message.state)
         self.push_screen(modal, message.on_result)
 
     # --- Divider drag ---
@@ -774,6 +862,16 @@ class TextualOverlay(AbstractOverlay):
         self._chat_log_width: int = int(
             config.get("chat_log_width") or _CHAT_LOG_DEFAULT_WIDTH
         )
+        # Persist hooks wired by app.py once the MemoryStore is live.
+        self._chat_persist_callback: (
+            Callable[[str, str, str | None], None] | None
+        ) = None
+        self._chat_clear_callback: Callable[[], None] | None = None
+        # Pending chat-history payload — app.py may hand us rows before
+        # run_loop() starts, so we stash them and on_mount drains the buffer.
+        self._pending_chat_history: (
+            list[tuple[float, str, str, str | None]] | None
+        ) = None
 
     def _persist_chat_log_width(self, width: int) -> None:
         """Write the user's chosen chat-log width to config.toml (fire-and-forget)."""
@@ -874,6 +972,41 @@ class TextualOverlay(AbstractOverlay):
             return False
         self._post(OpenCloudModal(state, on_result))
         return True
+
+    def open_options_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /options umbrella modal. Result is OptionsModalResult or None."""
+        if not (self._app and self._is_running):
+            return False
+        self._post(OpenOptionsModal(state, on_result))
+        return True
+
+    def load_chat_history(
+        self,
+        entries: list[tuple[float, str, str, str | None]],
+    ) -> None:
+        """Seed the chat-log widget with persisted rows before live traffic.
+
+        Called from app.py after overlay.setup() but before run_loop() — the
+        app isn't mounted yet, so we stash the payload and on_mount drains it.
+        """
+        if not self._is_running:
+            self._pending_chat_history = entries
+            return
+        self._post(LoadChatHistory(entries))
+
+    def set_chat_persist_callback(
+        self,
+        persist: Callable[[str, str, str | None], None] | None,
+        clear: Callable[[], None] | None,
+    ) -> None:
+        """Wire chat-log write-through. ``persist`` is invoked after each
+        live line lands; ``clear`` when /clear wipes the widget."""
+        self._chat_persist_callback = persist
+        self._chat_clear_callback = clear
 
     def teardown(self) -> None:
         self._is_running = False

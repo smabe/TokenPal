@@ -396,6 +396,15 @@ class CloudSearchConfig:
 
 
 @dataclass
+class ChatLogConfig:
+    # Persist the right-pane chat log to memory.db so restarts hydrate the
+    # last N entries. See plans/dont-forget.md.
+    persist: bool = True
+    max_persisted: int = 200
+    hydrate_on_start: int = 100
+
+
+@dataclass
 class SessionSummaryConfig:
     # Periodic LLM-generated handoff notes. Writes every interval_s seconds
     # when the window has any activity (skip-if-idle), read back at startup
@@ -428,6 +437,7 @@ class TokenPalConfig:
     filesystem_pulse: FilesystemPulseConfig = field(default_factory=FilesystemPulseConfig)
     idle_tools: IdleToolsConfig = field(default_factory=IdleToolsConfig)
     session_summary: SessionSummaryConfig = field(default_factory=SessionSummaryConfig)
+    chat_log: ChatLogConfig = field(default_factory=ChatLogConfig)
     intent: IntentConfig = field(default_factory=IntentConfig)
     rage_detect: RageDetectConfig = field(default_factory=RageDetectConfig)
     git_nudge: GitNudgeConfig = field(default_factory=GitNudgeConfig)

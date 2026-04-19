@@ -147,6 +147,15 @@ brave_api_key = ""  # or set TOKENPAL_BRAVE_KEY env var
 enabled = true
 retention_days = 30
 
+[chat_log]
+# Persist the right-pane chat log to memory.db so restarts hydrate the last
+# hydrate_on_start entries. max_persisted caps how many rows we keep on disk;
+# trim-on-insert runs once count exceeds max_persisted * 1.5 so the DELETE
+# doesn't fire on every insert. Set persist = false to opt out entirely.
+persist = true
+max_persisted = 200
+hydrate_on_start = 100
+
 [session_summary]
 # Periodic LLM-generated handoff notes. Every interval_s, if the window had
 # any activity, the brain compresses recent observations into a terse 2-3

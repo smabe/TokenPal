@@ -90,6 +90,23 @@ class AbstractOverlay(abc.ABC):
         modal support."""
         return False
 
+    def open_options_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /options umbrella modal. Returns True if supported."""
+        return False
+
+    def load_chat_history(
+        self,
+        entries: list[tuple[float, str, str, str | None]],
+    ) -> None:
+        """Seed the chat-log widget with persisted rows before live traffic.
+
+        Entries are (timestamp, speaker, text, url) in chronological order
+        (oldest first). Optional — console / tkinter overlays noop."""
+
     @abc.abstractmethod
     def run_loop(self) -> None:
         """Start the platform event loop. Blocks on main thread."""
