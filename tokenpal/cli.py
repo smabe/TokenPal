@@ -196,6 +196,24 @@ def _check_utility_wedges(config: object) -> None:
         print(f"  {_WARN} Proactive git nudge off")
 
 
+def _check_cloud_llm(config: object) -> None:
+    """Report the cloud-LLM opt-in state. Informational only."""
+    from tokenpal.config.secrets import fingerprint, get_cloud_key
+
+    cfg = getattr(config, "cloud_llm", None)
+    if cfg is None or not getattr(cfg, "enabled", False):
+        key = get_cloud_key()
+        stored = " (key stored)" if key else ""
+        print(f"  {_WARN} Cloud LLM off (local synth for /research){stored}")
+        return
+    key = get_cloud_key()
+    if not key:
+        print(f"  {_WARN} Cloud LLM enabled but no key - run /cloud enable <key>")
+        return
+    model = getattr(cfg, "model", "?")
+    print(f"  {_CHECK} Cloud LLM on ({model}, key {fingerprint(key)}) for /research synth")
+
+
 def _print_summary(problems: int) -> None:
     """Print pass/fail summary."""
     print()
@@ -281,6 +299,9 @@ async def _validate(config_path: Path | None) -> int:
 
     # 6b. Utility wedges (session handoff, intent, EOD, rage, git nudge)
     _check_utility_wedges(config)
+
+    # 6c. Cloud LLM (opt-in Anthropic synth for /research)
+    _check_cloud_llm(config)
 
     # 7. macOS Accessibility reminder
     if plat == "Darwin":

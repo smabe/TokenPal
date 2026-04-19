@@ -21,12 +21,19 @@ from tokenpal.brain.orchestrator import AgentBridge, Brain, ResearchBridge
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
+from tokenpal.config.cloud_writer import set_cloud_enabled, set_cloud_model
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
     set_idle_tools_enabled,
 )
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
+from tokenpal.config.secrets import (
+    clear_cloud_key,
+    fingerprint,
+    get_cloud_key,
+    set_cloud_key,
+)
 from tokenpal.config.senses_writer import (
     add_watch_root,
     remove_watch_root,
@@ -34,6 +41,7 @@ from tokenpal.config.senses_writer import (
     set_ssid_label,
 )
 from tokenpal.config.tools_writer import set_enabled_tools
+from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.nl_commands import match_nl_command
@@ -340,6 +348,9 @@ def main() -> None:
 
     def _cmd_zip(args: str) -> CommandResult:
         return _handle_zip_command(args)
+
+    def _cmd_cloud(args: str) -> CommandResult:
+        return _handle_cloud_command(args, config)
 
     def _cmd_chatlog(_args: str) -> CommandResult:
         overlay.schedule_callback(overlay.toggle_chat_log)
@@ -997,6 +1008,7 @@ def main() -> None:
     dispatcher.register("research", _cmd_research)
     dispatcher.register("intent", _cmd_intent)
     dispatcher.register("summary", _cmd_summary)
+    dispatcher.register("cloud", _cmd_cloud)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:
@@ -1128,6 +1140,99 @@ def _handle_gh_command(subcmd: str, extra: str) -> CommandResult:
         return CommandResult(out.stdout.strip() or "", error=f"No open {subcmd}." if not out.stdout.strip() else None)
     except Exception as e:
         return CommandResult("", error=f"gh failed: {e}")
+
+
+def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
+    """Handle /cloud - manage Anthropic-backed /research synth.
+
+    Subcommands:
+        (bare)          status: enabled/disabled, model, fingerprint
+        enable <key>    store key at ~/.tokenpal/.secrets.json (0o600), flip on
+        disable         flip off, keep key on disk
+        forget          wipe key entirely
+        model <id>      change model (allowlist: haiku-4-5, sonnet-4-6, opus-4-7)
+    """
+    parts = args.split(maxsplit=1)
+    subcmd = parts[0].lower() if parts else ""
+    target = parts[1].strip() if len(parts) > 1 else ""
+
+    cfg = config.cloud_llm
+
+    def _status_line() -> str:
+        if not cfg.enabled:
+            stored = get_cloud_key()
+            suffix = " (key stored, run /cloud enable to resume)" if stored else ""
+            return f"Cloud LLM: disabled{suffix}"
+        key = get_cloud_key()
+        if not key:
+            return "Cloud LLM: enabled but no key - run /cloud enable <key>"
+        return f"Cloud LLM: enabled, {cfg.model}, key {fingerprint(key)}"
+
+    if subcmd == "" or subcmd == "status":
+        return CommandResult(_status_line())
+
+    if subcmd == "enable":
+        if not target:
+            return CommandResult(
+                "Usage: /cloud enable <api-key>\n"
+                "Get a key at https://console.anthropic.com/settings/keys "
+                "(workspace needs at least $5 credit)."
+            )
+        try:
+            set_cloud_key(target)
+        except ValueError as e:
+            # Scrub raw key from any echo - the handler input may be in logs.
+            return CommandResult(f"/cloud enable rejected: {e}")
+        try:
+            set_cloud_enabled(True)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist enabled flag: {e}")
+        cfg.enabled = True  # live runtime flip, no restart required
+        fp = fingerprint(target)
+        return CommandResult(
+            f"Cloud LLM enabled - {cfg.model}, key {fp}. "
+            "Next /research will route synth through Anthropic."
+        )
+
+    if subcmd == "disable":
+        try:
+            set_cloud_enabled(False)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist flag: {e}")
+        cfg.enabled = False
+        had_key = get_cloud_key() is not None
+        suffix = " (key retained)" if had_key else ""
+        return CommandResult(f"Cloud LLM disabled{suffix}.")
+
+    if subcmd == "forget":
+        clear_cloud_key()
+        try:
+            set_cloud_enabled(False)
+        except OSError:
+            pass
+        cfg.enabled = False
+        return CommandResult("Cloud LLM disabled and key wiped.")
+
+    if subcmd == "model":
+        if not target:
+            return CommandResult(
+                f"Usage: /cloud model <id>. Choose from: "
+                f"{', '.join(ALLOWED_MODELS)}"
+            )
+        if target not in ALLOWED_MODELS:
+            return CommandResult(
+                f"Unknown model '{target}'. Allowed: {', '.join(ALLOWED_MODELS)}"
+            )
+        try:
+            set_cloud_model(target)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist model: {e}")
+        cfg.model = target
+        return CommandResult(f"Cloud LLM model set to {target}.")
+
+    return CommandResult(
+        "Usage: /cloud [status|enable <key>|disable|forget|model <id>]"
+    )
 
 
 def _handle_zip_command(args: str) -> CommandResult:
