@@ -119,8 +119,27 @@ def _migration_1_session_summaries(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_2_active_intent(conn: sqlite3.Connection) -> None:
+    """v1 -> v2: add active_intent (single-row) for intent-tracking feature.
+
+    The CHECK (id = 1) guarantees at most one intent row ever exists; writes
+    use INSERT OR REPLACE so /intent <text> always overwrites the prior.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS active_intent (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            text TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            session_id TEXT NOT NULL
+        );
+        """
+    )
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_1_session_summaries,
+    _migration_2_active_intent,
 ]
 
 CURRENT_SCHEMA_VERSION = len(_MIGRATIONS)
@@ -356,6 +375,42 @@ class MemoryStore:
                 (float(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in event_rows
             ],
         }
+
+    # ------------------------------------------------------------------
+    # Active intent — see plans/buddy-utility-wedges.md
+    # ------------------------------------------------------------------
+
+    def set_active_intent(self, text: str) -> None:
+        """Upsert the single active-intent row with the current session_id."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT OR REPLACE INTO active_intent "
+                "(id, text, started_at, session_id) VALUES (1, ?, ?, ?)",
+                (text, time.time(), self._session_id),
+            )
+            self._conn.commit()
+
+    def get_active_intent(self) -> tuple[str, float, str] | None:
+        """Return (text, started_at, session_id) or None if no intent is set."""
+        if not self._enabled or not self._conn:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT text, started_at, session_id FROM active_intent WHERE id = 1"
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row[0]), float(row[1]), str(row[2])
+
+    def clear_active_intent(self) -> None:
+        """Remove the active-intent row, if any."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute("DELETE FROM active_intent WHERE id = 1")
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # LLM throughput estimator persistence — see plans/gpu-scaling.md

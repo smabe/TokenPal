@@ -156,6 +156,21 @@ enabled = true
 interval_s = 300      # 5min — cache-friendly + bounded data loss on crash
 max_lookback_h = 24   # don't surface notes older than this on boot
 
+[intent]
+# /intent "<free text>" sets an ambient goal. The buddy watches for drift
+# into a distraction app and fires a single nudge after drift_min_dwell_s
+# (respects drift_cooldown_s between nudges). Intent auto-expires after
+# max_age_s of silence. /intent clear removes it; /intent status reads it.
+# distraction_apps is case-insensitive substring match against the active
+# app name.
+distraction_apps = [
+    "twitter", "x", "reddit", "youtube",
+    "tiktok", "instagram", "facebook",
+]
+drift_min_dwell_s = 300     # 5 minutes
+drift_cooldown_s = 600      # 10 minutes
+max_age_s = 28800           # 8 hours
+
 [actions]
 enabled = true
 timer = true

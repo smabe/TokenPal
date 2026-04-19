@@ -9,6 +9,7 @@ import re
 import signal
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -215,6 +216,7 @@ def main() -> None:
         target_latency_s=config.llm.target_latency_s,
         min_tokens_per_path=config.llm.min_tokens_per_path,
         session_summary_config=config.session_summary,
+        intent_config=config.intent,
     )
 
     # Load voice-specific buddy art into the overlay
@@ -541,6 +543,44 @@ def main() -> None:
             )
 
         return overlay.open_selection_modal("Tools", groups, on_save)
+
+    def _cmd_intent(args: str) -> CommandResult:
+        from tokenpal.brain.intent import IntentError
+
+        if brain.intent is None:
+            return CommandResult("/intent needs memory enabled.")
+
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+
+        if subcmd in ("", "status"):
+            active = brain.intent.get_raw()
+            if active is None:
+                return CommandResult(
+                    "No intent set. Try /intent finish the auth PR."
+                )
+            age_s = time.time() - active.started_at
+            age_min = int(age_s / 60)
+            max_age_h = int(config.intent.max_age_s / 3600)
+            expired = age_s > config.intent.max_age_s
+            note = " (expired)" if expired else ""
+            return CommandResult(
+                f"Intent{note}: {active.text}\n"
+                f"Set {age_min}m ago. Expires after {max_age_h}h of silence."
+            )
+
+        if subcmd == "clear":
+            cleared = brain.intent.clear()
+            return CommandResult(
+                "Intent cleared." if cleared else "No active intent to clear."
+            )
+
+        # Anything else: treat the whole args as the intent text
+        try:
+            active = brain.intent.set(args.strip())
+        except IntentError as e:
+            return CommandResult(f"/intent: {e}")
+        return CommandResult(f"Intent set: {active.text}")
 
     def _cmd_agent(args: str) -> CommandResult:
         goal = args.strip()
@@ -928,6 +968,7 @@ def main() -> None:
     dispatcher.register("consent", _cmd_consent)
     dispatcher.register("agent", _cmd_agent)
     dispatcher.register("research", _cmd_research)
+    dispatcher.register("intent", _cmd_intent)
 
     # Wire input callbacks
     def _on_command(raw_input: str) -> None:

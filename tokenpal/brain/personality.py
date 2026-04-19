@@ -425,6 +425,40 @@ User says: "{user_message}"
 Your response:"""
 
 
+_DRIFT_NUDGE_TEMPLATE = """\
+{identity}
+
+The user set themselves an intent earlier: "{intent}"
+They have been on {app_name} for about {dwell_minutes:.0f} minutes.
+
+Give them ONE short in-character line that gently reminds them of their
+intent without being preachy or scolding. You can be dry or sarcastic if
+that's your voice, but do NOT be mean, accusatory, or ask questions. Do
+NOT use the word "intent" or "reminder" — that's too on-the-nose. Refer
+to what they said they were doing naturally.
+
+{mood_line}
+
+Examples of your voice:
+{examples}
+
+{voice_reminder}Your line:"""
+
+
+_FINETUNED_DRIFT_NUDGE_TEMPLATE = """\
+Rules:
+1. ONE short in-character line.
+2. Gently remind the user of their stated intent. No scolding, no questions.
+3. Do NOT use the word "intent" or "reminder".
+
+The user earlier said they wanted to: "{intent}"
+They have been on {app_name} for about {dwell_minutes:.0f} minutes.
+
+{mood_line}
+
+Your line:"""
+
+
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
 
@@ -773,6 +807,31 @@ class PersonalityEngine:
             examples=self._sample_examples(),
             running_bits_block=running_bits,
             recent_comments_block=self._recent_comments_block(),
+            voice_reminder=self._voice_reminder(),
+        )
+
+    def build_drift_nudge_prompt(
+        self, intent_text: str, app_name: str, dwell_s: float
+    ) -> str:
+        """Prompt for the intent-drift nudge. Caller provides the trigger
+        facts (user's stated intent, current distraction app, dwell time).
+        See plans/buddy-utility-wedges.md.
+        """
+        dwell_minutes = max(1.0, dwell_s / 60.0)
+        if self.is_finetuned:
+            return _FINETUNED_DRIFT_NUDGE_TEMPLATE.format(
+                intent=intent_text,
+                app_name=app_name,
+                dwell_minutes=dwell_minutes,
+                mood_line=self._mood_line(),
+            )
+        return _DRIFT_NUDGE_TEMPLATE.format(
+            identity=self._identity_block(),
+            intent=intent_text,
+            app_name=app_name,
+            dwell_minutes=dwell_minutes,
+            mood_line=self._mood_line(),
+            examples=self._sample_examples(),
             voice_reminder=self._voice_reminder(),
         )
 

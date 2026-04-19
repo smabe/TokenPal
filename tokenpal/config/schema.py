@@ -276,6 +276,24 @@ class ConversationConfig:
 
 
 @dataclass
+class IntentConfig:
+    # /intent <text> sets an ambient goal. When the user drifts to a
+    # configured distraction app for more than drift_min_dwell_s seconds,
+    # the buddy fires one nudge (respects drift_cooldown_s between nudges).
+    # Intent auto-expires after max_age_s of silence. See
+    # plans/buddy-utility-wedges.md.
+    distraction_apps: list[str] = field(
+        default_factory=lambda: [
+            "twitter", "x", "reddit", "youtube",
+            "tiktok", "instagram", "facebook",
+        ]
+    )
+    drift_min_dwell_s: float = 300.0  # 5 minutes in a distraction app
+    drift_cooldown_s: float = 600.0   # 10 minutes between drift nudges
+    max_age_s: float = 28800.0        # 8 hours of silence auto-expires
+
+
+@dataclass
 class SessionSummaryConfig:
     # Periodic LLM-generated handoff notes. Writes every interval_s seconds
     # when the window has any activity (skip-if-idle), read back at startup
@@ -308,3 +326,4 @@ class TokenPalConfig:
     filesystem_pulse: FilesystemPulseConfig = field(default_factory=FilesystemPulseConfig)
     idle_tools: IdleToolsConfig = field(default_factory=IdleToolsConfig)
     session_summary: SessionSummaryConfig = field(default_factory=SessionSummaryConfig)
+    intent: IntentConfig = field(default_factory=IntentConfig)

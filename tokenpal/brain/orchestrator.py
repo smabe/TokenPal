@@ -23,6 +23,7 @@ from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
+from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
@@ -34,6 +35,7 @@ from tokenpal.config.schema import (
     AgentConfig,
     ConversationConfig,
     IdleToolsConfig,
+    IntentConfig,
     MinTokensPerPathConfig,
     ResearchConfig,
     SessionSummaryConfig,
@@ -210,6 +212,7 @@ class Brain:
         target_latency_s: TargetLatencyConfig | None = None,
         min_tokens_per_path: MinTokensPerPathConfig | None = None,
         session_summary_config: SessionSummaryConfig | None = None,
+        intent_config: IntentConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -309,6 +312,15 @@ class Brain:
         self._previous_session_note: str | None = None
         self._session_summarizer: SessionSummarizer | None = None
         self._session_summary_task: asyncio.Task[None] | None = None
+
+        # Intent tracking — only when memory is available.
+        self._intent_config: IntentConfig = intent_config or IntentConfig()
+        self._intent: IntentStore | None = (
+            IntentStore(memory=self._memory, config=self._intent_config)
+            if self._memory is not None and self._memory.enabled
+            else None
+        )
+        self._last_app_for_intent: str = ""
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -461,13 +473,23 @@ class Brain:
                     )
                     self._clear_conversation()
 
+                # Sync the intent store with the current foreground app so
+                # its dwell timer stays accurate.
+                self._sync_intent_app()
+
                 # High-signal events bypass the normal gate
                 has_urgent = any(
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
+                can_comment = has_urgent or self._should_comment()
+                drift = (
+                    self._intent.check_drift() if self._intent is not None else None
+                )
                 emitted = False
-                if has_urgent or self._should_comment():
+                if drift is not None and can_comment:
+                    emitted = await self._generate_drift_nudge(drift)
+                elif can_comment:
                     emitted = await self._generate_comment(snapshot)
                 elif self._should_freeform():
                     emitted = await self._generate_freeform_comment()
@@ -786,6 +808,75 @@ class Brain:
             )
             return True
         return False
+
+    def _sync_intent_app(self) -> None:
+        """Notify IntentStore when the foreground app changes so its dwell
+        timer stays accurate. Cheap on-tick call; no-op when intent is off.
+        """
+        if self._intent is None:
+            return
+        current = self._personality._last_seen_app
+        if current and current != self._last_app_for_intent:
+            self._intent.on_app_change(current)
+            self._last_app_for_intent = current
+
+    @property
+    def intent(self) -> IntentStore | None:
+        """Public accessor for the `/intent` slash command wiring."""
+        return self._intent
+
+    async def _generate_drift_nudge(self, drift: DriftSignal) -> bool:
+        """Emit a single in-character nudge about the drifted-from intent.
+
+        The drift detector has its own 10min cooldown (see IntentStore);
+        this path additionally rides the normal pacing gate in _run_loop.
+        """
+        assert self._intent is not None, "drift signal implies intent is on"
+        if self._personality.check_sensitive_app(
+            self._context.snapshot()
+        ):
+            # User drifted into a non-sensitive distraction app but may have
+            # a sensitive app in context too — stay silent to be safe.
+            return False
+        prompt = self._personality.build_drift_nudge_prompt(
+            intent_text=drift.intent_text,
+            app_name=drift.app_name,
+            dwell_s=drift.dwell_s,
+        )
+        try:
+            if self._status_callback:
+                self._status_callback("thinking...")
+            log.debug(
+                "Generating drift nudge: intent=%r, app=%r, dwell=%.0fs",
+                drift.intent_text,
+                drift.app_name,
+                drift.dwell_s,
+            )
+            response = await self._llm.generate(
+                prompt,
+                target_latency_s=self._budgets.observation,
+                min_tokens=self._min_tokens.observation,
+            )
+            self._push_status()
+            filtered = self._personality.filter_response(response.text)
+            if filtered and self._is_near_duplicate(filtered):
+                log.info("TokenPal (drift suppressed near-duplicate): %s", filtered)
+                self._handle_suppressed_output("drift near-duplicate")
+                return False
+            if filtered:
+                log.info(
+                    "TokenPal (drift): %s (%.0fms)", filtered, response.latency_ms
+                )
+                self._emit_comment(filtered, acknowledge=True)
+                self._recent_outputs.append(filtered)
+                self._intent.mark_drift_emitted()
+                return True
+            log.debug("Drift nudge filtered out: %r", response.text[:80])
+            return False
+        except Exception:
+            log.exception("Drift nudge generation failed")
+            self._push_status()
+            return False
 
     async def _generate_freeform_comment(self) -> bool:
         """Generate an unprompted in-character thought. Returns True iff emitted."""
