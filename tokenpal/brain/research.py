@@ -90,6 +90,11 @@ class ResearchSession:
     # thin source pool, Tavily fallback, etc. Rendered by research_action's
     # _format_result as <warnings><warning>...</warning></warnings>.
     warnings: list[str] = field(default_factory=list)
+    # Backends actually attempted this run (deduped, insertion-order). Distinct
+    # from the mix of backends in session.sources, which only counts successes.
+    # Surfaced in telemetry as `tried=<backends>` so empty-result runs show
+    # whether routing happened (e.g. `mode=none tried=hn,duckduckgo sources=0`).
+    backends_tried: list[str] = field(default_factory=list)
 
     @property
     def is_complete(self) -> bool:
@@ -265,8 +270,10 @@ class ResearchRunner:
             key = src.backend or "unknown"
             mix[key] = mix.get(key, 0) + 1
         mix_str = ",".join(f"{k}={v}" for k, v in sorted(mix.items())) or "none"
+        tried_str = ",".join(sorted(session.backends_tried)) or "none"
         self._log(
-            f"  telemetry: mode={mix_str} sources={len(session.sources)} "
+            f"  telemetry: mode={mix_str} tried={tried_str} "
+            f"sources={len(session.sources)} "
             f"stopped={session.stopped_reason or 'unknown'}"
         )
 
@@ -390,9 +397,16 @@ class ResearchRunner:
         # planner queries are search-engine phrasings ("best X for Y 2026"),
         # never article slugs, so every Wikipedia call 404s. /ask still uses
         # Wikipedia for factual one-shot lookups where the query IS a title.
+        resolved = [self._resolve_backend(q.backend) for q in queries]
+        # Dedupe while preserving first-seen order so telemetry reads like a
+        # timeline (`tried=hn,duckduckgo` not `tried=duckduckgo,hn`).
+        for name in resolved:
+            if name not in session.backends_tried:
+                session.backends_tried.append(name)
+
         tasks = [
-            self._search_many(q.query, self._resolve_backend(q.backend))
-            for q in queries
+            self._search_many(q.query, backend)
+            for q, backend in zip(queries, resolved, strict=True)
         ]
         batches = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -407,23 +421,26 @@ class ResearchRunner:
                     collected.append(hit)
                     seen.add(hit.source_url)
 
-        # Tavily thin-pool top-up: if cloud search was in play but returned
-        # <_THIN_POOL_THRESHOLD results, refetch via DDG and surface a visible
-        # transcript warning so the user knows coverage is degraded.
-        if (
-            self._cloud_search_active
-            and len(collected) < _THIN_POOL_THRESHOLD
-            and any(self._resolve_backend(q.backend) == "tavily" for q in queries)
-        ):
+        # Thin-pool top-up: if the primary fan-out under-delivered AND the
+        # attempted backends include anything other than pure DDG (so there's
+        # somewhere to fall back FROM), refetch via DDG and merge. Generalizes
+        # what was previously a Tavily-only safety net so HN/StackExchange/
+        # Brave routing doesn't silently drop to zero sources.
+        tried_non_ddg = [b for b in session.backends_tried if b != "duckduckgo"]
+        if len(collected) < _THIN_POOL_THRESHOLD and tried_non_ddg:
+            backends_str = ",".join(session.backends_tried)
             self._log(
-                f"  warning: tavily thin ({len(collected)} sources) "
-                f"— topping up from ddg"
+                f"  warning: thin pool ({len(collected)} sources "
+                f"from {backends_str}) — topping up from ddg"
             )
             session.warnings.append(
-                f"tavily thin ({len(collected)} sources) — topped up from ddg"
+                f"thin pool ({len(collected)} sources from {backends_str}) "
+                "— topped up from ddg"
             )
             ddg_tasks = [self._search_many(q.query, "duckduckgo") for q in queries]
             ddg_batches = await asyncio.gather(*ddg_tasks, return_exceptions=True)
+            if "duckduckgo" not in session.backends_tried:
+                session.backends_tried.append("duckduckgo")
             for batch in ddg_batches:
                 if isinstance(batch, Exception):
                     continue

@@ -245,6 +245,10 @@ async def test_runner_emits_end_of_run_telemetry(
     assert "hn=" in line and "stackexchange=" in line
     assert "sources=2" in line
     assert "stopped=" in line
+    # tried= lists the backends actually attempted (sorted) so empty-result
+    # runs still show routing activity in the one-line summary.
+    assert "tried=" in line
+    assert "hn" in line and "stackexchange" in line
 
 
 @pytest.mark.asyncio
@@ -306,3 +310,43 @@ async def test_runner_preserves_backend_routing_through_plan_stage(
     # First two queries route as planned; third falls back to the runtime
     # default (DDG, since cloud_search is off in this runner).
     assert sorted(seen_backends) == sorted(["stackexchange", "hn", "duckduckgo"])
+
+
+@pytest.mark.asyncio
+async def test_telemetry_includes_tried_field_even_on_no_sources(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even when every backend returns zero hits and the run stops on
+    NO_SOURCES, telemetry should still show which backends were attempted.
+    That's the whole point of `tried=` — routing-vs-results diagnosis.
+
+    Note: a single HN query that returns 0 sources will trigger the
+    generalized thin-pool top-up (HN is a non-DDG backend), so DDG also
+    ends up in `tried=`. That's the expected post-fix behavior."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1", "backend": "hn"}]'),
+    ])
+
+    def fake_search_many(
+        q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any,
+    ) -> list[SearchResult]:
+        return []  # every backend comes up empty
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs: list[str] = []
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=logs.append,
+        max_queries=1,
+    )
+    await runner.run("?")
+
+    telemetry = [ln for ln in logs if "telemetry:" in ln]
+    assert len(telemetry) == 1
+    line = telemetry[0]
+    assert "mode=none" in line
+    assert "sources=0" in line
+    assert "tried=" in line
+    # HN was routed; DDG was pulled in by the thin-pool safety net.
+    assert "hn" in line
+    assert "duckduckgo" in line

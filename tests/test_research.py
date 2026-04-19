@@ -1397,7 +1397,7 @@ async def test_thin_tavily_pool_tops_up_from_ddg(
     assert "tavily" in call_log
     assert "duckduckgo" in call_log
     # Transcript warning surfaced on session (so research_action can render it).
-    assert any("tavily thin" in w for w in session.warnings)
+    assert any("thin pool" in w and "tavily" in w for w in session.warnings)
 
 
 @pytest.mark.asyncio
@@ -1474,3 +1474,47 @@ async def test_session_warnings_thin_pool(
     session = await runner.run("q?")
     assert session.stopped_reason == ResearchStopReason.COMPLETE
     assert any("thin source pool" in w for w in session.warnings)
+
+
+@pytest.mark.asyncio
+async def test_thin_pool_fires_for_hn_backend_not_just_tavily(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The thin-pool top-up used to be Tavily-specific. Now any planner-routed
+    backend that under-delivers gets the DDG safety net — e.g. HN returning 0
+    hits for a non-tech query should still produce sources via DDG."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1", "backend": "hn"}]', tokens=50),
+        _ok('{"kind": "factual", "answer": "A [1].", "citations": [1]}', tokens=60),
+    ])
+
+    call_log: list[str] = []
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        call_log.append(backend)
+        if backend == "hn":
+            return []  # HN came up empty
+        if backend == "duckduckgo":
+            return [
+                _hit("https://ddg1", "DDG A", "summary A", "duckduckgo"),
+                _hit("https://ddg2", "DDG B", "summary B", "duckduckgo"),
+                _hit("https://ddg3", "DDG C", "summary C", "duckduckgo"),
+            ]
+        return []
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, max_fetches=5,
+    )
+    session = await runner.run("q?")
+    # HN was tried first, then DDG kicked in as the safety net.
+    assert "hn" in call_log
+    assert "duckduckgo" in call_log
+    # The warning names the backend that under-delivered.
+    assert any("thin pool" in w and "hn" in w for w in session.warnings)
+    # backends_tried reflects both the primary pass and the top-up.
+    assert "hn" in session.backends_tried
+    assert "duckduckgo" in session.backends_tried
