@@ -476,6 +476,119 @@ class ResearchRunner:
         result = _parse_synth_json(raw_text)
         return result, raw_text, response.tokens_used
 
+    # ---- Deep / search mode (cloud-native web search) -------------------
+
+    async def run_deep(
+        self, question: str, *, mode: Literal["deep", "search"] = "deep"
+    ) -> ResearchSession:
+        """Run /research with Anthropic's server-side web tools.
+
+        ``mode="deep"`` attaches both web_search + web_fetch — Sonnet reads
+        pages server-side (best for JS-heavy / paywalled sites, but
+        input-token heavy because each fetch loads full page content into
+        the tool-loop context).
+
+        ``mode="search"`` attaches only web_search — Sonnet sees filtered
+        result snippets but never full page dumps, so input tokens stay
+        bounded and cost drops ~5-10x vs deep mode. Loses access to
+        long-article detail but keeps fresh-web awareness.
+
+        In both modes we parse the model-reported ``sources`` array into
+        ``Source`` objects (empty excerpts; the model summarized on the
+        server) and skip ``_validate_picks``.
+        """
+        session = ResearchSession(question=question)
+        self._log(f"? {question}")
+        label = "deep" if mode == "deep" else "search"
+        self._set_status(
+            f"researching ({label}): "
+            f"{'searching + reading' if mode == 'deep' else 'searching'}"
+        )
+
+        if self._cloud_backend is None:
+            session.stopped_reason = ResearchStopReason.CRASHED
+            self._log(
+                f"  {label} mode requires /cloud enable (no backend configured)"
+            )
+            return session
+
+        prompt = (
+            _DEEP_SYNTH_PROMPT if mode == "deep" else _SEARCH_SYNTH_PROMPT
+        ).format(question=question)
+        try:
+            deep = await asyncio.to_thread(
+                self._cloud_backend.research_deep,
+                prompt,
+                max_tokens=3000,
+                json_schema=SYNTH_SCHEMA_DEEP,
+                include_fetch=(mode == "deep"),
+            )
+        except CloudBackendError as e:
+            self._log(f"  synth: {label}-mode failed ({e.kind}): {e}")
+            log.warning("research %s failed (%s): %s", label, e.kind, e)
+            session.stopped_reason = ResearchStopReason.CRASHED
+            return session
+
+        session.tokens_used = deep.tokens_used
+        self._log(
+            f"  synth: {label} ({self._cloud_backend.model}, "
+            f"{deep.iterations} continuation{'s' if deep.iterations != 1 else ''}, "
+            f"{deep.tokens_used} tokens)"
+        )
+        log.info(
+            "research %s: %d iterations, %d tokens in %.1fs",
+            label, deep.iterations, deep.tokens_used, deep.latency_ms / 1000.0,
+        )
+        if deep.finish_reason == "length":
+            self._log(
+                f"  warning: {label}-mode hit max_tokens, JSON may be truncated"
+            )
+
+        self._set_status(f"researching ({label}): validating")
+        raw_text = deep.text.strip()
+        result, sources = _parse_synth_json_deep(raw_text)
+        session.sources = sources
+        for src in session.sources:
+            self._log(f"  [{src.number}] {src.url}")
+
+        session.answer = self._finalize_answer_deep(result, raw_text, sources)
+        session.stopped_reason = ResearchStopReason.COMPLETE
+        return session
+
+    def _finalize_answer_deep(
+        self,
+        result: SynthResult | None,
+        raw_text: str,
+        sources: list[Source],
+    ) -> str:
+        """Render a deep-mode synth. We skip _validate_picks (no excerpts to
+        substring-match) but still strip out-of-range citations and fall
+        through to prose when JSON parsing fails."""
+        max_n = len(sources)
+        if result is None:
+            self._log(
+                "  synth: deep-mode JSON parse failed, falling back to prose"
+            )
+            log.warning("research deep returned invalid JSON, using prose fallback")
+            return _strip_dangling_markers(raw_text, max_n) if max_n else raw_text
+
+        if result.kind == "comparison":
+            valid_picks = [
+                p for p in result.picks
+                if not sources or 1 <= p.citation <= max_n
+            ]
+            if not valid_picks:
+                return "Deep-mode synth did not cite any picks in range."
+            verdict = result.verdict
+            if verdict is not None and max_n and not 1 <= verdict.citation <= max_n:
+                verdict = None
+            return _render_synth_result(
+                replace(result, picks=valid_picks, verdict=verdict)
+            )
+
+        valid_citations = [c for c in result.citations if 1 <= c <= max_n]
+        return _render_synth_result(replace(result, citations=valid_citations))
+
     # ---- Refine ----------------------------------------------------------
 
     async def refine(
@@ -605,6 +718,131 @@ SYNTH_SCHEMA: dict[str, Any] = {
     },
     "required": ["kind"],
 }
+
+
+# Deep-mode variant: adds an inline ``sources`` array so we can recover
+# [N] -> URL mapping without a local fetch pass. Anthropic-side web_search /
+# web_fetch tools read pages server-side; we only see summaries in the
+# model's output.
+SYNTH_SCHEMA_DEEP: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["comparison", "factual"]},
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "citation": {"type": "integer"},
+                },
+                "required": ["name", "reason", "citation"],
+            },
+        },
+        "verdict": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "citation": {"type": "integer"},
+            },
+            "required": ["text", "citation"],
+        },
+        "answer": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "integer"}},
+        "sources": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "number": {"type": "integer"},
+                    "url": {"type": "string"},
+                    "title": {"type": "string"},
+                },
+                "required": ["number", "url"],
+            },
+        },
+    },
+    "required": ["kind", "sources"],
+}
+
+
+def _parse_synth_json_deep(text: str) -> tuple[SynthResult | None, list[Source]]:
+    """Parse the deep-mode synth JSON. Returns (result, sources) where
+    sources comes from the inline ``sources`` array and has empty excerpts
+    (the model read pages server-side; we never see the raw text).
+
+    Dedupes sources by URL: Sonnet often runs overlapping search queries
+    and cites the same page under different numbers. We keep the first
+    occurrence and remap any citations in picks/verdict/citations that
+    pointed at the dropped duplicates."""
+    if not text:
+        return None, []
+    decoder = json.JSONDecoder()
+    cursor = 0
+    while True:
+        start = text.find("{", cursor)
+        if start == -1:
+            return None, []
+        try:
+            parsed, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        cursor = start + 1
+        if not isinstance(parsed, dict):
+            continue
+        result = _build_synth_result(parsed)
+        sources, remap = _dedupe_sources(parsed.get("sources") or [])
+        if remap and result is not None:
+            result = _remap_citations(result, remap)
+        if result is not None or sources:
+            return result, sources
+
+
+def _dedupe_sources(
+    raw: list[Any],
+) -> tuple[list[Source], dict[int, int]]:
+    """Build Source objects, dedupe by URL, return (sources, remap).
+
+    ``remap`` maps dropped source numbers to the canonical (first-seen)
+    number for the same URL — empty when no dupes."""
+    by_url: dict[str, int] = {}
+    sources: list[Source] = []
+    remap: dict[int, int] = {}
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        num = item.get("number")
+        url = item.get("url")
+        if not isinstance(num, int) or not isinstance(url, str) or not url:
+            continue
+        canonical = by_url.get(url)
+        if canonical is not None:
+            if num != canonical:
+                remap[num] = canonical
+            continue
+        by_url[url] = num
+        title = str(item.get("title") or "")
+        sources.append(
+            Source(number=num, url=url, title=title, excerpt="", backend="cloud")
+        )
+    return sources, remap
+
+
+def _remap_citations(result: SynthResult, remap: dict[int, int]) -> SynthResult:
+    """Rewrite pick/verdict/citation numbers that point at dropped dupes."""
+    picks = [
+        replace(p, citation=remap.get(p.citation, p.citation))
+        for p in result.picks
+    ]
+    verdict = result.verdict
+    if verdict is not None:
+        verdict = replace(
+            verdict, citation=remap.get(verdict.citation, verdict.citation)
+        )
+    citations = [remap.get(c, c) for c in result.citations]
+    return replace(result, picks=picks, verdict=verdict, citations=citations)
 
 
 def _parse_synth_json(text: str) -> SynthResult | None:
@@ -861,6 +1099,47 @@ Question: {question}
 """
 
 
+_SEARCH_SYNTH_PROMPT = """You answer the user's research question using ONLY
+the web_search tool. Do not ask to fetch pages. Work from search result
+snippets and summaries.
+
+Output STRICT JSON ONLY matching this shape. No prose, no markdown fences.
+
+For comparison / "best X" / "which X should I buy" questions:
+{{
+  "kind": "comparison",
+  "picks": [
+    {{"name": "<brand + model>", "reason": "<1-2 sentences from snippets>", "citation": <N>}}
+  ],
+  "verdict": {{"text": "<2-3 sentences, name the winner and key tradeoff>", "citation": <N>}},
+  "sources": [
+    {{"number": <N>, "url": "<full url>", "title": "<page title>"}}
+  ]
+}}
+
+For factual / explanatory questions:
+{{
+  "kind": "factual",
+  "answer": "<3-8 sentences>",
+  "citations": [<N>, ...],
+  "sources": [
+    {{"number": <N>, "url": "<full url>", "title": "<page title>"}}
+  ]
+}}
+
+Rules:
+- The "sources" array MUST list every URL you actually used, numbered
+  starting at 1. Use the SAME number in "citation" fields and [N] markers.
+- If snippets don't contain enough detail for a comparison, emit the
+  factual shape explaining what's missing rather than inventing picks.
+- Prefer 2-3 well-targeted searches over 5+ broad ones - snippets are
+  your only source so keep the queries sharp.
+- No prose outside the JSON object.
+
+Question: {question}
+"""
+
+
 _REFINE_PROMPT = """You previously answered a research question using the
 numbered sources below. The user has a follow-up drilling into the same
 topic. Re-analyze the same sources through the lens of the follow-up.
@@ -898,4 +1177,49 @@ Rules:
 - Every "name" in comparison picks MUST appear verbatim in some source's
   excerpt. No exceptions.
 - Every answer MUST cite at least one source.
+"""
+
+
+_DEEP_SYNTH_PROMPT = """You answer the user's research question using the
+web_search and web_fetch tools to gather sources yourself. Search first,
+then fetch the most promising pages, then synthesize.
+
+Output STRICT JSON ONLY matching this shape. No prose, no markdown fences,
+no commentary.
+
+For comparison / "best X" / "which X should I buy" questions:
+{{
+  "kind": "comparison",
+  "picks": [
+    {{"name": "<brand + model>", "reason": "<1-2 sentences, name specifics>", "citation": <N>}}
+  ],
+  "verdict": {{"text": "<2-3 sentences, name the winner and the key tradeoff>", "citation": <N>}},
+  "sources": [
+    {{"number": <N>, "url": "<full url>", "title": "<page title>"}}
+  ]
+}}
+
+For factual / explanatory questions or when sources lack the specifics
+the question asks for:
+{{
+  "kind": "factual",
+  "answer": "<3-8 sentences>",
+  "citations": [<N>, ...],
+  "sources": [
+    {{"number": <N>, "url": "<full url>", "title": "<page title>"}}
+  ]
+}}
+
+Rules:
+- The "sources" array MUST list every URL you actually used, numbered
+  starting at 1. Use the SAME number in "citation" fields and in any
+  [N] markers inside text fields.
+- Do NOT cite a URL you did not fetch. Only include sources you read.
+- For comparison: 2-4 picks, each naming a specific product/service/model
+  that actually appears in one of your fetched pages.
+- Verdict should name the winner and explain WHY it won vs the runner-up.
+- For factual: 3-8 sentences, every claim grounded in a cited source.
+- No trailing prose outside the JSON object.
+
+Question: {question}
 """

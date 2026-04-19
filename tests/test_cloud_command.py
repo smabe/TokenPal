@@ -233,3 +233,93 @@ def test_model_accepts_allowlisted(isolated, cfg: TokenPalConfig) -> None:
 def test_unknown_subcommand_returns_usage(isolated, cfg: TokenPalConfig) -> None:
     msg = _handle_cloud_command("nonsense", cfg).message
     assert "Usage:" in msg
+
+
+# ---------------------------------------------------------------------------
+# Deep mode (/cloud deep on|off)
+# ---------------------------------------------------------------------------
+
+
+def test_deep_rejected_on_haiku_model(isolated, cfg: TokenPalConfig) -> None:
+    # Default model is Haiku — deep should refuse until the user changes it.
+    assert cfg.cloud_llm.model == "claude-haiku-4-5"
+    msg = _handle_cloud_command("deep on", cfg).message
+    assert "requires" in msg.lower()
+    assert cfg.cloud_llm.research_deep is False
+
+
+def test_deep_on_persists_for_sonnet(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    msg = _handle_cloud_command("deep on", cfg).message
+    assert "on" in msg.lower()
+    assert cfg.cloud_llm.research_deep is True
+    assert isolated["toml_data"]["cloud_llm"]["research_deep"] is True
+
+
+def test_deep_off_clears_flag(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-opus-4-7", cfg)
+    _handle_cloud_command("deep on", cfg)
+    msg = _handle_cloud_command("deep off", cfg).message
+    assert "off" in msg.lower()
+    assert cfg.cloud_llm.research_deep is False
+
+
+def test_deep_bare_status(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    _handle_cloud_command("deep on", cfg)
+    msg = _handle_cloud_command("deep", cfg).message
+    assert "on" in msg.lower()
+
+
+def test_status_surfaces_deep_flag(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("enable sk-ant-api03-" + "d" * 40, cfg)
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    _handle_cloud_command("deep on", cfg)
+    msg = _handle_cloud_command("", cfg).message
+    assert "deep" in msg.lower()
+
+
+def test_deep_on_returns_cost_warning(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    msg = _handle_cloud_command("deep on", cfg).message
+    # Must warn about cost on activation, not just after-the-fact.
+    assert "warning" in msg.lower() or "$" in msg
+
+
+def test_search_rejected_on_haiku(isolated, cfg: TokenPalConfig) -> None:
+    msg = _handle_cloud_command("search on", cfg).message
+    assert "requires" in msg.lower()
+    assert cfg.cloud_llm.research_search is False
+
+
+def test_search_on_persists_for_sonnet(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    msg = _handle_cloud_command("search on", cfg).message
+    assert "on" in msg.lower()
+    assert cfg.cloud_llm.research_search is True
+    assert isolated["toml_data"]["cloud_llm"]["research_search"] is True
+
+
+def test_search_off_clears_flag(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    _handle_cloud_command("search on", cfg)
+    msg = _handle_cloud_command("search off", cfg).message
+    assert "off" in msg.lower()
+    assert cfg.cloud_llm.research_search is False
+
+
+def test_search_on_while_deep_on_notes_override(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    _handle_cloud_command("deep on", cfg)
+    msg = _handle_cloud_command("search on", cfg).message
+    assert "deep" in msg.lower() and "precedence" in msg.lower()
+
+
+def test_status_surfaces_search_flag(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("enable sk-ant-api03-" + "s" * 40, cfg)
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    _handle_cloud_command("search on", cfg)
+    msg = _handle_cloud_command("", cfg).message
+    assert "search" in msg.lower()

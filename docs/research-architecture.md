@@ -152,6 +152,91 @@ input + ~1.5K output (3x cheaper than Sonnet, 5x cheaper than Opus).
 See `plans/shipped/claude-api-research-synth.md` for the full
 design rationale.
 
+### Cloud web modes: search vs deep
+
+Two opt-in cloud-driven modes replace the local pipeline with Sonnet-
+driven server-side tools. Both require a Sonnet 4.6+ model.
+
+**Search mode (`/cloud search on`).** Attaches only
+`web_search_20260209`. Sonnet picks queries, reads filtered snippets
+from the server, and synthesizes without ever fetching full pages.
+Cheap (~$0.15-0.25/run typical) because search results are filtered
+server-side — input tokens stay bounded. Good middle tier when you
+want fresh-web awareness without the snowball cost.
+
+**Deep mode (`/cloud deep on`).** Attaches `web_search_20260209` +
+`web_fetch_20260209`. Sonnet fetches full pages server-side — handles
+JS-heavy SPAs, bot-blocked sites, and paywalled previews the local
+pipeline can't touch. **WARNING: $1-3/run** on review-heavy queries
+because every `web_fetch` loads full page content into the tool-loop
+context, and each subsequent step re-bills the accumulated input.
+Slash handler surfaces the warning on activation.
+
+If both flags are on, **deep wins** (logged as override). Config toggles
+are mutually evaluated at runtime; no UI forbids setting both, but the
+runner picks one.
+
+### Deep mode (cloud-native web search)
+
+`/cloud deep on` (or the modal checkbox) replaces stages 1-4 entirely
+with a single agentic call through Anthropic's server-side
+`web_search_20260209` + `web_fetch_20260209` tools. Sonnet or Opus
+drives the search loop, reads pages server-side, and returns a
+synthesized JSON answer with an inline `sources` array.
+
+**When to use.** The local pipeline chokes on JS-heavy SPAs
+(rtings.com), bot-blocked sites (Forbes), aggressive Cloudflare, and
+paywalled previews - deep mode reaches all of those. For Wikipedia /
+Reddit / most blogs, the local path is cheaper and often just as good.
+Keep it off by default; flip it on when the topic demands it.
+
+**Model gating.** Deep mode is **Sonnet 4.6+ only**. Haiku 4.5 falls
+back to the older `web_search_20250305` tool which loads full results
+into context (token cost explodes) and doesn't support adaptive
+thinking. The `/cloud deep on` command refuses when the current
+model is Haiku; the modal checkbox is disabled for the same reason.
+
+**How it runs.** `CloudBackend.research_deep` sends one
+`messages.create` call with both tools attached, `thinking: adaptive`,
+and the deep-mode synth schema (`SYNTH_SCHEMA_DEEP` — adds a required
+`sources` array). Anthropic's server orchestrates search → fetch →
+synthesize. When the loop hits its built-in iteration cap the response
+returns `stop_reason="pause_turn"`; we re-send the full message history
+(original user + the assistant turn so far) and the API resumes -
+**no "please continue" user follow-up**, that confuses the resume
+path. We cap at 3 continuations total to bound worst-case cost.
+
+**Source provenance.** Because Anthropic reads the pages server-side,
+we never see the raw excerpts. `ResearchRunner.run_deep` builds
+`Source` objects from the model-reported `sources` array with empty
+excerpts and `backend="cloud"`. `_validate_picks` is **skipped** in
+deep mode (no text to substring-match against); the trust model shifts
+from "substring-grounded" to "Sonnet-with-adaptive-thinking plus
+server-enforced JSON schema." Out-of-range citations still get
+stripped; picks without a valid citation get dropped.
+
+**Cache isolation.** The deep-mode and local-mode caches are keyed
+separately: `sha256("deep:<q>")` vs `sha256("<q>")`. Same question run
+both ways stores both answers; a `/research` re-run in the mode you're
+currently in serves its own cached result, not the other mode's.
+
+**/refine interaction.** `/refine` reuses cached source excerpts to
+re-synthesize. Deep-mode sources have empty excerpts - `_handle_refine`
+detects this (all excerpts empty) and refuses with a message pointing
+the user to a fresh `/research` instead.
+
+**Filter boundary.** The local path runs
+`contains_sensitive_content_term` on article excerpts before they reach
+synth. Deep mode bypasses this - Anthropic's content policies apply
+server-side instead. Something to weigh before flipping it on for
+sensitive-topic research.
+
+**Cost.** ~2-3x a normal Sonnet /research call (search-tool billing
++ agentic-loop sampling overhead). Still cheap in absolute terms
+($0.12-0.18/run vs $0.05); a 20-run week on deep mode is ~$2.50.
+
+See `plans/shipped/cloud-native-web-search.md` for the full design.
+
 ### 5. Validate + render
 
 Structured output from synth goes through `_finalize_answer`:

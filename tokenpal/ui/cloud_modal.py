@@ -30,7 +30,7 @@ from textual.widgets import (
     RadioSet,
 )
 
-from tokenpal.llm.cloud_backend import ALLOWED_MODELS
+from tokenpal.llm.cloud_backend import ALLOWED_MODELS, DEEP_MODE_MODELS
 
 
 @dataclass(frozen=True)
@@ -40,6 +40,8 @@ class CloudModalState:
     enabled: bool
     research_synth: bool
     research_plan: bool
+    research_deep: bool
+    research_search: bool
     model: str
     key_fingerprint: str | None  # None when no key stored
 
@@ -53,6 +55,8 @@ class CloudModalResult:
     enabled: bool
     research_synth: bool
     research_plan: bool
+    research_deep: bool
+    research_search: bool
     model: str
     new_api_key: str | None
 
@@ -163,6 +167,27 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 id="toggle-plan",
                 value=s.research_plan,
             )
+            # Search mode (cheap): Sonnet + web_search only, no web_fetch.
+            search_disabled = s.model not in DEEP_MODE_MODELS
+            yield Checkbox(
+                "Use cloud web search (Sonnet+ only)",
+                id="toggle-search",
+                value=s.research_search and not search_disabled,
+                disabled=search_disabled,
+            )
+            # Deep mode (expensive): server-side web_search + web_fetch.
+            deep_disabled = s.model not in DEEP_MODE_MODELS
+            yield Checkbox(
+                "Use deep web search + fetch (Sonnet+, WARNING $1-3/run)",
+                id="toggle-deep",
+                value=s.research_deep and not deep_disabled,
+                disabled=deep_disabled,
+            )
+            yield Label(
+                "",
+                id="deep-help",
+                classes="section-help",
+            )
 
             yield Label("Model", classes="section-header")
             yield Label(
@@ -180,6 +205,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 yield Button("Save", id="save-btn", variant="primary")
 
     def on_mount(self) -> None:
+        self._refresh_deep_help()
         # Land focus on the key input if there's no key yet (most common
         # first-use path), otherwise on Save.
         if self._state.key_fingerprint is None:
@@ -189,6 +215,48 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             except Exception:
                 pass
         self.query_one("#save-btn", Button).focus()
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        # Re-gate the search + deep checkboxes when the user picks a
+        # different model. Haiku forces both off.
+        if event.radio_set.id != "model-set":
+            return
+        model = self._selected_model()
+        eligible = model in DEEP_MODE_MODELS
+        for cb_id in ("#toggle-search", "#toggle-deep"):
+            try:
+                cb = self.query_one(cb_id, Checkbox)
+            except Exception:
+                continue
+            cb.disabled = not eligible
+            if not eligible:
+                cb.value = False
+        self._refresh_deep_help()
+
+    def _selected_model(self) -> str:
+        try:
+            radio = self.query_one("#model-set", RadioSet)
+        except Exception:
+            return self._state.model
+        pressed = getattr(radio, "pressed_button", None)
+        return str(pressed.label) if pressed is not None else self._state.model
+
+    def _refresh_deep_help(self) -> None:
+        try:
+            label = self.query_one("#deep-help", Label)
+        except Exception:
+            return
+        model = self._selected_model()
+        if model not in DEEP_MODE_MODELS:
+            label.update(
+                "  Haiku doesn't support dynamic-filtering web tools. "
+                "Pick Sonnet 4.6 or Opus 4.7."
+            )
+        else:
+            label.update(
+                "  Search: cheap, snippets only. Deep: expensive "
+                "($1-3/run), fetches full pages. If both set, deep wins."
+            )
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         # "Replace stored key" toggles the enabled state of the key input.
@@ -214,13 +282,26 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
         enabled = self.query_one("#toggle-enabled", Checkbox).value
         synth = self.query_one("#toggle-synth", Checkbox).value
         plan = self.query_one("#toggle-plan", Checkbox).value
+        try:
+            deep_cb = self.query_one("#toggle-deep", Checkbox)
+            deep = bool(deep_cb.value and not deep_cb.disabled)
+        except Exception:
+            deep = False
+        try:
+            search_cb = self.query_one("#toggle-search", Checkbox)
+            search = bool(search_cb.value and not search_cb.disabled)
+        except Exception:
+            search = False
 
         # Selected model from the radio group.
-        radio = self.query_one("#model-set", RadioSet)
-        model = self._state.model  # fallback to current
-        pressed = getattr(radio, "pressed_button", None)
-        if pressed is not None:
-            model = str(pressed.label)
+        model = self._selected_model()
+
+        # If user switched to Haiku but a cloud-web flag was left on,
+        # force both off — the checkbox gating already does this via
+        # on_radio_set_changed, but belt-and-suspenders for headless tests.
+        if model not in DEEP_MODE_MODELS:
+            deep = False
+            search = False
 
         # API key: only pass up if user actually typed something AND
         # either (a) no key was stored, or (b) they checked "Replace".
@@ -238,6 +319,8 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             enabled=enabled,
             research_synth=synth,
             research_plan=plan,
+            research_deep=deep,
+            research_search=search,
             model=model,
             new_api_key=new_key,
         )

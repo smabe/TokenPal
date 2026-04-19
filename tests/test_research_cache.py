@@ -33,17 +33,19 @@ class _BrainStub:
             config=ResearchConfig(cache_ttl_s=cache_ttl_s)
         )
 
-    def _load_research_cache(self, question: str):
+    def _load_research_cache(self, question: str, mode: str = ""):
         from tokenpal.brain.orchestrator import Brain
-        return Brain._load_research_cache(self, question)
+        return Brain._load_research_cache(self, question, mode=mode)
 
-    def _save_research_cache(self, question: str, session: ResearchSession) -> None:
+    def _save_research_cache(
+        self, question: str, session: ResearchSession, mode: str = ""
+    ) -> None:
         from tokenpal.brain.orchestrator import Brain
-        Brain._save_research_cache(self, question, session)
+        Brain._save_research_cache(self, question, session, mode=mode)
 
-    def _research_cache_key(self, question: str) -> str:
+    def _research_cache_key(self, question: str, mode: str = "") -> str:
         from tokenpal.brain.orchestrator import Brain
-        return Brain._research_cache_key(self, question)
+        return Brain._research_cache_key(self, question, mode=mode)
 
     def _research_cache_ttl(self) -> float | None:
         from tokenpal.brain.orchestrator import Brain

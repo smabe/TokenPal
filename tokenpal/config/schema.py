@@ -344,12 +344,32 @@ class CloudLLMConfig:
     provider: Literal["anthropic"] = "anthropic"
     model: str = "claude-haiku-4-5"
     timeout_s: float = 30.0
+    # Deep mode's server-side tool loop can take 1-3 minutes per API
+    # call (and each pause_turn continuation resets this clock). 300s
+    # gives headroom without hanging indefinitely when Sonnet chases a
+    # bad lead.
+    deep_timeout_s: float = 300.0
     # Per-call-site toggles. research_synth is the primary site (biggest
     # quality lift, cheap). research_plan is opt-in - marginal gain on
     # well-phrased questions, real gain on ambiguous / multi-constraint
     # queries. Off by default so latency/cost stay minimal unless asked.
     research_synth: bool = True
     research_plan: bool = False
+    # Deep mode: replace the local search+fetch pipeline with Anthropic's
+    # server-side web_search_20260209 + web_fetch_20260209 tools. Only honored
+    # when model is Sonnet 4.6+ (Haiku falls back to the older, token-heavy
+    # web_search tool - not worth it). Every web_fetch loads full page content
+    # into the tool-loop context, which snowballs input tokens fast — real
+    # cost is $1-3/run on review-heavy queries, not the $0.12-0.18 the plan
+    # optimistically projected. Default off. See plans/cloud-native-web-search.md.
+    research_deep: bool = False
+    # Search-only mode: Sonnet drives web_search_20260209 (no web_fetch). Costs
+    # a fraction of deep mode because search results are filtered/summarized
+    # server-side rather than loaded as full page dumps. Useful when you want
+    # fresh-web-aware Sonnet synthesis without the "fetch 5 long articles"
+    # cost snowball. Mutually exclusive with research_deep (deep wins if both
+    # are set, logged as override).
+    research_search: bool = False
 
 
 @dataclass

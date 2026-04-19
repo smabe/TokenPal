@@ -211,7 +211,25 @@ def _check_cloud_llm(config: object) -> None:
         print(f"  {_WARN} Cloud LLM enabled but no key - run /cloud enable <key>")
         return
     model = getattr(cfg, "model", "?")
-    print(f"  {_CHECK} Cloud LLM on ({model}, key {fingerprint(key)}) for /research synth")
+    from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+    flags: list[str] = []
+    if getattr(cfg, "research_plan", False):
+        flags.append("planner")
+    if getattr(cfg, "research_deep", False):
+        if model in DEEP_MODE_MODELS:
+            flags.append("deep mode")
+        else:
+            flags.append("deep set (Sonnet+ needed)")
+    elif getattr(cfg, "research_search", False):
+        if model in DEEP_MODE_MODELS:
+            flags.append("search mode")
+        else:
+            flags.append("search set (Sonnet+ needed)")
+    flag_str = f", {', '.join(flags)}" if flags else ""
+    print(
+        f"  {_CHECK} Cloud LLM on ({model}{flag_str}, "
+        f"key {fingerprint(key)}) for /research synth"
+    )
 
 
 def _print_summary(problems: int) -> None:

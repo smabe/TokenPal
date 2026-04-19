@@ -19,7 +19,11 @@ from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import CloudLLMConfig, ResearchConfig
 from tokenpal.config.secrets import get_cloud_key
 from tokenpal.llm.base import AbstractLLMBackend
-from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
+from tokenpal.llm.cloud_backend import (
+    DEEP_MODE_MODELS,
+    CloudBackend,
+    CloudBackendError,
+)
 
 log = logging.getLogger(__name__)
 
@@ -81,10 +85,25 @@ class ResearchAction(AbstractAction):
             cloud_backend and self._cloud_config
             and getattr(self._cloud_config, "research_plan", False)
         )
+        cloud_mode: str = ""
+        if cloud_backend and self._cloud_config:
+            if (
+                getattr(self._cloud_config, "research_deep", False)
+                and cloud_backend.model in DEEP_MODE_MODELS
+            ):
+                cloud_mode = "deep"
+            elif (
+                getattr(self._cloud_config, "research_search", False)
+                and cloud_backend.model in DEEP_MODE_MODELS
+            ):
+                cloud_mode = "search"
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
-            log_callback=lambda s: log.info("research: %s", s),
+            log_callback=lambda s: log.info(
+                "research%s: %s",
+                f" ({cloud_mode})" if cloud_mode else "", s,
+            ),
             max_queries=cfg.max_queries,
             max_fetches=cfg.max_fetches,
             token_budget=cfg.token_budget,
@@ -96,7 +115,12 @@ class ResearchAction(AbstractAction):
         )
 
         try:
-            session = await runner.run(question)
+            if cloud_mode == "deep":
+                session = await runner.run_deep(question, mode="deep")
+            elif cloud_mode == "search":
+                session = await runner.run_deep(question, mode="search")
+            else:
+                session = await runner.run(question)
         except Exception:
             log.exception("research: pipeline crashed")
             return ActionResult(output="research: pipeline crashed", success=False)
@@ -138,7 +162,12 @@ def _build_cloud_backend(cfg: CloudLLMConfig | None) -> CloudBackend | None:
         log.info("cloud: enabled but no API key stored - using local synth")
         return None
     try:
-        backend = CloudBackend(api_key=key, model=cfg.model, timeout_s=cfg.timeout_s)
+        backend = CloudBackend(
+            api_key=key,
+            model=cfg.model,
+            timeout_s=cfg.timeout_s,
+            deep_timeout_s=getattr(cfg, "deep_timeout_s", 300.0),
+        )
     except (ValueError, CloudBackendError) as e:
         log.warning("cloud: backend setup failed (%s) - using local synth", e)
         return None

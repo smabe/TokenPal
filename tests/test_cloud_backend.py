@@ -12,6 +12,7 @@ import pytest
 
 from tokenpal.llm.cloud_backend import (
     ALLOWED_MODELS,
+    DEEP_MODE_MODELS,
     CloudBackend,
     CloudBackendError,
     _extract_text,
@@ -295,3 +296,167 @@ def test_stop_reason_mapping() -> None:
     assert _map_stop_reason("max_tokens") == "length"
     assert _map_stop_reason(None) is None
     assert _map_stop_reason("refusal") == "refusal"  # passthrough for unknown
+
+
+# ---- Deep mode (web_search_20260209 + web_fetch_20260209) -----------------
+
+
+class _SeqFakeClient:
+    """Returns a queued list of messages on successive create() calls."""
+
+    def __init__(self, results: list[Any]) -> None:
+        self._results = list(results)
+        self.calls: list[dict[str, Any]] = []
+        self.messages = SimpleNamespace(create=self._create)
+
+    def _create(self, **kwargs: Any) -> Any:
+        # Snapshot the messages list so later mutation by the caller
+        # doesn't alter our recorded history.
+        snap = dict(kwargs)
+        if "messages" in snap:
+            snap["messages"] = [dict(m) for m in snap["messages"]]
+        self.calls.append(snap)
+        return self._results.pop(0)
+
+
+def test_deep_mode_models_requires_sonnet_or_opus() -> None:
+    assert "claude-sonnet-4-6" in DEEP_MODE_MODELS
+    assert "claude-opus-4-7" in DEEP_MODE_MODELS
+    assert "claude-haiku-4-5" not in DEEP_MODE_MODELS
+
+
+def test_research_deep_rejects_haiku() -> None:
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    with pytest.raises(CloudBackendError) as exc_info:
+        b.research_deep("q")
+    assert exc_info.value.kind == "bad_model"
+
+
+def test_research_deep_sends_web_search_and_web_fetch_tools(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _SeqFakeClient([_fake_message('{"kind":"factual","sources":[]}')])
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    b.research_deep("prompt", max_tokens=1000)
+    sent = client.calls[0]
+    tools = sent["tools"]
+    # Tools include per-tool max_uses caps to keep Sonnet from exploring
+    # 10 sites when 3 would do.
+    search_tool = next(t for t in tools if t["type"] == "web_search_20260209")
+    fetch_tool = next(t for t in tools if t["type"] == "web_fetch_20260209")
+    assert search_tool["name"] == "web_search"
+    assert search_tool["max_uses"] > 0
+    assert fetch_tool["name"] == "web_fetch"
+    assert fetch_tool["max_uses"] > 0
+    # Adaptive thinking is required for worthwhile deep-mode output
+    assert sent["thinking"] == {"type": "adaptive"}
+
+
+def test_research_deep_passes_json_schema(fake_anthropic: dict[str, Any]) -> None:
+    client = _SeqFakeClient([_fake_message('{"kind":"factual","sources":[]}')])
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    schema = {"type": "object", "properties": {"kind": {"type": "string"}}}
+    b.research_deep("p", max_tokens=500, json_schema=schema)
+    sent = client.calls[0]["output_config"]
+    assert sent["format"]["type"] == "json_schema"
+    assert sent["format"]["schema"]["additionalProperties"] is False
+
+
+def test_research_deep_returns_text_tokens_and_zero_iterations(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _SeqFakeClient([
+        _fake_message(
+            '{"kind":"factual","sources":[]}',
+            stop_reason="end_turn",
+            output_tokens=123,
+        ),
+    ])
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    res = b.research_deep("p", max_tokens=100)
+    assert res.text.startswith('{"kind"')
+    assert res.tokens_used == 123
+    assert res.iterations == 0
+    assert res.finish_reason == "stop"
+
+
+def test_research_deep_continues_on_pause_turn(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    # First response pauses; second finalizes. We should re-send with the
+    # assistant turn appended — and NOT add a 'please continue' user turn.
+    paused = _fake_message("", stop_reason="pause_turn", output_tokens=50)
+    final = _fake_message(
+        '{"kind":"factual","sources":[]}',
+        stop_reason="end_turn",
+        output_tokens=60,
+    )
+    client = _SeqFakeClient([paused, final])
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    res = b.research_deep("p", max_tokens=100)
+    assert res.iterations == 1
+    assert res.tokens_used == 110
+    # Second call's messages: original user + assistant continuation.
+    second_msgs = client.calls[1]["messages"]
+    assert second_msgs[0]["role"] == "user"
+    assert second_msgs[1]["role"] == "assistant"
+    # No 'please continue' user follow-up.
+    roles = [m["role"] for m in second_msgs]
+    assert roles == ["user", "assistant"]
+
+
+def test_research_deep_caps_continuations(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    # Five pause_turn responses in a row — we should bail after the
+    # configured cap (_MAX_DEEP_CONTINUATIONS) rather than loop forever.
+    # Each continuation re-bills the full context, so the cap is kept
+    # aggressive; we just verify the loop terminates deterministically.
+    from tokenpal.llm.cloud_backend import _MAX_DEEP_CONTINUATIONS
+    paused = _fake_message("", stop_reason="pause_turn", output_tokens=10)
+    client = _SeqFakeClient([paused] * 5)
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    res = b.research_deep("p", max_tokens=100)
+    assert res.iterations == _MAX_DEEP_CONTINUATIONS
+    # Initial call + N continuations = N+1 messages.create invocations
+    assert len(client.calls) == _MAX_DEEP_CONTINUATIONS + 1
+
+
+def test_research_deep_search_only_omits_web_fetch(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    """include_fetch=False attaches web_search only — no web_fetch tool."""
+    client = _SeqFakeClient([_fake_message('{"kind":"factual","sources":[]}')])
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    b.research_deep("prompt", max_tokens=500, include_fetch=False)
+    sent = client.calls[0]
+    types = [t["type"] for t in sent["tools"]]
+    assert "web_search_20260209" in types
+    assert "web_fetch_20260209" not in types
+
+
+def test_research_deep_auth_error_surfaces_kind(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    import anthropic
+    err = anthropic.AuthenticationError.__new__(anthropic.AuthenticationError)
+    Exception.__init__(err, "bad key")
+
+    class _Raiser:
+        def __init__(self) -> None:
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **kwargs: Any) -> Any:
+            raise err
+
+    fake_anthropic["client"] = _Raiser()
+    b = CloudBackend(api_key="sk-ant-bad", model="claude-sonnet-4-6")
+    with pytest.raises(CloudBackendError) as exc_info:
+        b.research_deep("p")
+    assert exc_info.value.kind == "auth"

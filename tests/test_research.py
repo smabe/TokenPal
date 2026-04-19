@@ -1053,3 +1053,200 @@ async def test_no_cloud_backend_uses_local_synth_unchanged(
     assert session.stopped_reason == ResearchStopReason.COMPLETE
     assert len(llm.prompts) == 2
     assert "Local only" in session.answer
+
+
+# ---------------------------------------------------------------------------
+# Deep mode (cloud-native web search)
+# ---------------------------------------------------------------------------
+
+
+class _FakeDeepCloud:
+    """Stand-in for CloudBackend.research_deep used in runner tests."""
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        tokens_used: int = 500,
+        iterations: int = 0,
+        raise_on_call: Exception | None = None,
+    ) -> None:
+        self.model = "claude-sonnet-4-6"
+        self._text = text
+        self._tokens = tokens_used
+        self._iterations = iterations
+        self._raise = raise_on_call
+        self.calls: list[dict[str, Any]] = []
+
+    def research_deep(self, prompt: str, **kwargs: Any) -> Any:
+        self.calls.append({"prompt": prompt, **kwargs})
+        if self._raise is not None:
+            raise self._raise
+        from tokenpal.llm.cloud_backend import CloudBackendDeepResult
+        return CloudBackendDeepResult(
+            text=self._text,
+            tokens_used=self._tokens,
+            iterations=self._iterations,
+            latency_ms=250.0,
+            finish_reason="stop",
+        )
+
+    # ResearchRunner.run() should NEVER be called in deep mode — if this
+    # trips, run_deep leaked into the normal path.
+    def synthesize(self, *_a: Any, **_kw: Any) -> Any:  # pragma: no cover
+        raise AssertionError("synthesize must not be called in deep mode")
+
+
+@pytest.mark.asyncio
+async def test_run_deep_bypasses_plan_search_and_synth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Neither the local LLM nor the local search_many should be touched.
+    llm = _ScriptedLLM([])
+
+    def _boom(*_a: Any, **_kw: Any) -> Any:
+        raise AssertionError("search_many must not run in deep mode")
+    monkeypatch.setattr("tokenpal.brain.research.search_many", _boom)
+
+    deep_payload = (
+        '{"kind":"factual","answer":"Deep answer [1].",'
+        '"citations":[1],'
+        '"sources":[{"number":1,"url":"https://a.example","title":"A"}]}'
+    )
+    cloud = _FakeDeepCloud(deep_payload, tokens_used=800, iterations=1)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    session = await runner.run_deep("q")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert len(cloud.calls) == 1
+    assert llm.prompts == []
+    assert session.tokens_used == 800
+    assert len(session.sources) == 1
+    assert session.sources[0].url == "https://a.example"
+    assert session.sources[0].excerpt == ""  # deep-mode sources are summaries
+    assert session.sources[0].backend == "cloud"
+    assert "Deep answer" in session.answer
+    # Log flags the deep path and its continuation count.
+    assert any("deep" in line.lower() for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_run_deep_without_cloud_backend_crashes_cleanly() -> None:
+    llm = _ScriptedLLM([])
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+    )
+    session = await runner.run_deep("q")
+    assert session.stopped_reason == ResearchStopReason.CRASHED
+
+
+@pytest.mark.asyncio
+async def test_run_deep_propagates_cloud_backend_failure() -> None:
+    from tokenpal.llm.cloud_backend import CloudBackendError
+    llm = _ScriptedLLM([])
+    cloud = _FakeDeepCloud(
+        "", raise_on_call=CloudBackendError("rate", kind="rate_limit"),
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    session = await runner.run_deep("q")
+    assert session.stopped_reason == ResearchStopReason.CRASHED
+    # Local synth is NOT attempted on deep-mode failure — the plan calls for
+    # surfacing the failure; a caller (slash path) may choose to fall back.
+    assert llm.prompts == []
+
+
+@pytest.mark.asyncio
+async def test_run_deep_search_mode_omits_fetch_tool() -> None:
+    """mode='search' threads include_fetch=False to the backend."""
+    llm = _ScriptedLLM([])
+    deep_payload = (
+        '{"kind":"factual","answer":"Search-only answer [1].",'
+        '"citations":[1],'
+        '"sources":[{"number":1,"url":"https://a.example","title":"A"}]}'
+    )
+    cloud = _FakeDeepCloud(deep_payload, tokens_used=250)
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    session = await runner.run_deep("q", mode="search")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert len(cloud.calls) == 1
+    assert cloud.calls[0]["include_fetch"] is False
+    assert any("search" in line.lower() for line in logs)
+
+
+@pytest.mark.asyncio
+async def test_run_deep_dedupes_sources_and_remaps_citations() -> None:
+    """Sonnet often cites the same URL twice under different numbers. The
+    parser must collapse duplicates AND rewrite any pick/verdict citation
+    that pointed at a dropped dupe so the rendered answer stays grounded."""
+    llm = _ScriptedLLM([])
+    # Sources 1 and 3 share a URL; pick cites [3] (the dupe) and should
+    # get remapped to [1].
+    payload = (
+        '{"kind":"comparison",'
+        '"picks":['
+        '  {"name":"Thing A","reason":"fast","citation":1},'
+        '  {"name":"Thing B","reason":"cheap","citation":3}'
+        '],'
+        '"verdict":{"text":"A wins","citation":3},'
+        '"sources":['
+        '  {"number":1,"url":"https://a.example","title":"A"},'
+        '  {"number":2,"url":"https://b.example","title":"B"},'
+        '  {"number":3,"url":"https://a.example","title":"A again"}'
+        ']}'
+    )
+    cloud = _FakeDeepCloud(payload)
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    session = await runner.run_deep("q")
+    # Deduped to 2 sources keyed by URL, first occurrence wins.
+    assert len(session.sources) == 2
+    assert [s.number for s in session.sources] == [1, 2]
+    # Pick B and verdict originally cited [3]; both remapped to [1].
+    assert "[1]" in session.answer
+    assert "[3]" not in session.answer
+
+
+@pytest.mark.asyncio
+async def test_run_deep_comparison_renders_picks_and_verdict() -> None:
+    llm = _ScriptedLLM([])
+    deep_payload = (
+        '{"kind":"comparison",'
+        '"picks":['
+        '  {"name":"Thing A","reason":"fast","citation":1},'
+        '  {"name":"Thing B","reason":"cheap","citation":2}'
+        '],'
+        '"verdict":{"text":"A wins on speed","citation":1},'
+        '"sources":['
+        '  {"number":1,"url":"https://a.example","title":"A"},'
+        '  {"number":2,"url":"https://b.example","title":"B"}'
+        ']}'
+    )
+    cloud = _FakeDeepCloud(deep_payload)
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    session = await runner.run_deep("best X?")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "Thing A" in session.answer
+    assert "Thing B" in session.answer
+    assert "Verdict" in session.answer
+    assert len(session.sources) == 2

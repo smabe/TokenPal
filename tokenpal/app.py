@@ -22,9 +22,11 @@ from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
 from tokenpal.config.cloud_writer import (
+    set_cloud_deep,
     set_cloud_enabled,
     set_cloud_model,
     set_cloud_plan,
+    set_cloud_search,
 )
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
@@ -373,6 +375,8 @@ def main() -> None:
             enabled=cfg.enabled,
             research_synth=cfg.research_synth,
             research_plan=cfg.research_plan,
+            research_deep=cfg.research_deep,
+            research_search=cfg.research_search,
             model=cfg.model,
             key_fingerprint=fingerprint(stored_key) if stored_key else None,
         )
@@ -1215,7 +1219,8 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
         log.warning("cloud modal: could not persist enabled flag: %s", e)
     cfg.enabled = result.enabled
 
-    # research_synth + research_plan: upsert both via the TOML writer.
+    # research_synth + research_plan + research_deep + research_search:
+    # upsert via the writer.
     try:
         from tokenpal.config.toml_writer import update_config
 
@@ -1223,12 +1228,16 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
             section = data.setdefault("cloud_llm", {})
             section["research_synth"] = result.research_synth
             section["research_plan"] = result.research_plan
+            section["research_deep"] = result.research_deep
+            section["research_search"] = result.research_search
 
         update_config(_mutate)
     except OSError as e:
         log.warning("cloud modal: could not persist site flags: %s", e)
     cfg.research_synth = result.research_synth
     cfg.research_plan = result.research_plan
+    cfg.research_deep = result.research_deep
+    cfg.research_search = result.research_search
 
     if result.model in ALLOWED_MODELS and result.model != cfg.model:
         try:
@@ -1237,8 +1246,11 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
             log.warning("cloud modal: could not persist model: %s", e)
         cfg.model = result.model
 
-    log.info("cloud modal: enabled=%s synth=%s plan=%s model=%s",
-             cfg.enabled, cfg.research_synth, cfg.research_plan, cfg.model)
+    log.info(
+        "cloud modal: enabled=%s synth=%s plan=%s deep=%s search=%s model=%s",
+        cfg.enabled, cfg.research_synth, cfg.research_plan,
+        cfg.research_deep, cfg.research_search, cfg.model,
+    )
 
 
 def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
@@ -1265,7 +1277,26 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         key = get_cloud_key()
         if not key:
             return "Cloud LLM: enabled but no key - run /cloud enable <key>"
-        return f"Cloud LLM: enabled, {cfg.model}, key {fingerprint(key)}"
+        from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+        flags: list[str] = []
+        if cfg.research_plan:
+            flags.append("plan")
+        # deep overrides search when both are set
+        if cfg.research_deep:
+            if cfg.model in DEEP_MODE_MODELS:
+                flags.append("deep")
+            else:
+                flags.append("deep=set but needs Sonnet+")
+        elif cfg.research_search:
+            if cfg.model in DEEP_MODE_MODELS:
+                flags.append("search")
+            else:
+                flags.append("search=set but needs Sonnet+")
+        flag_str = f", {'+'.join(flags)}" if flags else ""
+        return (
+            f"Cloud LLM: enabled, {cfg.model}{flag_str}, "
+            f"key {fingerprint(key)}"
+        )
 
     if subcmd == "" or subcmd == "status":
         return CommandResult(_status_line())
@@ -1355,8 +1386,95 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         verb = "on" if new_val else "off"
         return CommandResult(f"Cloud planner stage turned {verb}.")
 
+    if subcmd == "deep":
+        from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+        if target.lower() in ("on", "true", "enable"):
+            new_val = True
+        elif target.lower() in ("off", "false", "disable"):
+            new_val = False
+        else:
+            state = "on" if cfg.research_deep else "off"
+            needs = (
+                "" if cfg.model in DEEP_MODE_MODELS
+                else f"\nNote: deep mode requires Sonnet 4.6+ "
+                     f"(current model: {cfg.model})."
+            )
+            return CommandResult(
+                f"Cloud deep mode: {state}. "
+                "Usage: /cloud deep [on|off]. "
+                "Replaces local search+fetch with Anthropic's server-side "
+                "web_search + web_fetch tools.\n\n"
+                "WARNING: deep mode can cost $1-3/run on review-heavy "
+                "queries. Every web_fetch loads full page content into "
+                "the tool-loop context, and each subsequent step re-bills "
+                "the accumulated input. For fresh-web Sonnet synthesis "
+                "without the snowball, use /cloud search on instead."
+                f"{needs}"
+            )
+        if new_val and cfg.model not in DEEP_MODE_MODELS:
+            allowed = ", ".join(sorted(DEEP_MODE_MODELS))
+            return CommandResult(
+                f"Deep mode requires one of: {allowed}. "
+                f"Current model is {cfg.model}. "
+                f"Run /cloud model <id> first."
+            )
+        try:
+            set_cloud_deep(new_val)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist deep flag: {e}")
+        cfg.research_deep = new_val
+        if new_val:
+            return CommandResult(
+                "Cloud deep mode turned on.\n"
+                "WARNING: expect $1-3 per /research run. Each web_fetch "
+                "loads full page content; the tool-loop re-bills it on "
+                "every step. Prefer /cloud search for cheaper Sonnet-on-web."
+            )
+        return CommandResult("Cloud deep mode turned off.")
+
+    if subcmd == "search":
+        from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+        if target.lower() in ("on", "true", "enable"):
+            new_val = True
+        elif target.lower() in ("off", "false", "disable"):
+            new_val = False
+        else:
+            state = "on" if cfg.research_search else "off"
+            needs = (
+                "" if cfg.model in DEEP_MODE_MODELS
+                else f"\nNote: search mode requires Sonnet 4.6+ "
+                     f"(current model: {cfg.model})."
+            )
+            return CommandResult(
+                f"Cloud search mode: {state}. "
+                "Usage: /cloud search [on|off]. "
+                "Sonnet drives web_search only (no web_fetch). Costs a "
+                "fraction of deep mode because search results are "
+                "filtered server-side instead of loaded as full page "
+                f"dumps. Good middle tier for fresh-web awareness.{needs}"
+            )
+        if new_val and cfg.model not in DEEP_MODE_MODELS:
+            allowed = ", ".join(sorted(DEEP_MODE_MODELS))
+            return CommandResult(
+                f"Search mode requires one of: {allowed}. "
+                f"Current model is {cfg.model}."
+            )
+        try:
+            set_cloud_search(new_val)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist search flag: {e}")
+        cfg.research_search = new_val
+        verb = "on" if new_val else "off"
+        override = (
+            "\nNote: /cloud deep is also on — deep takes precedence. "
+            "Run /cloud deep off to use search mode."
+            if new_val and cfg.research_deep else ""
+        )
+        return CommandResult(f"Cloud search mode turned {verb}.{override}")
+
     return CommandResult(
-        "Usage: /cloud [status|enable <key>|disable|forget|model <id>|plan on|off]"
+        "Usage: /cloud [status|enable <key>|disable|forget|model <id>|"
+        "plan on|off|deep on|off|search on|off]"
     )
 
 

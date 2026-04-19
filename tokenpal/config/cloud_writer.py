@@ -38,3 +38,19 @@ def set_cloud_plan(enabled: bool) -> Path:
         data.setdefault("cloud_llm", {})["research_plan"] = enabled
 
     return update_config(mutate)
+
+
+def set_cloud_deep(enabled: bool) -> Path:
+    """Flip `[cloud_llm] research_deep = true/false` in config.toml."""
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("cloud_llm", {})["research_deep"] = enabled
+
+    return update_config(mutate)
+
+
+def set_cloud_search(enabled: bool) -> Path:
+    """Flip `[cloud_llm] research_search = true/false` in config.toml."""
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("cloud_llm", {})["research_search"] = enabled
+
+    return update_config(mutate)

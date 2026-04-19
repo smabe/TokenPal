@@ -1739,9 +1739,26 @@ class Brain:
                 question=question, stopped_reason=ResearchStopReason.UNAVAILABLE
             )
 
-        cached = self._load_research_cache(question)
+        from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+        cloud_cfg = self._research.cloud_config
+        cloud_enabled = (
+            cloud_cfg is not None
+            and getattr(cloud_cfg, "enabled", False)
+            and getattr(cloud_cfg, "model", "") in DEEP_MODE_MODELS
+        )
+        cloud_mode: str = ""  # "", "deep", or "search"
+        if cloud_enabled:
+            if getattr(cloud_cfg, "research_deep", False):
+                cloud_mode = "deep"
+            elif getattr(cloud_cfg, "research_search", False):
+                cloud_mode = "search"
+
+        cached = self._load_research_cache(question, mode=cloud_mode)
         if cached is not None:
-            log_cb(f"> research: {question} (cached)")
+            label = (
+                f"research ({cloud_mode})" if cloud_mode else "research"
+            )
+            log_cb(f"> {label}: {question} (cached)")
             self._ui_callback(cached.answer)
             self._last_comment_time = time.monotonic()
             return cached
@@ -1779,6 +1796,11 @@ class Brain:
             cloud_backend and self._research.cloud_config
             and getattr(self._research.cloud_config, "research_plan", False)
         )
+        # Cloud mode was pre-computed from config above; re-confirm the
+        # backend actually materialized so a forced-disable race (no key,
+        # cloud build failed) falls back to the local path cleanly.
+        if cloud_mode and cloud_backend is None:
+            cloud_mode = ""
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=_fetch,
@@ -1797,9 +1819,15 @@ class Brain:
         self._mode = BrainMode.RESEARCH
         if self._status_callback:
             self._status_callback("researching...")
-        log_cb(f"> research: {question}")
+        label = f"research ({cloud_mode})" if cloud_mode else "research"
+        log_cb(f"> {label}: {question}")
         try:
-            session = await runner.run(question)
+            if cloud_mode == "deep":
+                session = await runner.run_deep(question, mode="deep")
+            elif cloud_mode == "search":
+                session = await runner.run_deep(question, mode="search")
+            else:
+                session = await runner.run(question)
         except Exception:
             log.exception("Research run crashed")
             session = ResearchSession(
@@ -1826,7 +1854,7 @@ class Brain:
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()
         if session.is_complete:
-            self._save_research_cache(question, session)
+            self._save_research_cache(question, session, mode=cloud_mode)
             # Inject the research answer into the conversation session so
             # follow-ups typed directly (not via /refine) have context.
             # Without this, "what about side sleepers?" hits an empty local
@@ -1879,6 +1907,19 @@ class Brain:
         ]
         if not sources:
             self._ui_callback("/refine: no cached sources to re-analyze.")
+            return
+
+        # Deep-mode sources are summaries only — Anthropic read the pages
+        # server-side, we never stored excerpts. Re-synthesizing against
+        # empty excerpts would send an empty context block to the cloud
+        # and produce hallucinated follow-ups. Block with a clear message
+        # pointing at a fresh /research instead.
+        if all(not s.excerpt.strip() for s in sources):
+            self._ui_callback(
+                "/refine can't re-analyze deep-mode results — source "
+                "excerpts weren't cached. Run /research again with your "
+                "refined question instead."
+            )
             return
 
         from tokenpal.actions.research.research_action import _build_cloud_backend
@@ -1970,8 +2011,14 @@ class Brain:
             len(excerpt),
         )
 
-    def _research_cache_key(self, question: str) -> str:
-        return hashlib.sha256(question.strip().lower().encode("utf-8")).hexdigest()
+    def _research_cache_key(self, question: str, mode: str = "") -> str:
+        # Each mode (local / cloud search-only / cloud deep) produces
+        # materially different answers: different sources, different trust
+        # model on excerpts. Keying on ``mode`` keeps the result sets
+        # separate so a follow-up in any mode sees its own provenance.
+        prefix = f"{mode}:" if mode else ""
+        raw = f"{prefix}{question.strip().lower()}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _research_cache_ttl(self) -> float | None:
         """Return the cache TTL in seconds, or None when the cache is off."""
@@ -1980,13 +2027,15 @@ class Brain:
         ttl = self._research.config.cache_ttl_s
         return ttl if ttl > 0 else None
 
-    def _load_research_cache(self, question: str) -> ResearchSession | None:
+    def _load_research_cache(
+        self, question: str, mode: str = ""
+    ) -> ResearchSession | None:
         ttl = self._research_cache_ttl()
         if ttl is None:
             return None
         assert self._memory is not None
         hit = self._memory.get_research_answer(
-            self._research_cache_key(question), max_age_s=ttl
+            self._research_cache_key(question, mode=mode), max_age_s=ttl
         )
         if hit is None:
             return None
@@ -2013,7 +2062,9 @@ class Brain:
             stopped_reason=ResearchStopReason.COMPLETE,
         )
 
-    def _save_research_cache(self, question: str, session: ResearchSession) -> None:
+    def _save_research_cache(
+        self, question: str, session: ResearchSession, mode: str = ""
+    ) -> None:
         if self._research_cache_ttl() is None:
             return
         assert self._memory is not None
@@ -2028,7 +2079,7 @@ class Brain:
             for s in session.sources
         ])
         self._memory.cache_research_answer(
-            self._research_cache_key(question),
+            self._research_cache_key(question, mode=mode),
             question,
             session.answer,
             payload,
