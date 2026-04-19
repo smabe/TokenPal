@@ -29,7 +29,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `app_awareness` — macOS: Quartz window list (NOT NSWorkspace). Browser titles sanitized (stripped unless matching music player patterns)
 - `hardware` — psutil, cross-platform, expressive summaries at high utilization
 - `time_awareness` — cross-platform, session duration tracking
-- `idle` — pynput, cross-platform, three tiers, transition-only readings
+- `idle` — pynput, cross-platform, three tiers. Emits on transition (active→idle is silent, idle→active emits a "User returned…" reading) AND a sustained-idle reading every 60s (or on tier-bump) while the user stays AFK. Sustained reading carries `data["event"] == "sustained"` and tier-scaled confidence (0.3/0.5/0.7) so a sharp return still wins topic competition
 - `weather` — Open-Meteo API (free, no key), poll 30min, TTL 1hr, weight 0.0. Opt-in via `/zip` command or first-run wizard. Geocoding + config write in `tokenpal/config/weather.py`
 - `music` — macOS: AppleScript for Music.app/Spotify. Checks `System Events` before querying (prevents auto-launch). Track names redacted from logs
 - `productivity` — derives from MemoryStore: time-in-app, switches/hour, streaks. MemoryStore injected via `sense_configs`. Filters sensitive app names
@@ -58,8 +58,8 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - `PersonalityEngine`: tiered few-shot examples (anchor lines for recency priming), mood system (6 moods, custom per voice), running gags, guardrails (sensitive apps, late-night tone, cross-franchise filter)
 - Three prompt paths: `build_prompt()` (observations), `build_freeform_prompt()` (unprompted thoughts), `build_conversation_prompt()` (user input, single-turn fallback)
 - Multi-turn conversation: `ConversationSession` in orchestrator tracks history buffer, `build_conversation_system_message()` + `build_context_injection()` compose the messages array. Config in `[conversation]` section. Observations/freeform suppressed during active session. Session auto-expires after `timeout_s` (default 120s). History capped at `max_turns` pairs (default 10, limited by gemma4's 4-8k context — bump for larger models)
-- `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern, composite observations (`_detect_composites()`), public API: `active_readings()`, `prev_summary()`, `ttl_for()`
-- Topic roulette: `_pick_topic()` in orchestrator, no 3+ consecutive same-topic, focus hints prepended to context
+- `ContextWindowBuilder`: per-sense weighted interestingness, acknowledge pattern, composite observations (`_detect_composites()` returns `(line, suppress_senses)` tuples — `snapshot()` two-passes, skipping any sense names a composite supersedes), public API: `active_readings()`, `prev_summary()`, `ttl_for()`. AFK composite ("User is parked on X — no input for N min") fires when sustained-idle + unchanged app + typing-cadence-idle/absent; prepended to the composite list so the 2-line cap can't squeeze it out, and suppresses the raw `idle` line to avoid double-printing
+- Topic roulette: `_pick_topic()` in orchestrator, no 3+ consecutive same-topic, focus hints prepended to context. AFK demotion: when `_sustained_idle_active()` AND `activity_level() < 0.15`, any sense whose summary equals its `prev_summary` is multiplied by 0.2 so the sustained-idle reading wins instead of "Ghostty is foreground" twins. Comment-rate gate raises its cooldown ceiling from 90s to 180s while sustained-idle is active so the buddy genuinely pauses, not just retargets
 - Change detection: `changed_from` field on `SenseReading`, app_awareness populates "switched from X"
 - Pacing: dynamic cooldown (30-90s based on activity), max 8 comments/5min, forced 2-min silence after 3 consecutive, timing jitter. High-signal sense events (git) bypass the gate entirely
 - Freeform thoughts: 15% default, 30% for rich voices (50+ example lines), 45s min gap

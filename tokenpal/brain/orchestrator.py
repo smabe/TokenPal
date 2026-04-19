@@ -756,9 +756,13 @@ class Brain:
         if now < self._forced_silence_until:
             return False
 
-        # Dynamic cooldown: high activity = 30s, idle = 90s
+        # Dynamic cooldown: high activity = 30s, idle = 90s. When the user is
+        # explicitly AFK (sustained-idle reading present) extend the ceiling
+        # to 180s so the buddy actually pauses instead of riffing on whatever
+        # app is foregrounded every minute.
         activity = self._context.activity_level()
-        dynamic_cooldown = max(self._cooldown, 90.0 - activity * 60.0)
+        ceiling = 180.0 if self._sustained_idle_active() else 90.0
+        dynamic_cooldown = max(self._cooldown, ceiling - activity * 60.0)
         # Add jitter so comments don't feel like a metronome
         jittered_cooldown = dynamic_cooldown + random.uniform(0, 15.0)
         if elapsed < jittered_cooldown:
@@ -1279,11 +1283,25 @@ class Brain:
         except Exception:
             log.debug("idle_tool_fire telemetry write failed", exc_info=True)
 
+    def _sustained_idle_active(self) -> bool:
+        """True when the idle sense is currently emitting a sustained reading."""
+        idle = self._context.active_readings().get("idle")
+        return bool(idle and idle.data.get("event") == "sustained")
+
     def _pick_topic(self) -> str:
         """Weighted random topic selection, penalizing recently used topics."""
         now = time.monotonic()
         available: dict[str, float] = {}
         active = self._context.active_readings()
+        # When the user is explicitly AFK and overall activity has fallen off,
+        # demote any sense whose summary hasn't moved. This stops app_awareness
+        # ("Ghostty is foreground") from monopolizing topic picks once the user
+        # has clearly walked away — without naming app_awareness directly, so
+        # any other stale-and-unchanged sense gets the same treatment.
+        afk_penalty = (
+            self._sustained_idle_active()
+            and self._context.activity_level() < 0.15
+        )
 
         for sense_name, reading in active.items():
             # Freshness: newer readings are more interesting
@@ -1295,9 +1313,14 @@ class Brain:
             novelty = max(0.1, 1.0 - recent_count * 0.3)
             # Change bonus: readings that just changed are more comment-worthy
             prev = self._context.prev_summary(sense_name)
-            change_bonus = 1.5 if (prev is None or reading.summary != prev) else 0.5
+            unchanged = prev is not None and reading.summary == prev
+            change_bonus = 0.5 if unchanged else 1.5
+            # AFK demotion: if the user is parked AND this reading hasn't
+            # moved, multiply by 0.2 so it loses to whatever has actually
+            # changed (notably the sustained-idle reading itself).
+            activity_factor = 0.2 if (afk_penalty and unchanged) else 1.0
 
-            available[sense_name] = freshness * novelty * change_bonus
+            available[sense_name] = freshness * novelty * change_bonus * activity_factor
 
         if not available:
             return "app_awareness"

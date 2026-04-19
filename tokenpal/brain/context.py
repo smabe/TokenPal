@@ -56,9 +56,20 @@ class ContextWindowBuilder:
     def snapshot(self) -> str:
         """Build a natural-language context string for the LLM prompt."""
         now = time.monotonic()
-        lines: list[str] = []
 
+        # Composites first — some can suppress raw sense lines that they
+        # supersede (e.g. AFK composite swallows the lone idle line).
+        composite_entries = self._detect_composites()
+        suppressed: set[str] = set()
+        composite_lines: list[str] = []
+        for line, suppress in composite_entries:
+            composite_lines.append(line)
+            suppressed.update(suppress)
+
+        lines: list[str] = []
         for sense_name, reading in sorted(self._readings.items()):
+            if sense_name in suppressed:
+                continue
             age = now - reading.timestamp
             if age > self.ttl_for(sense_name):
                 continue
@@ -68,11 +79,7 @@ class ContextWindowBuilder:
             else:
                 lines.append(reading.summary)
 
-        # Composite observations — multi-signal patterns
-        composites = self._detect_composites()
-        if composites:
-            lines.extend(composites)
-
+        lines.extend(composite_lines)
         return "\n".join(lines)
 
     def interestingness(self) -> float:
@@ -141,51 +148,76 @@ class ContextWindowBuilder:
         # Blend: app switching is the stronger signal
         return min(app_activity * 0.7 + hw_activity * 0.3, 1.0)
 
-    def _detect_composites(self) -> list[str]:
+    def _detect_composites(self) -> list[tuple[str, set[str]]]:
         """Detect multi-signal patterns worth highlighting to the LLM.
 
-        Returns factual observations — the LLM editorializes, not us.
+        Returns (line, suppress_senses) tuples. Suppress_senses lists raw
+        sense names whose summary the composite supersedes — snapshot()
+        skips those to avoid printing the same fact twice.
         """
-        composites: list[str] = []
+        composites: list[tuple[str, set[str]]] = []
         active = self.active_readings()
 
         hw = active.get("hardware")
         prod = active.get("productivity")
         music = active.get("music")
         time_r = active.get("time_awareness")
+        idle = active.get("idle")
+        app = active.get("app_awareness")
+        typing = active.get("typing_cadence")
+
+        # AFK: user is parked on the same app with no input. Highest-signal
+        # composite — prepended so the 2-line cap can't squeeze it out.
+        if (
+            idle
+            and idle.data.get("event") == "sustained"
+            and app
+            and self.prev_summary("app_awareness") == app.summary
+            and (typing is None or typing.data.get("bucket") == "idle")
+        ):
+            idle_min = idle.data.get("idle_minutes", 0)
+            composites.append((
+                f"User is parked on \"{app.summary}\" — no input for "
+                f"{int(idle_min)} minutes",
+                {"idle"},
+            ))
 
         # High CPU + frequent app switching = something is grinding
         if hw and prod:
             cpu = hw.data.get("cpu_percent", 0)
             switches = prod.data.get("switches_per_hour", 0)
             if cpu > 70 and switches > 8:
-                composites.append(
+                composites.append((
                     f"CPU is at {cpu}% and user has switched apps "
-                    f"{int(switches)} times per hour"
-                )
+                    f"{int(switches)} times per hour",
+                    set(),
+                ))
 
         # Long focus + music = flow state
         if prod and music:
             focus_min = prod.data.get("time_in_current_min", 0)
             if focus_min > 30 and music.data.get("state") == "playing":
-                composites.append(
-                    f"User has been focused for {focus_min} minutes with music on"
-                )
+                composites.append((
+                    f"User has been focused for {focus_min} minutes with music on",
+                    set(),
+                ))
 
         # Late night + long session
         if time_r and prod:
             hour = time_r.data.get("hour", 12)
             session_min = prod.data.get("session_minutes", 0)
             if hour >= 23 and session_min > 120:
-                composites.append(
+                composites.append((
                     f"It's past 11 PM and user has been at it for "
-                    f"{session_min // 60} hours"
-                )
+                    f"{session_min // 60} hours",
+                    set(),
+                ))
             elif hour < 6 and hour >= 0 and session_min > 60:
-                composites.append(
+                composites.append((
                     f"It's {hour} AM and user is still working "
-                    f"after {session_min} minutes"
-                )
+                    f"after {session_min} minutes",
+                    set(),
+                ))
 
         return composites[:2]  # Cap at 2 to avoid bloating the context
 
