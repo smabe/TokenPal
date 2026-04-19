@@ -1762,6 +1762,8 @@ class Brain:
             except NotImplementedError:
                 log.debug("Backend does not support model swap")
 
+        from tokenpal.actions.research.research_action import _build_cloud_backend
+        cloud_backend = _build_cloud_backend(self._research.cloud_config)
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=_fetch,
@@ -1773,6 +1775,7 @@ class Brain:
             per_search_timeout_s=self._research.config.per_search_timeout_s,
             per_fetch_timeout_s=self._research.config.per_fetch_timeout_s,
             synth_thinking=self._research.config.synth_thinking,
+            cloud_backend=cloud_backend,
         )
 
         self._mode = BrainMode.RESEARCH
