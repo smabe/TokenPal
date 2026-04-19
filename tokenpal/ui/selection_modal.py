@@ -54,13 +54,18 @@ class SelectionModal(ModalScreen[dict[str, list[str]] | None]):
         align: center middle;
     }
     SelectionModal #modal-body {
-        width: 70;
-        max-width: 90%;
-        height: auto;
-        max-height: 80%;
+        width: 70%;
+        min-width: 40;
+        max-width: 140;
+        height: 90%;
+        max-height: 90%;
         background: $surface;
         border: thick $primary;
         padding: 1 2;
+    }
+    SelectionModal Label {
+        width: 100%;
+        height: auto;
     }
     SelectionModal #modal-title {
         text-style: bold;
@@ -74,15 +79,23 @@ class SelectionModal(ModalScreen[dict[str, list[str]] | None]):
     SelectionModal .group-help {
         color: $text-muted;
         padding-bottom: 1;
+        padding-left: 2;
     }
     SelectionModal SelectionList {
+        width: 100%;
         height: auto;
-        max-height: 12;
+        max-height: 24;
         border: none;
         padding: 0 1;
     }
+    SelectionModal SelectionList > .option-list--option {
+        text-wrap: wrap;
+        text-overflow: clip;
+        height: auto;
+    }
     SelectionModal #modal-buttons {
         height: auto;
+        width: 100%;
         padding-top: 1;
         align-horizontal: right;
     }

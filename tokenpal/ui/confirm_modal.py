@@ -21,13 +21,18 @@ class ConfirmModal(ModalScreen[bool]):
         align: center middle;
     }
     ConfirmModal #confirm-body {
-        width: 60;
-        max-width: 90%;
+        width: 50%;
+        min-width: 40;
+        max-width: 100;
         height: auto;
-        max-height: 60%;
+        max-height: 80%;
         background: $surface;
         border: thick $warning;
         padding: 1 2;
+    }
+    ConfirmModal Label {
+        width: 100%;
+        height: auto;
     }
     ConfirmModal #confirm-title {
         text-style: bold;
@@ -38,6 +43,7 @@ class ConfirmModal(ModalScreen[bool]):
     }
     ConfirmModal #confirm-buttons {
         height: auto;
+        width: 100%;
         padding-top: 1;
         align-horizontal: right;
     }

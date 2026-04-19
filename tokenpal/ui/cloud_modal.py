@@ -29,11 +29,11 @@ from textual.widgets import (
     Checkbox,
     Input,
     Label,
-    RadioButton,
     RadioSet,
 )
 
 from tokenpal.llm.cloud_backend import ALLOWED_MODELS, DEEP_MODE_MODELS
+from tokenpal.ui.wrapping_toggles import WrappingCheckbox, WrappingRadioButton
 
 
 @dataclass(frozen=True)
@@ -86,13 +86,18 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
         align: center middle;
     }
     CloudModal #cloud-body {
-        width: 72;
-        max-width: 90%;
-        height: auto;
-        max-height: 80%;
+        width: 70%;
+        min-width: 40;
+        max-width: 140;
+        height: 90%;
+        max-height: 90%;
         background: $surface;
         border: thick $primary;
         padding: 1 2;
+    }
+    CloudModal Label {
+        width: 100%;
+        height: auto;
     }
     CloudModal #cloud-title {
         text-style: bold;
@@ -106,17 +111,21 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
     CloudModal .section-help {
         color: $text-muted;
         padding-bottom: 1;
+        padding-left: 2;
     }
     CloudModal Input {
         margin-bottom: 1;
+        width: 100%;
     }
     CloudModal RadioSet {
+        width: 100%;
         height: auto;
         border: none;
         padding: 0;
     }
     CloudModal #cloud-buttons {
         height: auto;
+        width: 100%;
         padding-top: 1;
         align-horizontal: right;
     }
@@ -141,10 +150,10 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             yield Label("API Key", classes="section-header")
             if s.key_fingerprint is not None:
                 yield Label(
-                    f"  Key stored: {s.key_fingerprint}",
+                    f"Key stored: {s.key_fingerprint}",
                     classes="section-help",
                 )
-                yield Checkbox(
+                yield WrappingCheckbox(
                     "Replace stored key", id="replace-key", value=False,
                 )
                 # The replacement input starts disabled; toggled by the
@@ -158,7 +167,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 yield inp
             else:
                 yield Label(
-                    "  No key stored. Paste one from console.anthropic.com:",
+                    "No key stored. Paste one from console.anthropic.com:",
                     classes="section-help",
                 )
                 yield Input(
@@ -168,24 +177,24 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 )
 
             yield Label("Toggles", classes="section-header")
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Enable cloud LLM",
                 id="toggle-enabled",
                 value=s.enabled,
             )
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Use for /research synth (recommended)",
                 id="toggle-synth",
                 value=s.research_synth,
             )
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Use for /research planner (opt-in)",
                 id="toggle-plan",
                 value=s.research_plan,
             )
             # Search mode (cheap): Sonnet + web_search only, no web_fetch.
             search_disabled = s.model not in DEEP_MODE_MODELS
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Use cloud web search (Sonnet+ only)",
                 id="toggle-search",
                 value=s.research_search and not search_disabled,
@@ -193,7 +202,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             )
             # Deep mode (expensive): server-side web_search + web_fetch.
             deep_disabled = s.model not in DEEP_MODE_MODELS
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Use deep web search + fetch (Sonnet+, WARNING $1-3/run)",
                 id="toggle-deep",
                 value=s.research_deep and not deep_disabled,
@@ -207,31 +216,31 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
 
             yield Label("Model", classes="section-header")
             yield Label(
-                "  Haiku: ~$0.024/run, fast. "
+                "Haiku: ~$0.024/run, fast. "
                 "Sonnet: 3x more, better on complex synthesis. "
                 "Opus: 5x more, max quality.",
                 classes="section-help",
             )
             with RadioSet(id="model-set"):
                 for model_id in ALLOWED_MODELS:
-                    yield RadioButton(model_id, value=(model_id == s.model))
+                    yield WrappingRadioButton(model_id, value=(model_id == s.model))
 
             # ------------------------------------------------------------
             # Tavily section
             # ------------------------------------------------------------
             yield Label("Tavily (search + extract)", classes="section-header")
             yield Label(
-                "  LLM-optimized search with preloaded article content; "
+                "LLM-optimized search with preloaded article content; "
                 "when on, /research uses Tavily as the default search "
                 "backend.",
                 classes="section-help",
             )
             if s.tavily_key_fingerprint is not None:
                 yield Label(
-                    f"  Key stored: {s.tavily_key_fingerprint}",
+                    f"Key stored: {s.tavily_key_fingerprint}",
                     classes="section-help",
                 )
-                yield Checkbox(
+                yield WrappingCheckbox(
                     "Replace stored key",
                     id="tavily-replace-key",
                     value=False,
@@ -244,7 +253,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 )
             else:
                 yield Label(
-                    "  No key stored. Paste one from app.tavily.com:",
+                    "No key stored. Paste one from app.tavily.com:",
                     classes="section-help",
                 )
                 yield Input(
@@ -252,14 +261,14 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                     password=True,
                     id="tavily-api-key-input",
                 )
-            yield Checkbox(
+            yield WrappingCheckbox(
                 "Enable Tavily as default search",
                 id="toggle-tavily-enabled",
                 value=s.tavily_enabled,
             )
             with RadioSet(id="tavily-depth-set"):
                 for depth in ("basic", "advanced"):
-                    yield RadioButton(
+                    yield WrappingRadioButton(
                         depth, value=(depth == s.tavily_search_depth),
                     )
 
@@ -270,16 +279,16 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 "Brave (alternative web search)", classes="section-header",
             )
             yield Label(
-                "  Free-tier web search (2k queries/month); the planner "
+                "Free-tier web search (2k queries/month); the planner "
                 "routes queries here when it picks the brave backend.",
                 classes="section-help",
             )
             if s.brave_key_fingerprint is not None:
                 yield Label(
-                    f"  Key stored: {s.brave_key_fingerprint}",
+                    f"Key stored: {s.brave_key_fingerprint}",
                     classes="section-help",
                 )
-                yield Checkbox(
+                yield WrappingCheckbox(
                     "Replace stored key",
                     id="brave-replace-key",
                     value=False,
@@ -292,7 +301,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                 )
             else:
                 yield Label(
-                    "  No key stored. Paste one from "
+                    "No key stored. Paste one from "
                     "api.search.brave.com:",
                     classes="section-help",
                 )
@@ -351,12 +360,12 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
         model = self._selected_model()
         if model not in DEEP_MODE_MODELS:
             label.update(
-                "  Haiku doesn't support dynamic-filtering web tools. "
+                "Haiku doesn't support dynamic-filtering web tools. "
                 "Pick Sonnet 4.6 or Opus 4.7."
             )
         else:
             label.update(
-                "  Search: cheap, snippets only. Deep: expensive "
+                "Search: cheap, snippets only. Deep: expensive "
                 "($1-3/run), fetches full pages. If both set, deep wins."
             )
 
