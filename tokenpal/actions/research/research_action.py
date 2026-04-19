@@ -77,6 +77,10 @@ class ResearchAction(AbstractAction):
 
         cfg = self._research_config or ResearchConfig()
         cloud_backend = _build_cloud_backend(self._cloud_config)
+        cloud_plan = bool(
+            cloud_backend and self._cloud_config
+            and getattr(self._cloud_config, "research_plan", False)
+        )
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
@@ -88,6 +92,7 @@ class ResearchAction(AbstractAction):
             per_fetch_timeout_s=cfg.per_fetch_timeout_s,
             synth_thinking=cfg.synth_thinking,
             cloud_backend=cloud_backend,
+            cloud_plan=cloud_plan,
         )
 
         try:

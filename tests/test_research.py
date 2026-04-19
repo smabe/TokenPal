@@ -882,6 +882,100 @@ async def test_cloud_backend_failure_falls_back_to_local_synth(
 
 
 @pytest.mark.asyncio
+async def test_cloud_plan_routes_planner_to_cloud_when_flag_on(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """cloud_plan=True routes the planner call through the cloud backend.
+    Synth stays local here to isolate planner behavior."""
+    llm = _ScriptedLLM([
+        _ok('{"kind": "factual", "answer": "Ans [1].", "citations": [1]}',
+            tokens=50),  # local synth only - planner comes from cloud
+    ])
+    cloud = _FakeCloud(response=LLMResponse(
+        text='[{"query": "q from cloud"}]',
+        tokens_used=30, model_name="claude-haiku-4-5", latency_ms=1000.0,
+    ))
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, cloud_backend=cloud, cloud_plan=True,
+    )
+    # _synthesize has its own cloud branch; when cloud is set BOTH planner and
+    # synth will try cloud. To keep this test focused on planner, swap synth
+    # to the same cloud after planner via a fresh response.
+    cloud._response = LLMResponse(
+        text='{"kind": "factual", "answer": "Ans [1].", "citations": [1]}',
+        tokens_used=50, model_name="claude-haiku-4-5", latency_ms=800.0,
+    )
+    session = await runner.run("q")
+    # Planner + synth both went cloud when cloud_plan=True and backend set.
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert len(cloud.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_cloud_plan_false_keeps_planner_local_even_with_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default: cloud_plan=False means planner stays local even when a
+    cloud backend is present for synth."""
+    llm = _ScriptedLLM([_ok('[{"query": "local planner q"}]', tokens=30)])
+    cloud = _FakeCloud()  # synth succeeds via cloud
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, cloud_backend=cloud, cloud_plan=False,
+    )
+    await runner.run("q")
+    # Planner local (1 local call), synth cloud (1 cloud call).
+    assert len(llm.prompts) == 1
+    assert len(cloud.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cloud_plan_failure_falls_back_to_local_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If cloud planner raises, local planner serves the fallback."""
+    from tokenpal.llm.cloud_backend import CloudBackendError
+    # Local serves: planner fallback, synth fallback (cloud also fails for synth)
+    llm = _ScriptedLLM([
+        _ok('[{"query": "local q"}]', tokens=30),
+        _ok('{"kind": "factual", "answer": "Ans [1].", "citations": [1]}',
+            tokens=50),
+    ])
+    cloud = _FakeCloud(raise_on_call=CloudBackendError("boom", kind="network"))
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://a.example", "T", "snippet with [1]", "duckduckgo"),
+        ],
+    )
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=1, cloud_backend=cloud, cloud_plan=True,
+    )
+    session = await runner.run("q")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    # Cloud tried twice (planner + synth), both failed. Local served both.
+    assert len(cloud.calls) == 2
+    assert len(llm.prompts) == 2
+
+
+@pytest.mark.asyncio
 async def test_no_cloud_backend_uses_local_synth_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

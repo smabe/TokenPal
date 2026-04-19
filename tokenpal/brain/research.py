@@ -127,6 +127,7 @@ class ResearchRunner:
         per_fetch_timeout_s: float = 8.0,
         synth_thinking: bool = True,
         cloud_backend: CloudBackend | None = None,
+        cloud_plan: bool = False,
     ) -> None:
         self._llm = llm
         self._fetch = fetch_url
@@ -139,6 +140,7 @@ class ResearchRunner:
         self._per_fetch_timeout_s = per_fetch_timeout_s
         self._synth_thinking = synth_thinking
         self._cloud_backend = cloud_backend
+        self._cloud_plan = cloud_plan
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -286,7 +288,23 @@ class ResearchRunner:
             max_queries=self._max_queries,
             current_year=datetime.now().year,
         )
-        response = await self._llm.generate(prompt, max_tokens=400)
+        if self._cloud_backend is not None and self._cloud_plan:
+            log.info("research plan: dispatching to cloud (%s)",
+                     self._cloud_backend.model)
+            try:
+                response = await asyncio.to_thread(
+                    self._cloud_backend.synthesize,
+                    prompt,
+                    max_tokens=400,
+                    json_schema=None,  # planner output is a tolerant JSON array
+                )
+                log.info("research plan: cloud returned %d tokens in %.1fs",
+                         response.tokens_used, response.latency_ms / 1000.0)
+            except CloudBackendError as e:
+                log.warning("cloud plan failed (%s): %s - using local", e.kind, e)
+                response = await self._llm.generate(prompt, max_tokens=400)
+        else:
+            response = await self._llm.generate(prompt, max_tokens=400)
         session.tokens_used += response.tokens_used
         return _parse_planner_output(response.text, self._max_queries)
 

@@ -344,9 +344,12 @@ class CloudLLMConfig:
     provider: Literal["anthropic"] = "anthropic"
     model: str = "claude-haiku-4-5"
     timeout_s: float = 30.0
-    # Per-call-site toggle. Currently only research synth is wired to use
-    # the cloud path; more sites (if any) would get their own flag here.
+    # Per-call-site toggles. research_synth is the primary site (biggest
+    # quality lift, cheap). research_plan is opt-in - marginal gain on
+    # well-phrased questions, real gain on ambiguous / multi-constraint
+    # queries. Off by default so latency/cost stay minimal unless asked.
     research_synth: bool = True
+    research_plan: bool = False
 
 
 @dataclass

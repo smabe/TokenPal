@@ -1764,6 +1764,10 @@ class Brain:
 
         from tokenpal.actions.research.research_action import _build_cloud_backend
         cloud_backend = _build_cloud_backend(self._research.cloud_config)
+        cloud_plan = bool(
+            cloud_backend and self._research.cloud_config
+            and getattr(self._research.cloud_config, "research_plan", False)
+        )
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=_fetch,
@@ -1776,6 +1780,7 @@ class Brain:
             per_fetch_timeout_s=self._research.config.per_fetch_timeout_s,
             synth_thinking=self._research.config.synth_thinking,
             cloud_backend=cloud_backend,
+            cloud_plan=cloud_plan,
         )
 
         self._mode = BrainMode.RESEARCH

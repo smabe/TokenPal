@@ -21,7 +21,11 @@ from tokenpal.brain.orchestrator import AgentBridge, Brain, ResearchBridge
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.cli import parse_args, print_version, run_check, run_validate
 from tokenpal.commands import CommandDispatcher, CommandResult
-from tokenpal.config.cloud_writer import set_cloud_enabled, set_cloud_model
+from tokenpal.config.cloud_writer import (
+    set_cloud_enabled,
+    set_cloud_model,
+    set_cloud_plan,
+)
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
     set_idle_tools_enabled,
@@ -1235,8 +1239,29 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         cfg.model = target
         return CommandResult(f"Cloud LLM model set to {target}.")
 
+    if subcmd == "plan":
+        if target.lower() in ("on", "true", "enable"):
+            new_val = True
+        elif target.lower() in ("off", "false", "disable"):
+            new_val = False
+        else:
+            state = "on" if cfg.research_plan else "off"
+            return CommandResult(
+                f"Cloud planner stage: {state}. "
+                "Usage: /cloud plan [on|off]. "
+                "Off by default - opt-in for ambiguous / multi-constraint "
+                "questions where Haiku plans better than local Qwen3."
+            )
+        try:
+            set_cloud_plan(new_val)
+        except OSError as e:
+            return CommandResult(f"/cloud: could not persist plan flag: {e}")
+        cfg.research_plan = new_val
+        verb = "on" if new_val else "off"
+        return CommandResult(f"Cloud planner stage turned {verb}.")
+
     return CommandResult(
-        "Usage: /cloud [status|enable <key>|disable|forget|model <id>]"
+        "Usage: /cloud [status|enable <key>|disable|forget|model <id>|plan on|off]"
     )
 
 
