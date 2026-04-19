@@ -386,7 +386,7 @@ def test_tavily_populates_preloaded_content():
     mocked = _mock_tavily_response(tav_body)
     with patch("urllib.request.urlopen", mocked):
         be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
-        hits = be.search_all("something", limit=5)
+        hits = be._search_all("something", limit=5)
 
     assert len(hits) == 1
     hit = hits[0]
@@ -410,7 +410,7 @@ def test_tavily_skips_results_without_url_or_content():
     ])
     with patch("urllib.request.urlopen", mocked):
         be = TavilyBackend(api_key="tvly-keykeykeykeykey123")
-        hits = be.search_all("q", limit=5)
+        hits = be._search_all("q", limit=5)
 
     assert len(hits) == 1
     assert hits[0].source_url == "https://good"
@@ -423,7 +423,7 @@ def test_tavily_no_key_returns_empty():
     with patch.dict("os.environ", {}, clear=False):
         import os
         os.environ.pop("TOKENPAL_TAVILY_KEY", None)
-        assert be.search_all("q", limit=5) == []
+        assert be._search_all("q", limit=5) == []
 
 
 def test_tavily_network_error_returns_empty():
@@ -434,7 +434,7 @@ def test_tavily_network_error_returns_empty():
 
     with patch("urllib.request.urlopen", raiser):
         be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
-        assert be.search_all("q", limit=5) == []
+        assert be._search_all("q", limit=5) == []
 
 
 def test_tavily_malformed_response_returns_empty():
@@ -444,7 +444,7 @@ def test_tavily_malformed_response_returns_empty():
     mocked = _urlopen_returning({"unexpected": "shape"})
     with patch("urllib.request.urlopen", mocked):
         be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
-        assert be.search_all("q", limit=5) == []
+        assert be._search_all("q", limit=5) == []
 
 
 def test_search_many_routes_to_tavily_backend():

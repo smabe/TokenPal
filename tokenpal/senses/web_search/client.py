@@ -277,10 +277,10 @@ class TavilyBackend(SearchBackend):
         self._timeout_s = timeout_s
 
     def search(self, query: str) -> SearchResult | None:
-        results = self.search_all(query, limit=1)
+        results = self._search_all(query, limit=1)
         return results[0] if results else None
 
-    def search_all(self, query: str, limit: int) -> list[SearchResult]:
+    def _search_all(self, query: str, limit: int) -> list[SearchResult]:
         from tokenpal.senses.web_search.tavily import tavily_search
 
         if not self._api_key:
@@ -409,7 +409,7 @@ def search_many(
                 search_depth=tavily_search_depth,
                 max_results=limit,
                 timeout_s=tavily_timeout_s,
-            ).search_all(query, limit=limit)
+            )._search_all(query, limit=limit)
         except Exception as e:  # noqa: BLE001
             log.debug("Tavily multi-result error: %s", e)
             return []

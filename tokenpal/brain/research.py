@@ -18,6 +18,7 @@ from typing import Any, Literal
 
 from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.brain.stop_reason import ResearchStopReason
+from tokenpal.config.schema import CloudSearchConfig
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
 from tokenpal.senses.web_search.client import (
@@ -138,11 +139,8 @@ class ResearchRunner:
         synth_thinking: bool = True,
         cloud_backend: CloudBackend | None = None,
         cloud_plan: bool = False,
-        cloud_search_enabled: bool = False,
+        cloud_search: CloudSearchConfig | None = None,
         tavily_api_key: str = "",
-        tavily_search_depth: str = "advanced",
-        tavily_max_results: int = 6,
-        tavily_timeout_s: float = 15.0,
     ) -> None:
         self._llm = llm
         self._fetch = fetch_url
@@ -156,13 +154,13 @@ class ResearchRunner:
         self._synth_thinking = synth_thinking
         self._cloud_backend = cloud_backend
         self._cloud_plan = cloud_plan
-        # Cloud search layer — when enabled AND a key is present, planner
-        # queries default to tavily. Thin Tavily pools top up from DDG.
-        self._cloud_search_active = bool(cloud_search_enabled and tavily_api_key)
+        # Cloud search layer — active only when the user opted in AND a key
+        # resolved. Thin Tavily pools top up from DDG.
+        self._cloud_search = cloud_search or CloudSearchConfig()
         self._tavily_api_key = tavily_api_key
-        self._tavily_search_depth = tavily_search_depth
-        self._tavily_max_results = tavily_max_results
-        self._tavily_timeout_s = tavily_timeout_s
+        self._cloud_search_active = bool(
+            self._cloud_search.enabled and tavily_api_key
+        )
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -412,8 +410,8 @@ class ResearchRunner:
                     asyncio.to_thread(
                         search_many, query, backend, limit,
                         tavily_api_key=self._tavily_api_key,
-                        tavily_search_depth=self._tavily_search_depth,
-                        tavily_timeout_s=self._tavily_timeout_s,
+                        tavily_search_depth=self._cloud_search.search_depth,
+                        tavily_timeout_s=self._cloud_search.timeout_s,
                     ),
                     timeout=self._per_search_timeout_s,
                 )

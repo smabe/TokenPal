@@ -22,6 +22,7 @@ from tokenpal.brain.research import (
     _strip_dangling_markers,
     _validate_picks,
 )
+from tokenpal.config.schema import CloudSearchConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
 from tokenpal.senses.web_search.client import SearchResult
 
@@ -1305,7 +1306,7 @@ async def test_read_short_circuits_on_preloaded_content(
         log_callback=log_cb,
         max_queries=1,
         max_fetches=1,
-        cloud_search_enabled=True,
+        cloud_search=CloudSearchConfig(enabled=True),
         tavily_api_key="tvly-abcdefghijklmnop",
     )
     session = await runner.run("why?")
@@ -1345,7 +1346,7 @@ async def test_read_filters_sensitive_preloaded_content(
         log_callback=log_cb,
         max_queries=1,
         max_fetches=1,
-        cloud_search_enabled=True,
+        cloud_search=CloudSearchConfig(enabled=True),
         tavily_api_key="tvly-abcdefghijklmnop",
     )
     session = await runner.run("q")
@@ -1387,7 +1388,7 @@ async def test_thin_tavily_pool_tops_up_from_ddg(
         log_callback=log_cb,
         max_queries=1,
         max_fetches=5,
-        cloud_search_enabled=True,
+        cloud_search=CloudSearchConfig(enabled=True),
         tavily_api_key="tvly-abcdefghijklmnop",
     )
     session = await runner.run("q?")
@@ -1425,7 +1426,7 @@ async def test_default_backend_is_ddg_when_cloud_search_disabled(
         log_callback=log_cb,
         max_queries=1,
         max_fetches=1,
-        cloud_search_enabled=False,  # disabled
+        cloud_search=CloudSearchConfig(enabled=False),  # disabled
         tavily_api_key="",
     )
     await runner.run("q?")

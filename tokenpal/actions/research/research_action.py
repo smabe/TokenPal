@@ -103,7 +103,6 @@ class ResearchAction(AbstractAction):
         # cloud_llm decides (Haiku by default, local if cloud_llm is off).
         cs_cfg = self._cloud_search_config or CloudSearchConfig()
         tavily_key = get_tavily_key() if cs_cfg.enabled else ""
-        cloud_search_enabled = bool(cs_cfg.enabled and tavily_key)
         if cs_cfg.enabled and not tavily_key:
             log.info("cloud_search: enabled but no tavily key - using local search")
 
@@ -122,11 +121,8 @@ class ResearchAction(AbstractAction):
             synth_thinking=cfg.synth_thinking,
             cloud_backend=cloud_backend,
             cloud_plan=cloud_plan,
-            cloud_search_enabled=cloud_search_enabled,
+            cloud_search=cs_cfg,
             tavily_api_key=tavily_key or "",
-            tavily_search_depth=cs_cfg.search_depth,
-            tavily_max_results=cs_cfg.max_results,
-            tavily_timeout_s=cs_cfg.timeout_s,
         )
 
         try:
