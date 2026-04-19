@@ -323,3 +323,125 @@ def test_status_surfaces_search_flag(isolated, cfg: TokenPalConfig) -> None:
     _handle_cloud_command("search on", cfg)
     msg = _handle_cloud_command("", cfg).message
     assert "search" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# Two-level dispatch: /cloud tavily
+# ---------------------------------------------------------------------------
+
+
+def test_tavily_status_disabled_no_key(isolated, cfg: TokenPalConfig) -> None:
+    msg = _handle_cloud_command("tavily status", cfg).message.lower()
+    assert "tavily" in msg
+    assert "disabled" in msg
+
+
+def test_tavily_enable_stores_key_and_flips_config(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    key = "tvly-" + "a" * 32
+    result = _handle_cloud_command(f"tavily enable {key}", cfg)
+    assert cfg.cloud_search.enabled is True
+    assert isolated["toml_data"]["cloud_search"]["enabled"] is True
+    stored = json.loads(isolated["secrets_path"].read_text())
+    assert stored["tavily_key"] == key
+    assert key not in result.message, "raw tavily key must never echo back"
+    assert "tvly-..." in result.message
+
+
+def test_tavily_disable_flips_off_keeps_key(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("tavily enable tvly-" + "b" * 32, cfg)
+    assert cfg.cloud_search.enabled is True
+    msg = _handle_cloud_command("tavily disable", cfg).message.lower()
+    assert "disabled" in msg
+    assert cfg.cloud_search.enabled is False
+    stored = json.loads(isolated["secrets_path"].read_text())
+    assert "tavily_key" in stored
+
+
+def test_tavily_forget_wipes_key_and_disables(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    _handle_cloud_command("tavily enable tvly-" + "c" * 32, cfg)
+    _handle_cloud_command("tavily forget", cfg)
+    assert cfg.cloud_search.enabled is False
+    stored = json.loads(isolated["secrets_path"].read_text())
+    assert "tavily_key" not in stored
+
+
+# ---------------------------------------------------------------------------
+# Two-level dispatch: /cloud brave
+# ---------------------------------------------------------------------------
+
+
+def test_brave_status_no_key(isolated, cfg: TokenPalConfig) -> None:
+    msg = _handle_cloud_command("brave status", cfg).message.lower()
+    assert "brave" in msg
+    assert "disabled" in msg
+    assert "no key" in msg
+
+
+def test_brave_enable_stores_key(isolated, cfg: TokenPalConfig) -> None:
+    key = "BSA-" + "x" * 28
+    result = _handle_cloud_command(f"brave enable {key}", cfg)
+    stored = json.loads(isolated["secrets_path"].read_text())
+    assert stored["brave_key"] == key
+    assert key not in result.message, "raw brave key must never echo back"
+
+
+def test_brave_enable_rejects_too_short(isolated, cfg: TokenPalConfig) -> None:
+    result = _handle_cloud_command("brave enable short", cfg)
+    assert "rejected" in result.message.lower()
+
+
+def test_brave_forget_wipes_key(isolated, cfg: TokenPalConfig) -> None:
+    _handle_cloud_command("brave enable BSA-" + "y" * 28, cfg)
+    _handle_cloud_command("brave forget", cfg)
+    stored = json.loads(isolated["secrets_path"].read_text()) if isolated["secrets_path"].exists() else {}
+    assert "brave_key" not in stored
+
+
+def test_brave_status_with_key_shows_fingerprint(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    _handle_cloud_command("brave enable BSA-" + "z" * 28, cfg)
+    msg = _handle_cloud_command("brave status", cfg).message
+    assert "..." in msg  # fingerprint tail marker
+    assert "key on disk" in msg.lower()
+
+
+# ---------------------------------------------------------------------------
+# Aggregate status includes all three backends
+# ---------------------------------------------------------------------------
+
+
+def test_aggregate_status_lists_all_backends(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    msg = _handle_cloud_command("", cfg).message
+    assert "Anthropic:" in msg
+    assert "Tavily:" in msg
+    assert "Brave:" in msg
+
+
+# ---------------------------------------------------------------------------
+# Legacy flat subcommands still work (back-compat)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_enable_routes_to_anthropic(isolated, cfg: TokenPalConfig) -> None:
+    """Pre-refactor users type `/cloud enable <key>`, not `/cloud anthropic
+    enable <key>`. The legacy form must continue to work."""
+    key = "sk-ant-api03-" + "q" * 40
+    _handle_cloud_command(f"enable {key}", cfg)
+    assert cfg.cloud_llm.enabled is True
+    stored = json.loads(isolated["secrets_path"].read_text())
+    assert stored["anthropic_key"] == key
+
+
+def test_legacy_model_subcommand_still_works(
+    isolated, cfg: TokenPalConfig
+) -> None:
+    _handle_cloud_command("enable sk-ant-api03-" + "r" * 40, cfg)
+    _handle_cloud_command("model claude-sonnet-4-6", cfg)
+    assert cfg.cloud_llm.model == "claude-sonnet-4-6"

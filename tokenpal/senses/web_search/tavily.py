@@ -18,14 +18,13 @@ from __future__ import annotations
 
 import json
 import logging
-import urllib.error
-import urllib.request
 from typing import Any
+
+from tokenpal.senses.web_search._http import http_json
 
 log = logging.getLogger(__name__)
 
 _API_URL = "https://api.tavily.com/search"
-_USER_AGENT = "TokenPal/1.0 (+https://github.com/smabe/TokenPal)"
 
 
 def tavily_search(
@@ -58,34 +57,13 @@ def tavily_search(
         "include_raw_content": False,
     }).encode("utf-8")
 
-    req = urllib.request.Request(
+    payload = http_json(
         _API_URL,
-        data=body,
-        headers={
-            "User-Agent": _USER_AGENT,
-            "Content-Type": "application/json",
-        },
         method="POST",
+        body=body,
+        headers={"Content-Type": "application/json"},
+        timeout_s=timeout_s,
     )
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            raw = resp.read()
-    except urllib.error.HTTPError as e:
-        log.debug("tavily HTTP %s: %s", e.code, e.reason)
-        return []
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        log.debug("tavily network failure: %s", e)
-        return []
-    except Exception as e:  # noqa: BLE001 — network code must never raise
-        log.debug("tavily unexpected error: %s", e)
-        return []
-
-    try:
-        payload = json.loads(raw)
-    except (json.JSONDecodeError, ValueError) as e:
-        log.debug("tavily response parse failed: %s", e)
-        return []
 
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list):

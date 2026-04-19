@@ -234,20 +234,55 @@ class WikipediaBackend(SearchBackend):
 
 
 class BraveBackend(SearchBackend):
-    """Brave Search API — stub. Reads key from TOKENPAL_BRAVE_KEY env (priority)
-    or `api_key` constructor arg. Not yet implemented."""
+    """Brave Search API. Returns title + snippet + URL (no preloaded content);
+    the downstream /research pipeline still runs its local fetch+extract chain.
+
+    Key resolution order:
+        1. TOKENPAL_BRAVE_KEY env var (priority)
+        2. `api_key` constructor arg (the /cloud brave store path)
+    """
 
     backend_name = "brave"
 
-    def __init__(self, api_key: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str = "",
+        *,
+        count: int = 6,
+        timeout_s: float = 10.0,
+    ) -> None:
         env_key = os.environ.get("TOKENPAL_BRAVE_KEY", "").strip()
         # Env var takes priority over passed arg.
         self._api_key = env_key or (api_key or "").strip()
+        self._count = count
+        self._timeout_s = timeout_s
 
     def search(self, query: str) -> SearchResult | None:
-        raise NotImplementedError(
-            "Brave API key-based backend not yet implemented"
+        results = self._search_all(query, limit=1)
+        return results[0] if results else None
+
+    def _search_all(self, query: str, limit: int) -> list[SearchResult]:
+        from tokenpal.senses.web_search.brave import brave_search
+
+        if not self._api_key:
+            log.debug("brave: no api key configured, returning empty")
+            return []
+        hits = brave_search(
+            query,
+            api_key=self._api_key,
+            count=min(limit, self._count),
+            timeout_s=self._timeout_s,
         )
+        return [
+            SearchResult(
+                query=query,
+                backend="brave",
+                title=hit["title"],
+                text=_truncate(hit["description"]),
+                source_url=hit["url"],
+            )
+            for hit in hits
+        ]
 
 
 class TavilyBackend(SearchBackend):
@@ -372,10 +407,12 @@ def search_many(
     tavily_api_key: str = "",
     tavily_search_depth: str = "advanced",
     tavily_timeout_s: float = 15.0,
+    brave_api_key: str = "",
+    brave_timeout_s: float = 10.0,
 ) -> list[SearchResult]:
-    """Return up to `limit` results for a query. DuckDuckGo Lite and Tavily
-    return multiple; Wikipedia's summary endpoint is inherently 1:1 and
-    wraps its single result (or nothing) in a list.
+    """Return up to `limit` results for a query. DuckDuckGo Lite, Tavily, and
+    Brave return multiple; Wikipedia's summary endpoint is inherently 1:1
+    and wraps its single result (or nothing) in a list.
     NEVER raises on network errors — returns an empty list.
     """
     query = (query or "").strip()
@@ -412,6 +449,17 @@ def search_many(
             )._search_all(query, limit=limit)
         except Exception as e:  # noqa: BLE001
             log.debug("Tavily multi-result error: %s", e)
+            return []
+
+    if name == "brave":
+        try:
+            return BraveBackend(
+                api_key=brave_api_key,
+                count=limit,
+                timeout_s=brave_timeout_s,
+            )._search_all(query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Brave multi-result error: %s", e)
             return []
 
     # Single-result backends wrap their 0-or-1 result.

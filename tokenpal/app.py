@@ -36,11 +36,14 @@ from tokenpal.config.idle_tools_writer import (
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
 from tokenpal.config.secrets import (
+    clear_brave_key,
     clear_cloud_key,
     clear_tavily_key,
     fingerprint,
+    get_brave_key,
     get_cloud_key,
     get_tavily_key,
+    set_brave_key,
     set_cloud_key,
     set_tavily_key,
 )
@@ -1294,10 +1297,7 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         if backend == "tavily":
             return _handle_cloud_tavily(sub, rest, config)
         if backend == "brave":
-            return CommandResult(
-                "Brave backend not yet implemented — shipping in Phase 2 "
-                "of the research-source-upgrade plan."
-            )
+            return _handle_cloud_brave(sub, rest, config)
 
     # Legacy flat subcommand — route to anthropic handler with a single
     # deprecation log line (don't spam the user on each call).
@@ -1315,7 +1315,7 @@ def _cloud_aggregate_status(config: TokenPalConfig) -> str:
     lines: list[str] = []
     lines.append(_anthropic_status_line(config))
     lines.append(_tavily_status_line(config))
-    lines.append("Brave: not yet implemented")
+    lines.append(_brave_status_line())
     return "\n".join(lines)
 
 
@@ -1419,6 +1419,47 @@ def _handle_cloud_tavily(sub: str, target: str, config: TokenPalConfig) -> Comma
     return CommandResult(
         "Usage: /cloud tavily [status|enable <key>|disable|forget]"
     )
+
+
+def _brave_status_line() -> str:
+    """Brave has no runtime-enabled flag (Phase 4 planner routes to it on
+    demand when a key is present). Status is purely a key-presence check."""
+    key = get_brave_key()
+    if not key:
+        return "Brave: disabled (no key — run /cloud brave enable <key>)"
+    return f"Brave: key on disk, {fingerprint(key)} (routed per-query by planner)"
+
+
+def _handle_cloud_brave(sub: str, target: str, config: TokenPalConfig) -> CommandResult:
+    """Manage the Brave Search API key. Unlike Tavily/Anthropic there is no
+    enabled flag — the smart planner routes queries to Brave when a key is
+    present, otherwise falls back to DDG."""
+    if sub == "" or sub == "status":
+        return CommandResult(_brave_status_line())
+
+    if sub == "enable":
+        if not target:
+            return CommandResult(
+                "Usage: /cloud brave enable <api-key>\n"
+                "Get a key at https://api.search.brave.com "
+                "(2,000 queries/month free)."
+            )
+        try:
+            set_brave_key(target)
+        except ValueError as e:
+            return CommandResult(f"/cloud brave enable rejected: {e}")
+        fp = fingerprint(target)
+        return CommandResult(
+            f"Brave key stored — {fp}. The smart planner will route "
+            "queries to Brave when it's a better fit than DDG (Phase 4).\n\n"
+            "Privacy note: Brave receives every query it's routed."
+        )
+
+    if sub == "forget":
+        clear_brave_key()
+        return CommandResult("Brave key wiped.")
+
+    return CommandResult("Usage: /cloud brave [status|enable <key>|forget]")
 
 
 def _handle_cloud_anthropic(subcmd: str, target: str, config: TokenPalConfig) -> CommandResult:

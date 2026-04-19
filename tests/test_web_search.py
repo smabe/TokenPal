@@ -177,12 +177,6 @@ def test_wikipedia_returns_none_on_network_failure():
 # ---------------------------------------------------------------------------
 
 
-def test_brave_raises_not_implemented(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
-    with pytest.raises(NotImplementedError):
-        BraveBackend(api_key="somekey").search("anything")
-
-
 def test_brave_env_var_takes_priority_over_arg(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("TOKENPAL_BRAVE_KEY", "env-key-wins")
     be = BraveBackend(api_key="arg-key")
@@ -193,6 +187,97 @@ def test_brave_falls_back_to_arg_when_env_unset(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
     be = BraveBackend(api_key="arg-key")
     assert be._api_key == "arg-key"
+
+
+def test_brave_parses_web_results(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    payload = {
+        "web": {
+            "results": [
+                {
+                    "url": "https://example.com/a",
+                    "title": "Example A",
+                    "description": "First description text.",
+                },
+                {
+                    "url": "https://example.com/b",
+                    "title": "Example B",
+                    "description": "Second description text.",
+                },
+            ]
+        }
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = BraveBackend(api_key="BSA-abcdefghijklmnop")._search_all("q", limit=5)
+
+    assert len(hits) == 2
+    assert hits[0].backend == "brave"
+    assert hits[0].source_url == "https://example.com/a"
+    assert hits[0].title == "Example A"
+    assert "First description" in hits[0].text
+    # No preloaded content — Brave doesn't pre-extract.
+    assert hits[0].preloaded_content == ""
+
+
+def test_brave_skips_results_without_url_or_description(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    payload = {
+        "web": {
+            "results": [
+                {"url": "https://good", "title": "Good", "description": "has body"},
+                {"url": "", "title": "No URL", "description": "body"},
+                {"url": "https://empty", "title": "No desc", "description": ""},
+            ]
+        }
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = BraveBackend(api_key="BSA-abcdefghijklmnop")._search_all("q", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].source_url == "https://good"
+
+
+def test_brave_no_key_returns_empty(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    be = BraveBackend(api_key="")
+    assert be._search_all("q", limit=5) == []
+
+
+def test_brave_network_error_returns_empty(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+
+    def raiser(*a: Any, **kw: Any) -> Any:
+        raise OSError("network down")
+
+    with patch("urllib.request.urlopen", raiser):
+        be = BraveBackend(api_key="BSA-abcdefghijklmnop")
+        assert be._search_all("q", limit=5) == []
+
+
+def test_brave_malformed_response_returns_empty(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    mocked = _urlopen_returning({"unexpected": "shape"})
+    with patch("urllib.request.urlopen", mocked):
+        be = BraveBackend(api_key="BSA-abcdefghijklmnop")
+        assert be._search_all("q", limit=5) == []
+
+
+def test_search_many_routes_to_brave(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
+    from tokenpal.senses.web_search.client import search_many
+
+    payload = {
+        "web": {
+            "results": [
+                {"url": "https://x", "title": "X", "description": "body"},
+            ]
+        }
+    }
+    with patch("urllib.request.urlopen", _urlopen_returning(payload)):
+        hits = search_many("q", backend="brave", limit=3, brave_api_key="BSA-key")
+
+    assert len(hits) == 1
+    assert hits[0].backend == "brave"
 
 
 # ---------------------------------------------------------------------------
@@ -271,10 +356,10 @@ def test_search_explicit_wikipedia_backend():
     ddg.assert_not_called()
 
 
-def test_search_brave_backend_raises_not_implemented(monkeypatch: pytest.MonkeyPatch):
+def test_search_brave_backend_returns_none_without_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("TOKENPAL_BRAVE_KEY", raising=False)
-    with pytest.raises(NotImplementedError):
-        search("anything", backend="brave", brave_api_key="k")
+    # No key → backend silently returns None (the dispatcher never raises).
+    assert search("anything", backend="brave", brave_api_key="") is None
 
 
 # ---------------------------------------------------------------------------
