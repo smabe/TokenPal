@@ -98,3 +98,64 @@ Expand `/research` source-grabbing with a Tavily+Haiku default cloud tier, free-
 
 ## Parking lot
 (empty at start — append "ooh shiny" thoughts that surface mid-work for later)
+
+## Post-ship fixes (shipped 2026-04-19 from the Steps 1-6 test walkthrough)
+
+After the plan shipped at `75890bf`, a real-world validation walk-through
+caught seven issues that were fixed inline. Keeping a log here so the
+shipped record is honest about what needed follow-up.
+
+1. **Dual-sink logging** (`5e17b9b`): `/research` ran two callback
+   paths that each hit only one log destination. `_agent_log` in
+   app.py now tees to Python logging at INFO; `_plan` logs raw
+   planner JSON at DEBUG for routing-debug post-hoc.
+2. **Generalized thin-pool top-up + `backends_tried` telemetry**
+   (`c0277b1`): the safety net was Tavily-only so HN / SE / Brave
+   misses dropped to zero sources. Now fires for any non-DDG planner
+   routing; telemetry includes a new `tried=<backends>` field.
+3. **Cloud modal Tavily + Brave sections** (`802fc94`): bare `/cloud`
+   was Anthropic-only. Modal now covers all three backends; app.py
+   plumbs the new state + result fields through existing setters.
+4. **Runtime state diagnostics** (`95fb4b5`): added init-state log
+   (`cloud_search_active=<bool> enabled=<bool> key_present=<bool>`)
+   and silent-downgrade INFO logs in `_resolve_backend` so
+   misconfigurations surface immediately.
+5. **Slash-path Tavily wiring** (`f6e4c97`): `orchestrator._handle_research`
+   was constructing ResearchRunner WITHOUT `cloud_search` or
+   `tavily_api_key`; only the tool-invoked path (research_action.py)
+   plumbed them. Silent root cause — diagnostics from #4 made it
+   findable.
+6. **Refine gating: tool-path cache + message** (`cd3b4e3`):
+   - Refuse message now names both cloud-web modes (search + deep),
+     not just "deep".
+   - Tool-invoked research writes to `research_cache` via the shared
+     `MemoryStore.research_cache_key` helper so `/refine` finds it
+     regardless of entry point. Previously tool-path runs weren't
+     cached and `/refine` fell back to the latest slash-invoked
+     entry and re-synthesized the wrong sources.
+7. **URL dedup + refine init log quiet** (`ce9a37a`):
+   - `_canonical_url` strips tracking params (srsltid, utm_*, fbclid,
+     gclid, msclkid, etc.) before the `seen` check. Tavily returned
+     the same Boulies chair review 3× with distinct srsltid tokens;
+     synthesizer was seeing the same article thrice.
+   - Moved `cloud_search_active=...` init log out of `__init__` and
+     into `run()`/`run_deep()` so `/refine` doesn't emit misleading
+     search-state noise.
+
+**Docs refresh** (`9b15bd3`): research-architecture.md, README.md,
+CLAUDE.md all updated to reflect the generalized thin-pool, `tried=`
+telemetry field, canonical-URL dedup, dual-sink logging, init-log
+distinction, and tool-path cache.
+
+**Lessons worth remembering:**
+- When a plan ships cloud-integration plumbing, test BOTH entry points
+  (slash AND tool-call) end-to-end. Fix #5 sat quietly for the entire
+  plan duration because only the tool-call path got verified during
+  Phase 1.
+- Diagnostic logging BEFORE fixing is the right sequence when you
+  can't reproduce — the init-state log from #4 made #5 findable in
+  one run.
+- Parallel-agent worktrees can sit on stale bases. Cherry-pick small
+  diffs instead of merging; verify base commit before trusting agent
+  output. (See memory: feedback_worktree_base_check.md.)
+
