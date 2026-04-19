@@ -354,7 +354,35 @@ def main() -> None:
         return _handle_zip_command(args)
 
     def _cmd_cloud(args: str) -> CommandResult:
+        parts = args.split(maxsplit=1)
+        subcmd = parts[0].lower() if parts else ""
+        # Bare /cloud opens the modal picker (covers all options in one UI).
+        # Subcommands still work for terse / scriptable use, so power users
+        # and tests can skip the modal with /cloud status|enable|disable|etc.
+        if subcmd == "" and _open_cloud_modal():
+            return CommandResult("")
         return _handle_cloud_command(args, config)
+
+    def _open_cloud_modal() -> bool:
+        from tokenpal.config.secrets import fingerprint, get_cloud_key
+        from tokenpal.ui.cloud_modal import CloudModalResult, CloudModalState
+
+        cfg = config.cloud_llm
+        stored_key = get_cloud_key()
+        state = CloudModalState(
+            enabled=cfg.enabled,
+            research_synth=cfg.research_synth,
+            research_plan=cfg.research_plan,
+            model=cfg.model,
+            key_fingerprint=fingerprint(stored_key) if stored_key else None,
+        )
+
+        def on_save(result: CloudModalResult | None) -> None:
+            if result is None:
+                return
+            _apply_cloud_modal_result(result, config)
+
+        return overlay.open_cloud_modal(state, on_save)
 
     def _cmd_chatlog(_args: str) -> CommandResult:
         overlay.schedule_callback(overlay.toggle_chat_log)
@@ -1144,6 +1172,58 @@ def _handle_gh_command(subcmd: str, extra: str) -> CommandResult:
         return CommandResult(out.stdout.strip() or "", error=f"No open {subcmd}." if not out.stdout.strip() else None)
     except Exception as e:
         return CommandResult("", error=f"gh failed: {e}")
+
+
+def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
+    """Persist the CloudModal's output: new key (if any), toggles, model.
+
+    Runs the same writers as the /cloud subcommands so the on-disk state
+    stays consistent regardless of which path the user took.
+    """
+    from tokenpal.ui.cloud_modal import CloudModalResult
+
+    assert isinstance(result, CloudModalResult)
+    cfg = config.cloud_llm
+
+    if result.new_api_key:
+        try:
+            set_cloud_key(result.new_api_key)
+        except ValueError as e:
+            log.warning("cloud modal: bad key shape: %s", e)
+            # Don't flip enabled on a bad key paste. The modal already
+            # dismissed - surface nothing noisier than a log line.
+            return
+
+    try:
+        set_cloud_enabled(result.enabled)
+    except OSError as e:
+        log.warning("cloud modal: could not persist enabled flag: %s", e)
+    cfg.enabled = result.enabled
+
+    # research_synth + research_plan: upsert both via the TOML writer.
+    try:
+        from tokenpal.config.toml_writer import update_config
+
+        def _mutate(data: dict[str, Any]) -> None:
+            section = data.setdefault("cloud_llm", {})
+            section["research_synth"] = result.research_synth
+            section["research_plan"] = result.research_plan
+
+        update_config(_mutate)
+    except OSError as e:
+        log.warning("cloud modal: could not persist site flags: %s", e)
+    cfg.research_synth = result.research_synth
+    cfg.research_plan = result.research_plan
+
+    if result.model in ALLOWED_MODELS and result.model != cfg.model:
+        try:
+            set_cloud_model(result.model)
+        except OSError as e:
+            log.warning("cloud modal: could not persist model: %s", e)
+        cfg.model = result.model
+
+    log.info("cloud modal: enabled=%s synth=%s plan=%s model=%s",
+             cfg.enabled, cfg.research_synth, cfg.research_plan, cfg.model)
 
 
 def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:

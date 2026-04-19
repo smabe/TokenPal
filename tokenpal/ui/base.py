@@ -80,6 +80,16 @@ class AbstractOverlay(abc.ABC):
         False otherwise (caller must choose a safe default — usually deny)."""
         return False
 
+    def open_cloud_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /cloud settings modal. Returns True if supported. Caller
+        falls back to the text /cloud subcommands when the overlay has no
+        modal support."""
+        return False
+
     @abc.abstractmethod
     def run_loop(self) -> None:
         """Start the platform event loop. Blocks on main thread."""

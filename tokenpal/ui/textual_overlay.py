@@ -131,6 +131,13 @@ class OpenConfirmModal(Message):
         super().__init__()
 
 
+class OpenCloudModal(Message):
+    def __init__(self, state: Any, on_result: Callable[[Any], None]) -> None:
+        self.state = state
+        self.on_result = on_result
+        super().__init__()
+
+
 # --- Widgets ---
 
 
@@ -639,6 +646,12 @@ class TokenPalApp(App[None]):
         modal = ConfirmModal(message.title, message.body)
         self.push_screen(modal, message.on_result)
 
+    def on_open_cloud_modal(self, message: OpenCloudModal) -> None:
+        from tokenpal.ui.cloud_modal import CloudModal
+
+        modal = CloudModal(message.state)
+        self.push_screen(modal, message.on_result)
+
 
 # --- Overlay ---
 
@@ -736,6 +749,17 @@ class TextualOverlay(AbstractOverlay):
         if not (self._app and self._is_running):
             return False
         self._post(OpenConfirmModal(title, body, on_result))
+        return True
+
+    def open_cloud_modal(
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+    ) -> bool:
+        """Open the /cloud settings modal. Result is CloudModalResult or None."""
+        if not (self._app and self._is_running):
+            return False
+        self._post(OpenCloudModal(state, on_result))
         return True
 
     def teardown(self) -> None:
