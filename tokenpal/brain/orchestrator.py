@@ -227,6 +227,7 @@ class Brain:
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
         self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
         self._research_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._refine_queue: asyncio.Queue[str] = asyncio.Queue()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._senses = senses
         self._llm = llm
@@ -543,6 +544,13 @@ class Brain:
                     try:
                         question = self._research_queue.get_nowait()
                         await self._handle_research(question)
+                    except asyncio.QueueEmpty:
+                        break
+
+                while not self._refine_queue.empty():
+                    try:
+                        follow_up = self._refine_queue.get_nowait()
+                        await self._handle_refine(follow_up)
                     except asyncio.QueueEmpty:
                         break
 
@@ -1624,6 +1632,9 @@ class Brain:
     def submit_research_question(self, question: str) -> None:
         self._post_threadsafe(self._research_queue, question, "research question")
 
+    def submit_refine_question(self, follow_up: str) -> None:
+        self._post_threadsafe(self._refine_queue, follow_up, "refine follow-up")
+
     @property
     def mode(self) -> BrainMode:
         return self._mode
@@ -1816,7 +1827,148 @@ class Brain:
         self._last_comment_time = time.monotonic()
         if session.is_complete:
             self._save_research_cache(question, session)
+            # Inject the research answer into the conversation session so
+            # follow-ups typed directly (not via /refine) have context.
+            # Without this, "what about side sleepers?" hits an empty local
+            # context and fumbles.
+            self._inject_research_into_conversation(question, session)
         return session
+
+    async def _handle_refine(self, follow_up: str) -> None:
+        """Re-synthesize the most recent research against a follow-up.
+
+        Uses cached sources (no new search/fetch) and the cloud backend
+        (refine is explicitly a cloud-powered deeper look). Falls back with
+        a clear error if no recent research is available or cloud isn't
+        configured."""
+        log_cb = self._agent.log_callback or (lambda _s: None)
+
+        if self._memory is None or not self._memory.enabled:
+            self._ui_callback(
+                "/refine: memory is off, can't find your last research."
+            )
+            return
+
+        # Max age for "recent" research - separate from the 24h question-hash
+        # cache. If you ran research 3 days ago, /refine should ask you to
+        # run a fresh one rather than refining stale sources.
+        max_age_h = 1.0
+        hit = self._memory.get_latest_research(max_age_s=max_age_h * 3600.0)
+        if hit is None:
+            self._ui_callback(
+                f"/refine: no research run in the last "
+                f"{int(max_age_h * 60)} minutes. Run /research first."
+            )
+            return
+        prior_question, prior_answer, sources_json, age_s = hit
+
+        try:
+            payload = json.loads(sources_json)
+        except (TypeError, ValueError):
+            self._ui_callback("/refine: cached sources are corrupted.")
+            return
+        sources = [
+            Source(
+                number=int(s.get("number", i + 1)),
+                url=str(s.get("url", "")),
+                title=str(s.get("title", "")),
+                excerpt=str(s.get("excerpt", "")),
+                backend=str(s.get("backend", "")),
+            )
+            for i, s in enumerate(payload)
+        ]
+        if not sources:
+            self._ui_callback("/refine: no cached sources to re-analyze.")
+            return
+
+        from tokenpal.actions.research.research_action import _build_cloud_backend
+        cloud_backend = _build_cloud_backend(self._research.cloud_config)
+        if cloud_backend is None:
+            self._ui_callback(
+                "/refine requires cloud. Run /cloud to enable it."
+            )
+            return
+
+        self._mode = BrainMode.RESEARCH
+        if self._status_callback:
+            self._status_callback("refining...")
+        log_cb(f"> refine: {follow_up}")
+
+        runner = ResearchRunner(
+            llm=self._llm,
+            fetch_url=lambda _u: None,
+            log_callback=log_cb,
+            status_callback=self._status_callback,
+            cloud_backend=cloud_backend,
+        )
+        try:
+            result, raw_text, tokens = await runner.refine(
+                original_question=prior_question,
+                prior_answer=prior_answer,
+                sources=sources,
+                follow_up=follow_up,
+            )
+        except Exception:
+            log.exception("refine pipeline crashed")
+            self._ui_callback("/refine: pipeline crashed, sorry.")
+            self._mode = BrainMode.IDLE
+            self._push_status()
+            return
+        finally:
+            self._mode = BrainMode.IDLE
+            self._push_status()
+
+        # Reuse the same finalize logic that renders a synth result into
+        # a human-readable answer with citations + repair.
+        fake_session = ResearchSession(
+            question=follow_up, sources=sources, tokens_used=tokens,
+            stopped_reason=ResearchStopReason.COMPLETE,
+        )
+        fake_session.answer = runner._finalize_answer(result, raw_text, sources)
+        log.info("refine: cloud (%s), %d tokens, %.1fs age of source pool",
+                 cloud_backend.model, tokens, age_s)
+        log_cb(f"= {_format_research_summary(fake_session)}")
+        final = fake_session.answer.strip() or "(no refined answer)"
+        self._ui_callback(final)
+        self._last_comment_time = time.monotonic()
+        self._inject_research_into_conversation(follow_up, fake_session)
+
+    def _inject_research_into_conversation(
+        self, question: str, session: ResearchSession
+    ) -> None:
+        """Append a synthetic assistant turn to the conversation session so
+        follow-up chat messages have the research answer in context.
+
+        Bounded: excerpt capped so the prompt doesn't bloat indefinitely
+        across many follow-ups. Opens a session if one isn't active.
+        """
+        if not session.answer:
+            return
+        if self._conversation is None or self._conversation.is_expired:
+            self._conversation = ConversationSession(
+                max_turns=self._conv_config.max_turns,
+                timeout_s=self._conv_config.timeout_s,
+            )
+        # Cap the excerpt so we don't stuff 20K tokens into every follow-up.
+        # 1500 chars ~= 375 tokens, plenty to reference without ballooning.
+        excerpt = session.answer.strip()
+        if len(excerpt) > 1500:
+            excerpt = excerpt[:1500] + "..."
+        # Synthetic user + assistant turn. The user turn labels the research
+        # so follow-ups like "tell me more" have a subject; the assistant
+        # turn is the actual answer text. Both get the research tag.
+        user_label = f"[research: {question}]"
+        assistant_payload = (
+            f"[prior research context]\n"
+            f"Question: {question}\n"
+            f"Answer:\n{excerpt}"
+        )
+        self._conversation.add_user_turn(user_label)
+        self._conversation.add_assistant_turn(assistant_payload)
+        log.debug(
+            "injected research into conversation (%d chars excerpt)",
+            len(excerpt),
+        )
 
     def _research_cache_key(self, question: str) -> str:
         return hashlib.sha256(question.strip().lower().encode("utf-8")).hexdigest()

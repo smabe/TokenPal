@@ -387,6 +387,42 @@ class TestResearchCache:
         assert store.get_research_answer("xyz", max_age_s=5.0) is None
         assert store.get_research_answer("xyz", max_age_s=30.0) is not None
 
+    def test_get_latest_research_returns_most_recent(
+        self, store: MemoryStore,
+    ) -> None:
+        """Used by /refine - picks the latest research regardless of hash."""
+        assert store.get_latest_research(3600) is None
+        store.cache_research_answer("h1", "first question", "first answer", "[]")
+        # Space them apart so ordering is deterministic.
+        assert store._conn is not None
+        store._conn.execute(
+            "UPDATE research_cache SET created_at = ? WHERE question_hash = 'h1'",
+            (time.time() - 60,),
+        )
+        store._conn.commit()
+        store.cache_research_answer("h2", "second question", "second answer", '[{"url": "x"}]')
+        hit = store.get_latest_research(3600)
+        assert hit is not None
+        question, answer, sources_json, age = hit
+        assert question == "second question"
+        assert answer == "second answer"
+        assert sources_json == '[{"url": "x"}]'
+        assert age < 5.0
+
+    def test_get_latest_research_respects_max_age(
+        self, store: MemoryStore,
+    ) -> None:
+        store.cache_research_answer("old", "q", "a", "[]")
+        assert store._conn is not None
+        store._conn.execute(
+            "UPDATE research_cache SET created_at = ? WHERE question_hash = 'old'",
+            (time.time() - 7200,),  # 2h old
+        )
+        store._conn.commit()
+        # max_age 1h should filter it out
+        assert store.get_latest_research(3600) is None
+        assert store.get_latest_research(10800) is not None
+
 
 # ------------------------------------------------------------------
 # LLM throughput estimator persistence

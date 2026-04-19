@@ -1060,6 +1060,28 @@ class MemoryStore:
             return None
         return (answer, sources_json, age)
 
+    def get_latest_research(
+        self, max_age_s: float
+    ) -> tuple[str, str, str, float] | None:
+        """Return ``(question, answer, sources_json, age_s)`` for the most
+        recent research within *max_age_s*, or None. Used by /refine to pull
+        the most-recently-fetched source pool without needing the user to
+        retype the original question."""
+        if not self._enabled or not self._conn:
+            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT question, answer, sources_json, created_at "
+                "FROM research_cache ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return None
+        question, answer, sources_json, created_at = row
+        age = time.time() - created_at
+        if age > max_age_s:
+            return None
+        return (question, answer, sources_json, age)
+
     def get_app_enrichment(
         self,
         app_name: str,

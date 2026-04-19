@@ -476,6 +476,53 @@ class ResearchRunner:
         result = _parse_synth_json(raw_text)
         return result, raw_text, response.tokens_used
 
+    # ---- Refine ----------------------------------------------------------
+
+    async def refine(
+        self,
+        original_question: str,
+        prior_answer: str,
+        sources: list[Source],
+        follow_up: str,
+    ) -> tuple[SynthResult | None, str, int]:
+        """Re-synthesize against cached sources with a user follow-up.
+
+        Requires a cloud backend - the whole point of /refine is to get a
+        smarter re-analysis than local can manage. Returns the same shape
+        as _synthesize so the renderer handles both identically.
+        """
+        if self._cloud_backend is None:
+            raise CloudBackendError(
+                "refine requires /cloud enable (no cloud backend configured)",
+                kind="not_configured",
+            )
+        sources_block = "\n\n".join(
+            f"[{s.number}] {s.url}\n{s.excerpt}" for s in sources
+        )
+        marker_range = f"[1]..[{len(sources)}]"
+        prompt = _REFINE_PROMPT.format(
+            sources_block=sources_block,
+            original_question=original_question,
+            prior_answer=prior_answer,
+            follow_up=follow_up,
+            marker_range=marker_range,
+        )
+        log.info("research refine: dispatching to cloud (%s)",
+                 self._cloud_backend.model)
+        response = await asyncio.to_thread(
+            self._cloud_backend.synthesize,
+            prompt,
+            max_tokens=4000,
+            json_schema=SYNTH_SCHEMA,
+        )
+        log.info("research refine: cloud returned %d tokens in %.1fs",
+                 response.tokens_used, response.latency_ms / 1000.0)
+        raw_text = response.text.strip()
+        if response.finish_reason == "length":
+            log.warning("research refine truncated at max_tokens=4000")
+        result = _parse_synth_json(raw_text)
+        return result, raw_text, response.tokens_used
+
 
 _JSON_ARRAY_RE = re.compile(r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]", re.DOTALL)
 
@@ -811,4 +858,44 @@ Rules:
 - Every answer MUST cite at least one source.
 
 Question: {question}
+"""
+
+
+_REFINE_PROMPT = """You previously answered a research question using the
+numbered sources below. The user has a follow-up drilling into the same
+topic. Re-analyze the same sources through the lens of the follow-up.
+
+Sources:
+{sources_block}
+
+Original question: {original_question}
+
+Previous answer (for context):
+{prior_answer}
+
+Follow-up: {follow_up}
+
+Output STRICT JSON ONLY using the SAME two shapes as the original synth:
+
+For comparison / "best X" / "which X" follow-ups:
+{{
+  "kind": "comparison",
+  "picks": [
+    {{"name": "<brand + model>", "reason": "<1-2 sentences re: follow-up>", "citation": <N>}}
+  ],
+  "verdict": {{"text": "<2-3 sentences, name winner for THIS follow-up>", "citation": <N>}}
+}}
+
+For factual / explanatory follow-ups, or when the sources don't cover the
+new angle:
+{{"kind": "factual", "answer": "<3-8 sentences>", "citations": [<N>, ...]}}
+
+Rules:
+- Use only citation markers in the range {marker_range}.
+- If the sources genuinely don't cover the follow-up angle, say so in the
+  factual shape and describe what's missing - do NOT invent picks from
+  training-data memory.
+- Every "name" in comparison picks MUST appear verbatim in some source's
+  excerpt. No exceptions.
+- Every answer MUST cite at least one source.
 """

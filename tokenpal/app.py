@@ -665,6 +665,20 @@ def main() -> None:
         brain.submit_agent_goal(goal)
         return CommandResult(f"Agent started: {goal[:60]}")
 
+    def _cmd_refine(args: str) -> CommandResult:
+        follow_up = args.strip()
+        if not follow_up:
+            return CommandResult(
+                "Usage: /refine <follow-up question>. Re-analyzes the most "
+                "recent research's sources with cloud synth - no new search."
+            )
+        if not config.cloud_llm.enabled:
+            return CommandResult(
+                "/refine requires cloud. Run /cloud to enable it."
+            )
+        brain.submit_refine_question(follow_up)
+        return CommandResult(f"Refining: {follow_up[:60]}")
+
     def _cmd_research(args: str) -> CommandResult:
         from tokenpal.config.consent import Category, has_consent
 
@@ -1038,6 +1052,7 @@ def main() -> None:
     dispatcher.register("consent", _cmd_consent)
     dispatcher.register("agent", _cmd_agent)
     dispatcher.register("research", _cmd_research)
+    dispatcher.register("refine", _cmd_refine)
     dispatcher.register("intent", _cmd_intent)
     dispatcher.register("summary", _cmd_summary)
     dispatcher.register("cloud", _cmd_cloud)

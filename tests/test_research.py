@@ -976,6 +976,60 @@ async def test_cloud_plan_failure_falls_back_to_local_planner(
 
 
 @pytest.mark.asyncio
+async def test_refine_calls_cloud_with_combined_prompt() -> None:
+    """refine() builds a prompt containing original question + prior answer
+    + follow-up + sources, sends it to cloud, and returns a SynthResult."""
+    cloud = _FakeCloud(response=LLMResponse(
+        text='{"kind": "factual", "answer": "Refined [1].", "citations": [1]}',
+        tokens_used=60, model_name="claude-haiku-4-5", latency_ms=800.0,
+    ))
+    llm = _ScriptedLLM([])  # refine never calls local
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        cloud_backend=cloud,
+    )
+    sources = [
+        Source(number=1, url="https://ex", title="t",
+               excerpt="source text about pillows", backend="duckduckgo"),
+    ]
+    result, raw, tokens = await runner.refine(
+        original_question="best pillow",
+        prior_answer="Previous answer here.",
+        sources=sources,
+        follow_up="what about side sleepers?",
+    )
+    assert result is not None
+    assert result.kind == "factual"
+    assert tokens == 60
+    assert len(cloud.calls) == 1
+    prompt = cloud.calls[0]["prompt"]
+    assert "best pillow" in prompt  # original question
+    assert "side sleepers" in prompt  # follow-up
+    assert "Previous answer here." in prompt  # prior answer context
+    assert "source text about pillows" in prompt  # sources block
+
+
+@pytest.mark.asyncio
+async def test_refine_without_cloud_backend_raises() -> None:
+    """No cloud = no refine. We don't fall back to local for /refine -
+    the whole point is using cloud to get a better answer."""
+    from tokenpal.llm.cloud_backend import CloudBackendError
+    llm = _ScriptedLLM([])
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+    )
+    with pytest.raises(CloudBackendError) as exc:
+        await runner.refine(
+            original_question="q", prior_answer="a",
+            sources=[Source(number=1, url="u", title="t", excerpt="e")],
+            follow_up="f",
+        )
+    assert exc.value.kind == "not_configured"
+
+
+@pytest.mark.asyncio
 async def test_no_cloud_backend_uses_local_synth_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
