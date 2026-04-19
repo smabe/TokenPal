@@ -125,7 +125,7 @@ token_budget = 12000
 # /research pipeline. Empty planner_model/synth_model/reader_model reuse
 # [llm] model_name; override to deepseek-r1:32b (planner + synth) and
 # qwen2.5:32b (reader) on 40GB+ VRAM.
-max_queries = 3
+max_queries = 5
 max_fetches = 5
 token_budget = 6000
 per_search_timeout_s = 5.0
@@ -256,3 +256,25 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 # model = "claude-haiku-4-5"
 # timeout_s = 30.0
 # research_synth = true       # per-site toggle (only site today)
+
+[cloud_search]
+# Opt-in cloud-backed search for /research ONLY. When enabled, stage 2+3
+# (search + fetch/extract) route through Tavily's API, which returns
+# pre-extracted article content — skipping the local DDG + newspaper4k
+# chain. Haiku synth still handles stage 4. Observations, conversation,
+# planner, /ask, and idle-tool rolls stay local.
+#
+# Pricing note: Tavily advanced = 2 credits/query. With max_queries=5,
+# worst case per /research is 10 credits. Tavily's free tier is 1k
+# credits/month (~100 runs worst case, realistically 200+).
+#
+# Manage via slash commands:
+#   /cloud tavily enable <api-key>   - store key at ~/.tokenpal/.secrets.json
+#   /cloud tavily disable            - flip off, keep key
+#   /cloud tavily forget             - wipe key entirely
+#
+# enabled = false
+# backend = "tavily"
+# search_depth = "advanced"   # "basic" = 1 credit/query, "advanced" = 2
+# max_results = 6
+# timeout_s = 15.0

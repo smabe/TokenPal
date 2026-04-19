@@ -27,6 +27,7 @@ from tokenpal.config.cloud_writer import (
     set_cloud_model,
     set_cloud_plan,
     set_cloud_search,
+    set_cloud_search_layer_enabled,
 )
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
@@ -36,9 +37,12 @@ from tokenpal.config.loader import load_config
 from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
 from tokenpal.config.secrets import (
     clear_cloud_key,
+    clear_tavily_key,
     fingerprint,
     get_cloud_key,
+    get_tavily_key,
     set_cloud_key,
+    set_tavily_key,
 )
 from tokenpal.config.senses_writer import (
     add_watch_root,
@@ -228,6 +232,7 @@ def main() -> None:
         research_bridge=ResearchBridge(
             config=config.research,
             cloud_config=config.cloud_llm,
+            cloud_search_config=config.cloud_search,
         ),
         log_callback=_agent_log,
         idle_tools_config=config.idle_tools,
@@ -1253,53 +1258,175 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
     )
 
 
+_CLOUD_BACKENDS: tuple[str, ...] = ("anthropic", "tavily", "brave")
+
+
 def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
-    """Handle /cloud - manage Anthropic-backed /research synth.
+    """Handle /cloud — manage opt-in commercial backends.
 
-    Subcommands:
-        (bare)          status: enabled/disabled, model, fingerprint
-        enable <key>    store key at ~/.tokenpal/.secrets.json (0o600), flip on
-        disable         flip off, keep key on disk
-        forget          wipe key entirely
-        model <id>      change model (allowlist: haiku-4-5, sonnet-4-6, opus-4-7)
+    Two-level dispatch:
+        /cloud [status]                           aggregate status for all backends
+        /cloud <backend> [action] [args...]       per-backend subcommands
+
+    Known backends: anthropic (synth), tavily (search+extract), brave (search).
+
+    Legacy flat subcommands still work as sugar for `/cloud anthropic ...`:
+        /cloud enable <key>          → /cloud anthropic enable <key>
+        /cloud disable               → /cloud anthropic disable
+        /cloud forget                → /cloud anthropic forget
+        /cloud model <id>            → /cloud anthropic model <id>
+        /cloud plan|deep|search ...  → /cloud anthropic plan|deep|search ...
     """
-    parts = args.split(maxsplit=1)
-    subcmd = parts[0].lower() if parts else ""
-    target = parts[1].strip() if len(parts) > 1 else ""
+    parts = args.split(maxsplit=2)
+    first = parts[0].lower() if parts else ""
 
+    # Aggregate status (bare /cloud or /cloud status)
+    if first == "" or first == "status":
+        return CommandResult(_cloud_aggregate_status(config))
+
+    # Two-level: /cloud <backend> <action> [rest]
+    if first in _CLOUD_BACKENDS:
+        backend = first
+        sub = parts[1].lower() if len(parts) > 1 else ""
+        rest = parts[2].strip() if len(parts) > 2 else ""
+        if backend == "anthropic":
+            return _handle_cloud_anthropic(sub, rest, config)
+        if backend == "tavily":
+            return _handle_cloud_tavily(sub, rest, config)
+        if backend == "brave":
+            return CommandResult(
+                "Brave backend not yet implemented — shipping in Phase 2 "
+                "of the research-source-upgrade plan."
+            )
+
+    # Legacy flat subcommand — route to anthropic handler with a single
+    # deprecation log line (don't spam the user on each call).
+    log.info("/cloud: legacy flat subcommand '%s' — routed to /cloud anthropic", first)
+    sub = first
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    # Re-glue for the multi-token legacy case (e.g. `/cloud model claude-...`)
+    if len(parts) > 2:
+        rest = f"{rest} {parts[2].strip()}".strip()
+    return _handle_cloud_anthropic(sub, rest, config)
+
+
+def _cloud_aggregate_status(config: TokenPalConfig) -> str:
+    """Render one line per configured backend. Quiet for backends not enabled."""
+    lines: list[str] = []
+    lines.append(_anthropic_status_line(config))
+    lines.append(_tavily_status_line(config))
+    lines.append("Brave: not yet implemented")
+    return "\n".join(lines)
+
+
+def _anthropic_status_line(config: TokenPalConfig) -> str:
     cfg = config.cloud_llm
+    if not cfg.enabled:
+        stored = get_cloud_key()
+        suffix = " (key stored, run /cloud anthropic enable to resume)" if stored else ""
+        return f"Anthropic: disabled{suffix}"
+    key = get_cloud_key()
+    if not key:
+        return "Anthropic: enabled but no key — run /cloud anthropic enable <key>"
+    from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
+    flags: list[str] = []
+    if cfg.research_plan:
+        flags.append("plan")
+    if cfg.research_deep:
+        if cfg.model in DEEP_MODE_MODELS:
+            flags.append("deep")
+        else:
+            flags.append("deep=set but needs Sonnet+")
+    elif cfg.research_search:
+        if cfg.model in DEEP_MODE_MODELS:
+            flags.append("search")
+        else:
+            flags.append("search=set but needs Sonnet+")
+    flag_str = f", {'+'.join(flags)}" if flags else ""
+    return f"Anthropic: enabled, {cfg.model}{flag_str}, key {fingerprint(key)}"
 
-    def _status_line() -> str:
-        if not cfg.enabled:
-            stored = get_cloud_key()
-            suffix = " (key stored, run /cloud enable to resume)" if stored else ""
-            return f"Cloud LLM: disabled{suffix}"
-        key = get_cloud_key()
-        if not key:
-            return "Cloud LLM: enabled but no key - run /cloud enable <key>"
-        from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
-        flags: list[str] = []
-        if cfg.research_plan:
-            flags.append("plan")
-        # deep overrides search when both are set
-        if cfg.research_deep:
-            if cfg.model in DEEP_MODE_MODELS:
-                flags.append("deep")
-            else:
-                flags.append("deep=set but needs Sonnet+")
-        elif cfg.research_search:
-            if cfg.model in DEEP_MODE_MODELS:
-                flags.append("search")
-            else:
-                flags.append("search=set but needs Sonnet+")
-        flag_str = f", {'+'.join(flags)}" if flags else ""
-        return (
-            f"Cloud LLM: enabled, {cfg.model}{flag_str}, "
-            f"key {fingerprint(key)}"
+
+def _tavily_status_line(config: TokenPalConfig) -> str:
+    cfg = config.cloud_search
+    key = get_tavily_key()
+    if not cfg.enabled:
+        suffix = " (key stored, run /cloud tavily enable to resume)" if key else ""
+        return f"Tavily: disabled{suffix}"
+    if not key:
+        return "Tavily: enabled but no key — run /cloud tavily enable <key>"
+    return (
+        f"Tavily: enabled, {cfg.search_depth}, max_results={cfg.max_results}, "
+        f"key {fingerprint(key)}"
+    )
+
+
+def _handle_cloud_tavily(sub: str, target: str, config: TokenPalConfig) -> CommandResult:
+    """Manage the Tavily-backed search+extract layer for /research."""
+    cfg = config.cloud_search
+
+    if sub == "" or sub == "status":
+        return CommandResult(_tavily_status_line(config))
+
+    if sub == "enable":
+        if target:
+            try:
+                set_tavily_key(target)
+            except ValueError as e:
+                return CommandResult(f"/cloud tavily enable rejected: {e}")
+            stored = target
+        else:
+            stored = get_tavily_key() or ""
+            if not stored:
+                return CommandResult(
+                    "Usage: /cloud tavily enable <api-key>\n"
+                    "Get a key at https://app.tavily.com (1,000 credits/month "
+                    "free — about 100-200 /research runs)."
+                )
+        try:
+            set_cloud_search_layer_enabled(True)
+        except OSError as e:
+            return CommandResult(f"/cloud tavily: could not persist flag: {e}")
+        cfg.enabled = True  # live runtime flip, no restart required
+        fp = fingerprint(stored)
+        return CommandResult(
+            f"Tavily search layer enabled — {cfg.search_depth}, "
+            f"key {fp}. Next /research will route search+extract through "
+            "Tavily (synth path unchanged).\n\n"
+            "Privacy note: every /research query and the URLs it visits go "
+            "to Tavily. Use /cloud tavily disable to pause without forgetting "
+            "the key."
         )
 
+    if sub == "disable":
+        try:
+            set_cloud_search_layer_enabled(False)
+        except OSError as e:
+            return CommandResult(f"/cloud tavily: could not persist flag: {e}")
+        cfg.enabled = False
+        had_key = get_tavily_key() is not None
+        suffix = " (key retained)" if had_key else ""
+        return CommandResult(f"Tavily search layer disabled{suffix}.")
+
+    if sub == "forget":
+        clear_tavily_key()
+        try:
+            set_cloud_search_layer_enabled(False)
+        except OSError:
+            pass
+        cfg.enabled = False
+        return CommandResult("Tavily search layer disabled and key wiped.")
+
+    return CommandResult(
+        "Usage: /cloud tavily [status|enable <key>|disable|forget]"
+    )
+
+
+def _handle_cloud_anthropic(subcmd: str, target: str, config: TokenPalConfig) -> CommandResult:
+    """Manage /research synth routing through Anthropic."""
+    cfg = config.cloud_llm
+
     if subcmd == "" or subcmd == "status":
-        return CommandResult(_status_line())
+        return CommandResult(_anthropic_status_line(config))
 
     if subcmd == "enable":
         if target:
@@ -1473,8 +1600,8 @@ def _handle_cloud_command(args: str, config: TokenPalConfig) -> CommandResult:
         return CommandResult(f"Cloud search mode turned {verb}.{override}")
 
     return CommandResult(
-        "Usage: /cloud [status|enable <key>|disable|forget|model <id>|"
-        "plan on|off|deep on|off|search on|off]"
+        "Usage: /cloud anthropic [status|enable <key>|disable|forget|"
+        "model <id>|plan on|off|deep on|off|search on|off]"
     )
 
 

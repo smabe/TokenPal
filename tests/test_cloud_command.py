@@ -128,9 +128,9 @@ def test_enable_stores_key_and_flips_config(
     assert cfg.cloud_llm.enabled is True
     # Persisted to TOML
     assert isolated["toml_data"]["cloud_llm"]["enabled"] is True
-    # Key on disk
+    # Key on disk (stored under the current `anthropic_key` field)
     stored = json.loads(isolated["secrets_path"].read_text())
-    assert stored["cloud_key"] == key
+    assert stored["anthropic_key"] == key
     # Fingerprint in message, never raw key
     assert key not in result.message, "raw key must never echo back"
     assert "sk-ant-..." in result.message
@@ -165,9 +165,9 @@ def test_disable_flips_off_keeps_key(isolated, cfg: TokenPalConfig) -> None:
     assert "disabled" in msg.lower()
     assert "retained" in msg.lower()
     assert cfg.cloud_llm.enabled is False
-    # Key still on disk
+    # Key still on disk (under the current field name)
     stored = json.loads(isolated["secrets_path"].read_text())
-    assert "cloud_key" in stored
+    assert "anthropic_key" in stored
 
 
 def test_disable_without_key_no_retained_suffix(

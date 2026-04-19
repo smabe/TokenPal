@@ -172,3 +172,36 @@ async def test_failed_pipeline_returns_failure(
     result = await action.execute(question="unknowable thing")
     assert result.success is False
     assert "incomplete" in result.output
+
+
+def test_format_result_renders_warnings_xml() -> None:
+    """Session warnings must surface in <warnings> block so the pal's
+    transcript (which renders <tool_result> XML) shows degraded-coverage
+    signals to the user, not just to log files."""
+    from tokenpal.actions.research.research_action import _format_result
+    from tokenpal.brain.research import ResearchSession, Source
+
+    sess = ResearchSession(
+        question="x",
+        sources=[Source(number=1, url="https://u", title="t", excerpt="body")],
+        answer="Answer [1].",
+        warnings=["tavily thin (1 sources) — topped up from ddg"],
+    )
+    out = _format_result(sess)
+    assert "<warnings>" in out
+    assert "<warning>tavily thin (1 sources) — topped up from ddg</warning>" in out
+    assert "</warnings>" in out
+    assert "<answer>" in out
+
+
+def test_format_result_omits_warnings_block_when_clean() -> None:
+    from tokenpal.actions.research.research_action import _format_result
+    from tokenpal.brain.research import ResearchSession, Source
+
+    sess = ResearchSession(
+        question="x",
+        sources=[Source(number=1, url="https://u", title="t", excerpt="body")],
+        answer="Answer [1].",
+    )
+    out = _format_result(sess)
+    assert "<warnings>" not in out

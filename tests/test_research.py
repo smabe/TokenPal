@@ -1250,3 +1250,226 @@ async def test_run_deep_comparison_renders_picks_and_verdict() -> None:
     assert "Thing B" in session.answer
     assert "Verdict" in session.answer
     assert len(session.sources) == 2
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: cloud_search / Tavily integration
+# ---------------------------------------------------------------------------
+
+
+def _preloaded_hit(
+    url: str, title: str, body: str, backend: str = "tavily",
+) -> SearchResult:
+    """SearchResult with Tavily-style preloaded full body."""
+    return SearchResult(
+        query="q",
+        backend=backend,  # type: ignore[arg-type]
+        title=title,
+        text=body[:200],  # a short snippet for logging
+        source_url=url,
+        preloaded_content=body,
+    )
+
+
+@pytest.mark.asyncio
+async def test_read_short_circuits_on_preloaded_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tavily-sourced hits must skip the local fetch entirely."""
+    fetch_called: list[str] = []
+
+    async def spy_fetch(url: str) -> str | None:
+        fetch_called.append(url)
+        return "should not be used"
+
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1", "backend": "tavily"}]', tokens=50),
+        _ok('{"kind": "factual", "answer": "A [1].", "citations": [1]}', tokens=60),
+    ])
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        if backend == "tavily":
+            return [_preloaded_hit(
+                "https://tav.example",
+                "Tavily article",
+                "full extracted body content from tavily " * 50,
+            )]
+        return []
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=spy_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=1,
+        cloud_search_enabled=True,
+        tavily_api_key="tvly-abcdefghijklmnop",
+    )
+    session = await runner.run("why?")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    # Critical assertion: fetch was NOT invoked because Tavily preloaded content.
+    assert fetch_called == []
+    assert len(session.sources) == 1
+    # Preloaded content flowed through to the Source excerpt.
+    assert "tavily" in session.sources[0].excerpt.lower()
+
+
+@pytest.mark.asyncio
+async def test_read_filters_sensitive_preloaded_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sensitive-content filter must still run on Tavily-extracted text."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=50),
+        _ok('{"kind": "factual", "answer": "A.", "citations": []}', tokens=60),
+    ])
+
+    # Body contains a sensitive-content term that MUST cause the source
+    # to be dropped before it reaches the synth prompt.
+    bad_body = "this article talks about 1password vaults in detail " * 5
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        if backend == "tavily":
+            return [_preloaded_hit("https://bad", "B", bad_body)]
+        return []
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=1,
+        cloud_search_enabled=True,
+        tavily_api_key="tvly-abcdefghijklmnop",
+    )
+    session = await runner.run("q")
+    # Filter dropped the sensitive source → pipeline reports NO_SOURCES.
+    assert session.stopped_reason == ResearchStopReason.NO_SOURCES
+    assert session.sources == []
+
+
+@pytest.mark.asyncio
+async def test_thin_tavily_pool_tops_up_from_ddg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Tavily returning <3 hits triggers a DDG top-up + transcript warning."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1", "backend": "tavily"}]', tokens=50),
+        _ok('{"kind": "factual", "answer": "A [1].", "citations": [1]}', tokens=60),
+    ])
+
+    call_log: list[str] = []
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        call_log.append(backend)
+        if backend == "tavily":
+            # Only 1 Tavily hit — below _THIN_POOL_THRESHOLD=3.
+            return [_preloaded_hit("https://tav", "Tav", "long tavily body " * 30)]
+        if backend == "duckduckgo":
+            return [
+                _hit("https://ddg1", "DDG A", "summary A", "duckduckgo"),
+                _hit("https://ddg2", "DDG B", "summary B", "duckduckgo"),
+            ]
+        return []
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=5,
+        cloud_search_enabled=True,
+        tavily_api_key="tvly-abcdefghijklmnop",
+    )
+    session = await runner.run("q?")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    # Tavily was tried, DDG was consulted for top-up.
+    assert "tavily" in call_log
+    assert "duckduckgo" in call_log
+    # Transcript warning surfaced on session (so research_action can render it).
+    assert any("tavily thin" in w for w in session.warnings)
+
+
+@pytest.mark.asyncio
+async def test_default_backend_is_ddg_when_cloud_search_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without cloud_search_enabled, dispatch routes to duckduckgo regardless
+    of what the planner emits."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1", "backend": "tavily"}]', tokens=50),  # planner tried to pick tavily
+        _ok('{"kind": "factual", "answer": "A [1].", "citations": [1]}', tokens=60),
+    ])
+
+    call_log: list[str] = []
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        call_log.append(backend)
+        return [_hit("https://ddg", "t", "body", "duckduckgo")]
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=1,
+        cloud_search_enabled=False,  # disabled
+        tavily_api_key="",
+    )
+    await runner.run("q?")
+    # Even though planner said "tavily", dispatch fell back to duckduckgo.
+    assert call_log == ["duckduckgo"]
+
+
+def test_parse_planner_output_carries_backend_field() -> None:
+    queries = _parse_planner_output(
+        '[{"query": "foo", "backend": "tavily"}, '
+        '{"query": "bar", "intent": "b", "backend": "wikipedia"}, '
+        '{"query": "baz"}]',
+        cap=5,
+    )
+    assert len(queries) == 3
+    assert queries[0].backend == "tavily"
+    assert queries[1].backend == "wikipedia"
+    assert queries[2].backend == ""  # no backend field → default
+
+
+@pytest.mark.asyncio
+async def test_session_warnings_thin_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The existing thin-pool log line also appends to session.warnings now,
+    so the transcript can surface it (not just Python logs)."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}, {"query": "q2"}]', tokens=50),
+        _ok('{"kind": "factual", "answer": "A.", "citations": []}', tokens=60),
+    ])
+
+    # Only 1 source returned — triggers thin-pool path.
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        if q == "q1":
+            return [_hit("https://a", "A", "body", "duckduckgo")]
+        return []
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_noop_fetch, log_callback=log_cb,
+        max_queries=2, max_fetches=5,
+    )
+    session = await runner.run("q?")
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert any("thin source pool" in w for w in session.warnings)

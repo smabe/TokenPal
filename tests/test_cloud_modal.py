@@ -85,7 +85,7 @@ def test_apply_saves_new_key_and_flips_enabled(
     assert cfg.cloud_llm.enabled is True
     assert cfg.cloud_llm.research_synth is True
     stored = json.loads(isolated["secrets_path"].read_text())
-    assert stored["cloud_key"] == key
+    assert stored["anthropic_key"] == key
 
 
 def test_apply_persists_key_at_0o600(
@@ -184,7 +184,7 @@ def test_apply_disable_preserves_key(isolated, cfg: TokenPalConfig) -> None:
     assert cfg.cloud_llm.enabled is False
     # Key still on disk
     stored = json.loads(isolated["secrets_path"].read_text())
-    assert stored["cloud_key"] == key
+    assert stored["anthropic_key"] == key
 
 
 # ---------------------------------------------------------------------------

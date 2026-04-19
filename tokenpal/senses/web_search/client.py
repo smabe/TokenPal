@@ -20,7 +20,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Literal
 
-BackendName = Literal["duckduckgo", "wikipedia", "brave"]
+BackendName = Literal["duckduckgo", "wikipedia", "brave", "tavily"]
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +41,11 @@ class SearchResult:
     title: str
     text: str
     source_url: str
+    # Full extracted article body when the backend has already done its own
+    # extraction (Tavily). NEVER truncated — callers that want a preview
+    # should read `text` instead. When non-empty, downstream pipelines can
+    # skip their local fetch+extract stage entirely.
+    preloaded_content: str = ""
 
 
 class SearchBackend(ABC):
@@ -245,10 +250,71 @@ class BraveBackend(SearchBackend):
         )
 
 
+class TavilyBackend(SearchBackend):
+    """Tavily Search API. Returns results with `preloaded_content` populated
+    (full pre-extracted article body), so the /research pipeline can skip its
+    local fetch+extract chain for Tavily-sourced hits.
+
+    Key resolution order:
+        1. `api_key` constructor arg (the /cloud tavily store path)
+        2. TOKENPAL_TAVILY_KEY env var (dev/debug fallback)
+    """
+
+    backend_name = "tavily"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        *,
+        search_depth: str = "advanced",
+        max_results: int = 6,
+        timeout_s: float = 15.0,
+    ) -> None:
+        env_key = os.environ.get("TOKENPAL_TAVILY_KEY", "").strip()
+        self._api_key = (api_key or "").strip() or env_key
+        self._search_depth = search_depth
+        self._max_results = max_results
+        self._timeout_s = timeout_s
+
+    def search(self, query: str) -> SearchResult | None:
+        results = self.search_all(query, limit=1)
+        return results[0] if results else None
+
+    def search_all(self, query: str, limit: int) -> list[SearchResult]:
+        from tokenpal.senses.web_search.tavily import tavily_search
+
+        if not self._api_key:
+            log.debug("tavily: no api key configured, returning empty")
+            return []
+        hits = tavily_search(
+            query,
+            api_key=self._api_key,
+            search_depth=self._search_depth,
+            max_results=min(limit, self._max_results),
+            timeout_s=self._timeout_s,
+        )
+        out: list[SearchResult] = []
+        for hit in hits:
+            content = hit["content"]
+            out.append(SearchResult(
+                query=query,
+                backend="tavily",
+                title=hit["title"],
+                text=_truncate(content),  # short snippet for logging/display
+                source_url=hit["url"],
+                preloaded_content=content,  # full body, NEVER truncated
+            ))
+        return out
+
+
 def search(
     query: str,
     backend: str = "duckduckgo",
     brave_api_key: str = "",
+    tavily_api_key: str = "",
+    tavily_search_depth: str = "advanced",
+    tavily_max_results: int = 6,
+    tavily_timeout_s: float = 15.0,
 ) -> SearchResult | None:
     """Dispatch to the named backend. Falls back to Wikipedia if DDG has no answer.
     Returns None on all-backend failure. NEVER raises on network errors — returns None."""
@@ -261,6 +327,18 @@ def search(
     if name == "brave":
         be = BraveBackend(api_key=brave_api_key)
         return be.search(query)
+
+    if name == "tavily":
+        try:
+            return TavilyBackend(
+                api_key=tavily_api_key,
+                search_depth=tavily_search_depth,
+                max_results=tavily_max_results,
+                timeout_s=tavily_timeout_s,
+            ).search(query)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Tavily backend error: %s", e)
+            return None
 
     if name == "wikipedia":
         try:
@@ -290,10 +368,14 @@ def search_many(
     query: str,
     backend: str = "duckduckgo",
     limit: int = 5,
+    *,
+    tavily_api_key: str = "",
+    tavily_search_depth: str = "advanced",
+    tavily_timeout_s: float = 15.0,
 ) -> list[SearchResult]:
-    """Return up to `limit` results for a query. Only the DuckDuckGo Lite
-    backend returns multiple; Wikipedia's summary endpoint is inherently
-    1:1 and wraps its single result (or nothing) in a list.
+    """Return up to `limit` results for a query. DuckDuckGo Lite and Tavily
+    return multiple; Wikipedia's summary endpoint is inherently 1:1 and
+    wraps its single result (or nothing) in a list.
     NEVER raises on network errors — returns an empty list.
     """
     query = (query or "").strip()
@@ -319,6 +401,18 @@ def search_many(
             for title, snippet, url in hits
             if url
         ]
+
+    if name == "tavily":
+        try:
+            return TavilyBackend(
+                api_key=tavily_api_key,
+                search_depth=tavily_search_depth,
+                max_results=limit,
+                timeout_s=tavily_timeout_s,
+            ).search_all(query, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            log.debug("Tavily multi-result error: %s", e)
+            return []
 
     # Single-result backends wrap their 0-or-1 result.
     one = search(query, backend=name)

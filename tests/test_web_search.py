@@ -362,3 +362,124 @@ def test_search_many_wikipedia_empty_returns_empty_list():
         results = search_many("q", backend="wikipedia")
 
     assert results == []
+
+
+# ---------------------------------------------------------------------------
+# TavilyBackend
+# ---------------------------------------------------------------------------
+
+
+def _mock_tavily_response(results: list[dict[str, Any]]) -> MagicMock:
+    """Shape a tavily_search() POST response."""
+    return _urlopen_returning({"results": results})
+
+
+def test_tavily_populates_preloaded_content():
+    from tokenpal.senses.web_search.client import TavilyBackend
+
+    tav_body = [{
+        "url": "https://example.com/a",
+        "title": "Article A",
+        "content": "A" * 2000,  # simulate a long extracted body
+        "score": 0.92,
+    }]
+    mocked = _mock_tavily_response(tav_body)
+    with patch("urllib.request.urlopen", mocked):
+        be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
+        hits = be.search_all("something", limit=5)
+
+    assert len(hits) == 1
+    hit = hits[0]
+    assert hit.backend == "tavily"
+    assert hit.source_url == "https://example.com/a"
+    assert hit.title == "Article A"
+    # `text` is the short snippet (truncated to _MAX_TEXT_CHARS = 500).
+    assert len(hit.text) <= 501  # includes the ellipsis char
+    # `preloaded_content` must hold the FULL body, un-truncated.
+    assert len(hit.preloaded_content) == 2000
+    assert hit.preloaded_content.startswith("A")
+
+
+def test_tavily_skips_results_without_url_or_content():
+    from tokenpal.senses.web_search.client import TavilyBackend
+
+    mocked = _mock_tavily_response([
+        {"url": "https://good", "title": "Good", "content": "body here", "score": 1.0},
+        {"url": "", "title": "No URL", "content": "body", "score": 0.5},
+        {"url": "https://empty", "title": "No content", "content": "", "score": 0.5},
+    ])
+    with patch("urllib.request.urlopen", mocked):
+        be = TavilyBackend(api_key="tvly-keykeykeykeykey123")
+        hits = be.search_all("q", limit=5)
+
+    assert len(hits) == 1
+    assert hits[0].source_url == "https://good"
+
+
+def test_tavily_no_key_returns_empty():
+    from tokenpal.senses.web_search.client import TavilyBackend
+
+    be = TavilyBackend(api_key="")  # no key, no env var
+    with patch.dict("os.environ", {}, clear=False):
+        import os
+        os.environ.pop("TOKENPAL_TAVILY_KEY", None)
+        assert be.search_all("q", limit=5) == []
+
+
+def test_tavily_network_error_returns_empty():
+    from tokenpal.senses.web_search.client import TavilyBackend
+
+    def raiser(*a: Any, **kw: Any) -> Any:
+        raise OSError("network down")
+
+    with patch("urllib.request.urlopen", raiser):
+        be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
+        assert be.search_all("q", limit=5) == []
+
+
+def test_tavily_malformed_response_returns_empty():
+    from tokenpal.senses.web_search.client import TavilyBackend
+
+    # Server returned something that isn't the expected shape.
+    mocked = _urlopen_returning({"unexpected": "shape"})
+    with patch("urllib.request.urlopen", mocked):
+        be = TavilyBackend(api_key="tvly-abcdefghijklmnop")
+        assert be.search_all("q", limit=5) == []
+
+
+def test_search_many_routes_to_tavily_backend():
+    from tokenpal.senses.web_search.client import search_many
+
+    mocked = _mock_tavily_response([
+        {"url": "https://x", "title": "X", "content": "body", "score": 1.0},
+    ])
+    with patch("urllib.request.urlopen", mocked):
+        hits = search_many("q", backend="tavily", limit=3, tavily_api_key="tvly-keykeykeykeykey")
+
+    assert len(hits) == 1
+    assert hits[0].backend == "tavily"
+    assert hits[0].preloaded_content == "body"
+
+
+def test_search_route_tavily_no_key_returns_empty():
+    """The dispatcher shouldn't crash when routed to tavily with no key."""
+    from tokenpal.senses.web_search.client import search_many
+
+    # TavilyBackend returns [] when api_key is empty — dispatcher passes
+    # through cleanly.
+    import os
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("TOKENPAL_TAVILY_KEY", None)
+        hits = search_many("q", backend="tavily", limit=3, tavily_api_key="")
+    assert hits == []
+
+
+def test_preloaded_content_default_is_empty_string():
+    """Sanity: backends that don't pre-extract (DDG, Wikipedia) leave
+    preloaded_content as the empty string default, signalling to the
+    research pipeline that it must fall back to its own fetch."""
+    sr = SearchResult(
+        query="q", backend="duckduckgo",
+        title="t", text="snippet", source_url="https://u",
+    )
+    assert sr.preloaded_content == ""

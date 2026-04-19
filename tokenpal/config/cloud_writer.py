@@ -54,3 +54,14 @@ def set_cloud_search(enabled: bool) -> Path:
         data.setdefault("cloud_llm", {})["research_search"] = enabled
 
     return update_config(mutate)
+
+
+def set_cloud_search_layer_enabled(enabled: bool) -> Path:
+    """Flip `[cloud_search] enabled = true/false` in config.toml.
+
+    This is the Tavily-backed search layer, distinct from cloud_llm.
+    """
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("cloud_search", {})["enabled"] = enabled
+
+    return update_config(mutate)

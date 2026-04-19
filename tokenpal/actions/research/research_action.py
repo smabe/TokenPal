@@ -16,8 +16,8 @@ from tokenpal.actions.research.fetch_url import fetch_and_extract
 from tokenpal.brain.research import ResearchRunner, ResearchSession
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
-from tokenpal.config.schema import CloudLLMConfig, ResearchConfig
-from tokenpal.config.secrets import get_cloud_key
+from tokenpal.config.schema import CloudLLMConfig, CloudSearchConfig, ResearchConfig
+from tokenpal.config.secrets import get_cloud_key, get_tavily_key
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import (
     DEEP_MODE_MODELS,
@@ -59,6 +59,7 @@ class ResearchAction(AbstractAction):
         self._llm: AbstractLLMBackend | None = None
         self._research_config: ResearchConfig | None = None
         self._cloud_config: CloudLLMConfig | None = None
+        self._cloud_search_config: CloudSearchConfig | None = None
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         question = (kwargs.get("question") or "").strip()
@@ -97,6 +98,15 @@ class ResearchAction(AbstractAction):
                 and cloud_backend.model in DEEP_MODE_MODELS
             ):
                 cloud_mode = "search"
+        # Cloud search layer — independent of cloud_llm (Anthropic synth).
+        # Tavily handles search+extract; synth still routes through whatever
+        # cloud_llm decides (Haiku by default, local if cloud_llm is off).
+        cs_cfg = self._cloud_search_config or CloudSearchConfig()
+        tavily_key = get_tavily_key() if cs_cfg.enabled else ""
+        cloud_search_enabled = bool(cs_cfg.enabled and tavily_key)
+        if cs_cfg.enabled and not tavily_key:
+            log.info("cloud_search: enabled but no tavily key - using local search")
+
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
@@ -112,6 +122,11 @@ class ResearchAction(AbstractAction):
             synth_thinking=cfg.synth_thinking,
             cloud_backend=cloud_backend,
             cloud_plan=cloud_plan,
+            cloud_search_enabled=cloud_search_enabled,
+            tavily_api_key=tavily_key or "",
+            tavily_search_depth=cs_cfg.search_depth,
+            tavily_max_results=cs_cfg.max_results,
+            tavily_timeout_s=cs_cfg.timeout_s,
         )
 
         try:
@@ -179,8 +194,13 @@ def _format_result(session: ResearchSession) -> str:
     sources_lines = "\n".join(
         f"[{s.number}] {s.url} - {s.title}" for s in session.sources
     )
+    warnings_block = ""
+    if session.warnings:
+        inner = "\n".join(f"  <warning>{w}</warning>" for w in session.warnings)
+        warnings_block = f"<warnings>\n{inner}\n</warnings>\n"
     return (
         f"<tool_result tool=\"research\" status=\"complete\">\n"
+        f"{warnings_block}"
         f"<answer>\n{session.answer}\n</answer>\n"
         f"<sources>\n{sources_lines}\n</sources>\n"
         f"</tool_result>"

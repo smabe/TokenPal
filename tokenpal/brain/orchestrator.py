@@ -37,6 +37,7 @@ from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
     AgentConfig,
     CloudLLMConfig,
+    CloudSearchConfig,
     ConversationConfig,
     GitNudgeConfig,
     IdleToolsConfig,
@@ -169,6 +170,7 @@ class ResearchBridge:
 
     config: ResearchConfig
     cloud_config: CloudLLMConfig | None = None
+    cloud_search_config: CloudSearchConfig | None = None
     log_callback: Callable[[str], None] | None = None
 
 
@@ -682,6 +684,8 @@ class Brain:
                 action._research_config = self._research.config  # type: ignore[attr-defined]
             if hasattr(action, "_cloud_config") and getattr(action, "_cloud_config") is None:
                 action._cloud_config = self._research.cloud_config  # type: ignore[attr-defined]
+            if hasattr(action, "_cloud_search_config") and getattr(action, "_cloud_search_config") is None:
+                action._cloud_search_config = self._research.cloud_search_config  # type: ignore[attr-defined]
             if hasattr(action, "_ui_callback"):
                 current = getattr(action, "_ui_callback", None)
                 # Replace the no-op stub from action init with the real cb.

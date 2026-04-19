@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
@@ -35,6 +36,10 @@ FetchFn = Callable[[str], "asyncio.Future[str | None]"] | Callable[[str], Any]
 class PlannedQuery:
     query: str
     intent: str = ""
+    # Backend the planner (or routing layer) chose for this specific query.
+    # Empty string means "let the runner pick the default" — set by
+    # _search_all based on cloud_search config.
+    backend: str = ""
 
 
 @dataclass
@@ -80,6 +85,10 @@ class ResearchSession:
     tokens_used: int = 0
     stopped_reason: ResearchStopReason | str = ""
     started_at: float = field(default_factory=time.monotonic)
+    # User-visible warnings to surface in the transcript (not just logs):
+    # thin source pool, Tavily fallback, etc. Rendered by research_action's
+    # _format_result as <warnings><warning>...</warning></warnings>.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def is_complete(self) -> bool:
@@ -93,6 +102,7 @@ _BACKEND_CONCURRENCY: dict[BackendName, int] = {
     "duckduckgo": 2,
     "wikipedia": 5,
     "brave": 1,
+    "tavily": 3,
 }
 
 # Per-source excerpt cap handed to the synthesizer. Bigger = better picks
@@ -128,6 +138,11 @@ class ResearchRunner:
         synth_thinking: bool = True,
         cloud_backend: CloudBackend | None = None,
         cloud_plan: bool = False,
+        cloud_search_enabled: bool = False,
+        tavily_api_key: str = "",
+        tavily_search_depth: str = "advanced",
+        tavily_max_results: int = 6,
+        tavily_timeout_s: float = 15.0,
     ) -> None:
         self._llm = llm
         self._fetch = fetch_url
@@ -141,6 +156,13 @@ class ResearchRunner:
         self._synth_thinking = synth_thinking
         self._cloud_backend = cloud_backend
         self._cloud_plan = cloud_plan
+        # Cloud search layer — when enabled AND a key is present, planner
+        # queries default to tavily. Thin Tavily pools top up from DDG.
+        self._cloud_search_active = bool(cloud_search_enabled and tavily_api_key)
+        self._tavily_api_key = tavily_api_key
+        self._tavily_search_depth = tavily_search_depth
+        self._tavily_max_results = tavily_max_results
+        self._tavily_timeout_s = tavily_timeout_s
         self._semaphores: dict[BackendName, asyncio.Semaphore] = {
             name: asyncio.Semaphore(limit)
             for name, limit in _BACKEND_CONCURRENCY.items()
@@ -178,7 +200,7 @@ class ResearchRunner:
             return session
 
         self._set_status("researching: searching")
-        hits = await self._search_all(session.queries)
+        hits = await self._search_all(session, session.queries)
         if not hits:
             session.stopped_reason = ResearchStopReason.NO_SOURCES
             return session
@@ -194,10 +216,12 @@ class ResearchRunner:
             return session
 
         if len(session.sources) < _THIN_POOL_THRESHOLD:
-            self._log(
-                f"  warning: thin source pool ({len(session.sources)} sources) "
-                f"— answer may be unreliable"
+            msg = (
+                f"thin source pool ({len(session.sources)} sources) "
+                "— answer may be unreliable"
             )
+            self._log(f"  warning: {msg}")
+            session.warnings.append(msg)
             log.warning(
                 "Research returned %d sources (threshold %d) — synthesis "
                 "will be thin", len(session.sources), _THIN_POOL_THRESHOLD,
@@ -310,14 +334,33 @@ class ResearchRunner:
 
     # ---- Stage 2: search --------------------------------------------------
 
+    def _default_backend(self) -> BackendName:
+        """Runtime default when a planned query has no explicit backend."""
+        return "tavily" if self._cloud_search_active else "duckduckgo"
+
+    def _resolve_backend(self, planned: str) -> BackendName:
+        """Normalize planner/explicit backend choice + fall back safely when
+        an unsupported backend is chosen (unknown name, tavily without key)."""
+        name = (planned or "").strip().lower()
+        if not name:
+            return self._default_backend()
+        if name == "tavily" and not self._cloud_search_active:
+            return "duckduckgo"
+        if name not in _BACKEND_CONCURRENCY:
+            return self._default_backend()
+        return name  # type: ignore[return-value]
+
     async def _search_all(
-        self, queries: list[PlannedQuery]
+        self, session: ResearchSession, queries: list[PlannedQuery]
     ) -> list[SearchResult]:
         # Wikipedia's summary endpoint needs exact article titles, but
         # planner queries are search-engine phrasings ("best X for Y 2026"),
         # never article slugs, so every Wikipedia call 404s. /ask still uses
         # Wikipedia for factual one-shot lookups where the query IS a title.
-        tasks = [self._search_many(q.query, "duckduckgo") for q in queries]
+        tasks = [
+            self._search_many(q.query, self._resolve_backend(q.backend))
+            for q in queries
+        ]
         batches = await asyncio.gather(*tasks, return_exceptions=True)
 
         collected: list[SearchResult] = []
@@ -330,6 +373,31 @@ class ResearchRunner:
                 if hit.source_url and hit.source_url not in seen:
                     collected.append(hit)
                     seen.add(hit.source_url)
+
+        # Tavily thin-pool top-up: if cloud search was in play but returned
+        # <_THIN_POOL_THRESHOLD results, refetch via DDG and surface a visible
+        # transcript warning so the user knows coverage is degraded.
+        if (
+            self._cloud_search_active
+            and len(collected) < _THIN_POOL_THRESHOLD
+            and any(self._resolve_backend(q.backend) == "tavily" for q in queries)
+        ):
+            self._log(
+                f"  warning: tavily thin ({len(collected)} sources) "
+                f"— topping up from ddg"
+            )
+            session.warnings.append(
+                f"tavily thin ({len(collected)} sources) — topped up from ddg"
+            )
+            ddg_tasks = [self._search_many(q.query, "duckduckgo") for q in queries]
+            ddg_batches = await asyncio.gather(*ddg_tasks, return_exceptions=True)
+            for batch in ddg_batches:
+                if isinstance(batch, Exception):
+                    continue
+                for hit in batch:
+                    if hit.source_url and hit.source_url not in seen:
+                        collected.append(hit)
+                        seen.add(hit.source_url)
         return collected
 
     async def _search_many(
@@ -341,7 +409,12 @@ class ResearchRunner:
         async with sem:
             try:
                 return await asyncio.wait_for(
-                    asyncio.to_thread(search_many, query, backend, limit),
+                    asyncio.to_thread(
+                        search_many, query, backend, limit,
+                        tavily_api_key=self._tavily_api_key,
+                        tavily_search_depth=self._tavily_search_depth,
+                        tavily_timeout_s=self._tavily_timeout_s,
+                    ),
                     timeout=self._per_search_timeout_s,
                 )
             except TimeoutError:
@@ -374,9 +447,33 @@ class ResearchRunner:
         return [s for s in results if s is not None]
 
     async def _read(self, number: int, hit: SearchResult) -> Source | None:
-        """Prefer the search snippet; optionally enrich with fetched article."""
-        excerpt = (hit.text or "").strip()
+        """Prefer the search snippet; optionally enrich with fetched article.
+
+        When the backend pre-extracts content (Tavily), short-circuits the
+        fetch stage entirely and uses the preloaded body directly.
+        Sensitive-content filter (the same one fetch_url.py applies to
+        extracted HTML) runs on all excerpts before they become Sources.
+        """
         url = hit.source_url
+
+        if hit.preloaded_content:
+            # Tavily-class backend did extraction for us. Trust it, scrub it,
+            # skip the local fetch chain.
+            if contains_sensitive_content_term(hit.preloaded_content):
+                log.debug("research: preloaded content filtered (sensitive) %s", url)
+                return None
+            excerpt = hit.preloaded_content[:_PER_SOURCE_EXCERPT_CHARS]
+            if not excerpt:
+                return None
+            return Source(
+                number=number,
+                url=url,
+                title=hit.title,
+                excerpt=excerpt,
+                backend=hit.backend,
+            )
+
+        excerpt = (hit.text or "").strip()
 
         if url and self._fetch is not None:
             try:
@@ -658,8 +755,11 @@ def _parse_planner_output(text: str, cap: int) -> list[PlannedQuery]:
             if isinstance(item, dict):
                 q = (item.get("query") or item.get("q") or "").strip()
                 intent = (item.get("intent") or "").strip()
+                backend = (item.get("backend") or "").strip().lower()
                 if q:
-                    queries.append(PlannedQuery(query=q, intent=intent))
+                    queries.append(PlannedQuery(
+                        query=q, intent=intent, backend=backend,
+                    ))
             elif isinstance(item, str):
                 s = item.strip()
                 if s:

@@ -373,6 +373,28 @@ class CloudLLMConfig:
 
 
 @dataclass
+class CloudSearchConfig:
+    # Opt-in cloud-backed search layer for the /research pipeline. When
+    # enabled, /research routes stage 2+3 (search + extract) through a
+    # commercial backend that returns pre-extracted article content, skipping
+    # the local DDG + newspaper4k/trafilatura chain. Everything else stays
+    # local: observations, conversation, planner, /ask, idle-tool rolls never
+    # touch this. Managed via /cloud tavily (key at ~/.tokenpal/.secrets.json,
+    # 0o600). Keep this separate from CloudLLMConfig — they're different
+    # commercial surfaces with different privacy trade-offs.
+    enabled: bool = False
+    backend: Literal["tavily"] = "tavily"
+    # "basic" = 1 credit/query, "advanced" = 2 credits/query with deeper
+    # extraction. Advanced is the right default for /research — the extra
+    # content usually matters more than the cost.
+    search_depth: Literal["basic", "advanced"] = "advanced"
+    # Max results per Tavily query (API cap is 10, default 6 keeps us
+    # inside the downstream max_fetches=5 pool comfortably).
+    max_results: int = 6
+    timeout_s: float = 15.0
+
+
+@dataclass
 class SessionSummaryConfig:
     # Periodic LLM-generated handoff notes. Writes every interval_s seconds
     # when the window has any activity (skip-if-idle), read back at startup
@@ -409,3 +431,4 @@ class TokenPalConfig:
     rage_detect: RageDetectConfig = field(default_factory=RageDetectConfig)
     git_nudge: GitNudgeConfig = field(default_factory=GitNudgeConfig)
     cloud_llm: CloudLLMConfig = field(default_factory=CloudLLMConfig)
+    cloud_search: CloudSearchConfig = field(default_factory=CloudSearchConfig)

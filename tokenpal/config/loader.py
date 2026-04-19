@@ -13,6 +13,7 @@ from tokenpal.config.schema import (
     AgentConfig,
     BrainConfig,
     CloudLLMConfig,
+    CloudSearchConfig,
     ConversationConfig,
     FilesystemPulseConfig,
     FinetuneConfig,
@@ -62,6 +63,7 @@ _SECTION_MAP: dict[str, type] = {
     "research": ResearchConfig,
     "filesystem_pulse": FilesystemPulseConfig,
     "cloud_llm": CloudLLMConfig,
+    "cloud_search": CloudSearchConfig,
 }
 
 
