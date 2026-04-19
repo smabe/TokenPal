@@ -70,12 +70,24 @@ normalizes it through `_resolve_backend`:
 the same sensitive-content filter inline. This is why Tavily runs are
 ~3× faster than DDG+fetch runs on the same question.
 
-**Thin-pool top-up.** When cloud search is active and the Tavily batch
-returns fewer than `_THIN_POOL_THRESHOLD=3` results, `_search_all`
-refetches every query against DDG and merges the results (deduping by
-URL). A visible warning lands in `session.warnings` and the transcript
-so the user knows coverage was degraded. The top-up is Tavily-specific —
-empty HN / SE / Brave batches do NOT trigger it.
+**Thin-pool top-up.** When the primary fan-out lands fewer than
+`_THIN_POOL_THRESHOLD=3` results AND any backend other than plain DDG
+was attempted, `_search_all` refetches every query against DDG and
+merges the results (deduping by canonical URL). Fires for Tavily, HN,
+StackExchange, and Brave misses equally — planner-routed empties never
+silently drop the run to zero sources. A visible warning lands in
+`session.warnings` and the transcript so the user knows coverage was
+degraded: `"thin pool (N sources from hn,tavily) — topping up from ddg"`.
+
+**URL dedup.** The `seen` set keys on a canonicalized form of each
+source URL (`_canonical_url`), which strips known analytics / tracking
+querystring params (srsltid, utm_*, fbclid, gclid, msclkid, etc.)
+before comparison. Without this Tavily often returns the same article
+2-3× with distinct Google Shopping `srsltid` tokens, inflating the
+source pool and biasing synth toward whichever page got the duplicates.
+Semantic querystring params (id, q, slug) are preserved so sites that
+encode article identity in querystrings (HN `item?id=`, StackOverflow
+`/q/...`) still dedup correctly per-article.
 
 **Wikipedia is deliberately NOT in the fan-out.** Its REST
 `/page/summary/` endpoint requires exact article titles, while the
@@ -308,15 +320,41 @@ wraps in `<tool_result>` delimiters for the conversation LLM.
 
 ## Telemetry
 
-Every `run()` emits a one-line summary at exit (success, crash, or
-early-return): `telemetry: mode=<backend>=<N>,... sources=<N> stopped=<reason>`.
-The line lands in the session log (visible under `--verbose`) and is
-the knob for measuring the actual backend mix post-ship. If
-`mode=duckduckgo=3` dominates on runs where the planner picked Tavily,
-that's the signal to investigate — either Tavily misconfiguration or
-topical mismatch. If `mode=tavily=3` dominates with `sources < 3`
-frequently, the thin-pool top-up is carrying more weight than we'd
-like and Playwright becomes worth a look.
+Every `run()` and `run_deep()` emits a one-line summary at exit
+(success, crash, or early-return):
+
+```
+telemetry: mode=<backend>=<N>,... tried=<backend>,<backend>,... sources=<N> stopped=<reason>
+```
+
+- `mode=` — which backends contributed to the sources the synthesizer
+  actually saw.
+- `tried=` — which backends were attempted, in first-seen order. Lets
+  you spot routing mismatches at a glance: if `mode=duckduckgo=5
+  tried=duckduckgo,hn,tavily`, everything worked but HN/Tavily both
+  returned empty and DDG carried the run.
+- `sources=` — total count after dedup.
+- `stopped=` — `complete`, `no_queries`, `no_sources`, `token_budget`,
+  `crashed`, etc.
+
+The line lands in the session log (visible under `--verbose`) and the
+chat transcript. It's the knob for measuring actual backend mix
+post-ship. If `mode=duckduckgo=3` dominates on runs where the planner
+picked Tavily, that's a signal to investigate — either Tavily
+misconfiguration (check `/cloud tavily status` and the
+`cloud_search_active=...` runner-init log) or topical mismatch. If
+`mode=tavily=3` dominates with `sources < 3` frequently, the thin-pool
+top-up is carrying more weight than we'd like and Playwright/SPA retry
+becomes worth a look.
+
+A separate INFO line at runner init reports state for the search path:
+
+```
+research: init cloud_search_active=<bool> (enabled=<bool> key_present=<bool>) cloud_synth=<bool> cloud_plan=<bool>
+```
+
+Emitted from `run()` and `run_deep()`, NOT from `refine()` — refine
+replays cached sources so the search state is irrelevant.
 
 ## Per-call thinking override
 
