@@ -15,6 +15,7 @@ from tokenpal.brain.research import (
     Source,
     SynthResult,
     Verdict,
+    _canonical_url,
     _parse_planner_output,
     _parse_synth_json,
     _render_single_pick,
@@ -129,6 +130,59 @@ def test_parse_planner_returns_empty_for_empty_input() -> None:
 # ---------------------------------------------------------------------------
 # Citation validation
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# URL canonicalization for dedup
+# ---------------------------------------------------------------------------
+
+
+def test_canonical_url_strips_srsltid() -> None:
+    """Tavily returns the same Google Shopping page 3x with different srsltid
+    values - dedup must treat them as one."""
+    base = "https://boulies.com/blogs/tips-and-guides/best-budget-office-chair"
+    a = f"{base}?srsltid=AfmBOoowbrQD4"
+    b = f"{base}?srsltid=AfmBOopM55Uu"
+    c = f"{base}?srsltid=AfmBOoruc0LT"
+    assert _canonical_url(a) == base
+    assert _canonical_url(a) == _canonical_url(b) == _canonical_url(c)
+
+
+def test_canonical_url_strips_utm_family() -> None:
+    a = "https://example.com/x?utm_source=newsletter&utm_campaign=spring"
+    b = "https://example.com/x?utm_content=abc&utm_medium=email"
+    assert _canonical_url(a) == _canonical_url(b) == "https://example.com/x"
+
+
+def test_canonical_url_strips_click_ids() -> None:
+    for param in ("fbclid", "gclid", "msclkid", "yclid", "twclid", "igshid"):
+        u = f"https://example.com/path?{param}=abc123"
+        assert _canonical_url(u) == "https://example.com/path", param
+
+
+def test_canonical_url_keeps_semantic_params() -> None:
+    """Some sites encode article identity in querystrings - don't strip those."""
+    for url in (
+        "https://news.ycombinator.com/item?id=12345",
+        "https://stackoverflow.com/questions/1234567",
+        "https://example.com/article?p=abc&slug=thing",
+        "https://example.com/search?q=python+json",
+    ):
+        assert _canonical_url(url) == url
+
+
+def test_canonical_url_preserves_fragment_and_path() -> None:
+    u = "https://example.com/path/to/thing#section-2?utm_source=x"
+    # Fragment should survive; path unchanged.
+    canon = _canonical_url(u)
+    assert "example.com/path/to/thing" in canon
+
+
+def test_canonical_url_handles_malformed_gracefully() -> None:
+    """Never raise - network URLs must stay dedup-able even on parse failure."""
+    for weird in ("", "not-a-url", "http://", "://missing-scheme"):
+        # Just verify no exception.
+        _ = _canonical_url(weird)
 
 
 def test_strip_dangling_markers_keeps_valid_range() -> None:

@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
@@ -120,6 +121,55 @@ _BACKEND_CONCURRENCY: dict[BackendName, int] = {
 # token usage bounded across max_fetches sources.
 _PER_SOURCE_EXCERPT_CHARS = 4000
 
+
+# Query params stripped before URL dedup. These are analytics / tracking
+# tokens that don't change page content — Tavily and other backends often
+# return the same article multiple times with different tracking IDs, and
+# without stripping them the dedup `seen` set treats them as distinct.
+# Keep the list tight: only strip known trackers, NOT arbitrary params
+# (some sites encode article identity in querystrings).
+_TRACKING_PARAM_PREFIXES: tuple[str, ...] = (
+    "utm_", "mc_", "_hsenc", "_hsmi", "hsa_", "vero_",
+)
+_TRACKING_PARAM_EXACT: frozenset[str] = frozenset({
+    "srsltid",      # Google Shopping result tracking id
+    "fbclid", "gclid", "dclid", "msclkid",
+    "igshid",       # Instagram share id
+    "yclid",        # Yandex click id
+    "twclid",       # Twitter click id
+    "_ga", "_gl",
+    "ref", "ref_src", "ref_url",
+})
+
+
+def _canonical_url(url: str) -> str:
+    """Return a URL suitable for identity comparison.
+
+    Strips known analytics / tracking query params while leaving
+    semantically meaningful params alone. Preserves fragments and path
+    exactly. Returns the input unchanged on any parse failure so network
+    URLs always stay dedup-able even if urllib chokes."""
+    if not url:
+        return url
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return url
+    if not parsed.query:
+        return url
+    kept: list[tuple[str, str]] = []
+    for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True):
+        lk = key.lower()
+        if lk in _TRACKING_PARAM_EXACT:
+            continue
+        if any(lk.startswith(prefix) for prefix in _TRACKING_PARAM_PREFIXES):
+            continue
+        kept.append((key, value))
+    new_query = urllib.parse.urlencode(kept, doseq=True)
+    return urllib.parse.urlunsplit((
+        parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment,
+    ))
+
 # Fewer sources than this and we warn — synthesis from 1-2 pages tends to
 # produce either training-data hallucinations or single-source bias.
 _THIN_POOL_THRESHOLD = 3
@@ -170,19 +220,25 @@ class ResearchRunner:
         self._cloud_search_active = bool(
             self._cloud_search.enabled and tavily_api_key
         )
+        self._semaphores: dict[BackendName, asyncio.Semaphore] = {
+            name: asyncio.Semaphore(limit)
+            for name, limit in _BACKEND_CONCURRENCY.items()
+        }
+
+    def _log_runner_state(self) -> None:
+        """Emit the init-state line. Called from run()/run_deep(); refine
+        skips this because it replays cached sources and never touches
+        the search layer, so the cloud_search_active flag is irrelevant
+        there and reads as misleading noise."""
         log.info(
             "research: init cloud_search_active=%s (enabled=%s key_present=%s) "
             "cloud_synth=%s cloud_plan=%s",
             self._cloud_search_active,
             self._cloud_search.enabled,
-            bool(tavily_api_key),
-            cloud_backend is not None,
-            cloud_plan,
+            bool(self._tavily_api_key),
+            self._cloud_backend is not None,
+            self._cloud_plan,
         )
-        self._semaphores: dict[BackendName, asyncio.Semaphore] = {
-            name: asyncio.Semaphore(limit)
-            for name, limit in _BACKEND_CONCURRENCY.items()
-        }
 
     def _set_status(self, label: str) -> None:
         if self._status is None:
@@ -193,6 +249,7 @@ class ResearchRunner:
             log.exception("research status_callback raised")
 
     async def run(self, question: str) -> ResearchSession:
+        self._log_runner_state()
         session = ResearchSession(question=question)
         try:
             return await self._run_inner(question, session)
@@ -441,9 +498,12 @@ class ResearchRunner:
                 log.debug("search sub-task failed: %s", batch)
                 continue
             for hit in batch:
-                if hit.source_url and hit.source_url not in seen:
+                if not hit.source_url:
+                    continue
+                key = _canonical_url(hit.source_url)
+                if key not in seen:
                     collected.append(hit)
-                    seen.add(hit.source_url)
+                    seen.add(key)
 
         # Thin-pool top-up: if the primary fan-out under-delivered AND the
         # attempted backends include anything other than pure DDG (so there's
@@ -469,9 +529,12 @@ class ResearchRunner:
                 if isinstance(batch, Exception):
                     continue
                 for hit in batch:
-                    if hit.source_url and hit.source_url not in seen:
+                    if not hit.source_url:
+                        continue
+                    key = _canonical_url(hit.source_url)
+                    if key not in seen:
                         collected.append(hit)
-                        seen.add(hit.source_url)
+                        seen.add(key)
         return collected
 
     async def _search_many(
@@ -668,6 +731,7 @@ class ResearchRunner:
         ``Source`` objects (empty excerpts; the model summarized on the
         server) and skip ``_validate_picks``.
         """
+        self._log_runner_state()
         session = ResearchSession(question=question)
         try:
             return await self._run_deep_inner(question, session, mode=mode)
