@@ -17,6 +17,7 @@ from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
+from textual.screen import ModalScreen
 from textual.timer import Timer
 from textual.widgets import Input, Static
 
@@ -847,21 +848,37 @@ class TokenPalApp(App[None]):
     def on_request_exit(self, _message: RequestExit) -> None:
         self.exit()
 
+    def _modal_already_active(self) -> bool:
+        """True when any ModalScreen is on the stack. Prevents stacking a
+        second modal when a user hits the keybinding twice or a launcher
+        races an already-open picker."""
+        return any(
+            isinstance(screen, ModalScreen) for screen in self.screen_stack
+        )
+
     def on_open_selection_modal(self, message: OpenSelectionModal) -> None:
+        if self._modal_already_active():
+            return
         modal = SelectionModal(message.title, message.groups)
         self.push_screen(modal, message.on_save)
 
     def on_open_confirm_modal(self, message: OpenConfirmModal) -> None:
+        if self._modal_already_active():
+            return
         modal = ConfirmModal(message.title, message.body)
         self.push_screen(modal, message.on_result)
 
     def on_open_cloud_modal(self, message: OpenCloudModal) -> None:
+        if self._modal_already_active():
+            return
         from tokenpal.ui.cloud_modal import CloudModal
 
         modal = CloudModal(message.state)
         self.push_screen(modal, message.on_result)
 
     def on_open_options_modal(self, message: OpenOptionsModal) -> None:
+        if self._modal_already_active():
+            return
         from tokenpal.ui.options_modal import OptionsModal
 
         modal = OptionsModal(message.state)
