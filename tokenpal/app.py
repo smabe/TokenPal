@@ -378,11 +378,13 @@ def main() -> None:
         return _handle_cloud_command(args, config)
 
     def _open_cloud_modal() -> bool:
-        from tokenpal.config.secrets import fingerprint, get_cloud_key
         from tokenpal.ui.cloud_modal import CloudModalResult, CloudModalState
 
         cfg = config.cloud_llm
+        cs = config.cloud_search
         stored_key = get_cloud_key()
+        tavily_key = get_tavily_key()
+        brave_key = get_brave_key()
         state = CloudModalState(
             enabled=cfg.enabled,
             research_synth=cfg.research_synth,
@@ -391,6 +393,14 @@ def main() -> None:
             research_search=cfg.research_search,
             model=cfg.model,
             key_fingerprint=fingerprint(stored_key) if stored_key else None,
+            tavily_enabled=cs.enabled,
+            tavily_search_depth=cs.search_depth,
+            tavily_key_fingerprint=(
+                fingerprint(tavily_key) if tavily_key else None
+            ),
+            brave_key_fingerprint=(
+                fingerprint(brave_key) if brave_key else None
+            ),
         )
 
         def on_save(result: CloudModalResult | None) -> None:
@@ -1258,10 +1268,60 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
             log.warning("cloud modal: could not persist model: %s", e)
         cfg.model = result.model
 
+    # ----------------------------------------------------------------
+    # Tavily (cloud_search layer)
+    # ----------------------------------------------------------------
+    cs = config.cloud_search
+    tavily_key_ok = True
+    if result.tavily_new_api_key:
+        try:
+            set_tavily_key(result.tavily_new_api_key)
+        except ValueError as e:
+            log.warning("cloud modal: bad Tavily key shape: %s", e)
+            tavily_key_ok = False
+
+    if tavily_key_ok:
+        try:
+            set_cloud_search_layer_enabled(result.tavily_enabled)
+        except OSError as e:
+            log.warning(
+                "cloud modal: could not persist cloud_search enabled: %s", e,
+            )
+        cs.enabled = result.tavily_enabled
+
+        depth = result.tavily_search_depth
+        if depth in ("basic", "advanced") and depth != cs.search_depth:
+            try:
+                from tokenpal.config.toml_writer import update_config
+
+                def _mutate_depth(data: dict[str, Any]) -> None:
+                    data.setdefault("cloud_search", {})["search_depth"] = depth
+
+                update_config(_mutate_depth)
+            except OSError as e:
+                log.warning(
+                    "cloud modal: could not persist search_depth: %s", e,
+                )
+            cs.search_depth = depth  # type: ignore[assignment]
+
+    # ----------------------------------------------------------------
+    # Brave (key-only)
+    # ----------------------------------------------------------------
+    if result.brave_new_api_key:
+        try:
+            set_brave_key(result.brave_new_api_key)
+        except ValueError as e:
+            log.warning("cloud modal: bad Brave key shape: %s", e)
+
     log.info(
-        "cloud modal: enabled=%s synth=%s plan=%s deep=%s search=%s model=%s",
+        "cloud modal: enabled=%s synth=%s plan=%s deep=%s search=%s "
+        "model=%s tavily_enabled=%s tavily_depth=%s tavily_key=%s "
+        "brave_key=%s",
         cfg.enabled, cfg.research_synth, cfg.research_plan,
         cfg.research_deep, cfg.research_search, cfg.model,
+        cs.enabled, cs.search_depth,
+        "set" if get_tavily_key() else "unset",
+        "set" if get_brave_key() else "unset",
     )
 
 
