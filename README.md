@@ -112,6 +112,54 @@ Auto-falls back to local Ollama if the server goes down. Works with [Tailscale](
 
 See [docs/server-setup.md](docs/server-setup.md) for details.
 
+## Cloud LLM for /research (opt-in)
+
+TokenPal is local-first — observations, conversation, idle-tool rolls, `/ask`, and everything else run on your own hardware. **`/research` alone** can optionally route some of its LLM calls through Anthropic's API when you want better synthesis than a local model can manage. It's off by default and scoped to that one command.
+
+### Setup
+
+1. Grab an API key from [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys). A $5 workspace credit is enough to experiment.
+2. From inside TokenPal: `/cloud enable sk-ant-api03-…`
+
+The key is written to `~/.tokenpal/.secrets.json` at mode `0o600` (owner-only). It's **never** written to `config.toml` and never echoed — `/cloud` status output shows a fingerprint only.
+
+Or use the modal UI: run bare `/cloud` to open a full settings picker with model radio, toggle checkboxes, and key entry.
+
+### Three cost tiers
+
+| mode | what cloud does | typical cost | when to use |
+|---|---|---|---|
+| **synth only** (default after `/cloud enable`) | Local plan + search + fetch → cloud synthesizes | ~$0.05/run (Haiku) to ~$0.15/run (Sonnet) | The cheap upgrade. Better pick justifications and verdicts than local Qwen can produce. Works with Haiku. |
+| **search** (`/cloud search on`) | Sonnet drives `web_search` tool — no fetching full pages | ~$0.10-0.20/run | Want fresh-web-aware Sonnet without the snowball cost. **Sonnet 4.6+ only**. |
+| **deep** (`/cloud deep on`) | Sonnet drives `web_search` + `web_fetch` — reads pages server-side | **$1-3/run** | Last resort for JS-heavy SPAs (rtings), bot-blocked sites (Forbes), or paywalled previews. The tool-loop re-bills accumulated context on every step, which is why it's expensive. Warning prints on activation. **Sonnet 4.6+ only**. |
+
+If both `search` and `deep` are on, deep wins.
+
+### Common commands
+
+```
+/cloud                      open the settings modal
+/cloud enable <api-key>     store key + flip on
+/cloud status               show state, model, key fingerprint
+/cloud model <id>           claude-haiku-4-5 (default) | claude-sonnet-4-6 | claude-opus-4-7
+/cloud search on|off        mid-tier Sonnet-driven search
+/cloud deep on|off          expensive full deep mode (cost warning on activation)
+/cloud plan on|off          also route /research planner through cloud (niche)
+/cloud disable              flip off (key retained)
+/cloud forget               wipe key + disable
+/refine <follow-up>         re-synthesize last /research with a follow-up (cloud)
+```
+
+### What crosses the wire
+
+Only `/research` paths. **Never** observations, conversation, idle-tool rolls, `/ask`, or any sense. Payload is your question plus either bundled local source excerpts (synth-only mode) or just the question (search/deep modes; Sonnet fetches server-side).
+
+### Fallback
+
+Any failure (auth, rate limit, network, timeout, `no_credit`) falls back to local synth with identical prompt + schema. The research log line flags the fallback so you always know which path ran.
+
+See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.md) and [docs/research-architecture.md](docs/research-architecture.md) for the full design, provenance model, and cost breakdown.
+
 ## Features
 
 | | |
