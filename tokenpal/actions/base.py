@@ -29,6 +29,11 @@ class ActionResult:
     # Multiple clickable links to surface in the chat log, each a
     # (label, url) pair. Used by multi-source tools like `research`.
     display_urls: list[tuple[str, str]] | None = None
+    # Verbatim text to surface in the chat log alongside the buddy's reaction.
+    # Used by content-delivery tools where the value to the user IS the raw
+    # tool output, not just the LLM's riff on it. Sender is responsible for
+    # scrubbing third-party text via ``scrub_body`` before assigning here.
+    display_text: str | None = None
 
 
 class AbstractAction(abc.ABC):

@@ -161,6 +161,36 @@ async def test_completes_when_model_emits_no_tool_call() -> None:
 
 
 @pytest.mark.asyncio
+async def test_status_callback_reports_tool_name() -> None:
+    """Each tool invoke should push a 'using <tool>...' label. The label
+    persists through the follow-up LLM step so a fast gather isn't
+    overwritten before the UI renders it."""
+    llm = _ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=10,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("echo", {"text": "hi"}, "call_1")],
+        ),
+        LLMResponse(text="echoed hi", tokens_used=20, model_name="t", latency_ms=0),
+    ])
+    statuses: list[str] = []
+    runner = AgentRunner(
+        llm=llm,
+        actions=_echo_actions(),
+        log_callback=lambda _s: None,
+        confirm_callback=_always_allow,
+        is_sensitive=_no_sensitive,
+        status_callback=statuses.append,
+    )
+    session = await runner.run("echo hi")
+
+    assert session.stopped_reason == "complete"
+    assert statuses == ["using echo..."]
+
+
+@pytest.mark.asyncio
 async def test_executes_tool_then_returns_final_text() -> None:
     llm = _ScriptedLLM([
         LLMResponse(

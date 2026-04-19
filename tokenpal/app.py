@@ -214,6 +214,7 @@ def main() -> None:
         idle_tools_config=config.idle_tools,
         target_latency_s=config.llm.target_latency_s,
         min_tokens_per_path=config.llm.min_tokens_per_path,
+        session_summary_config=config.session_summary,
     )
 
     # Load voice-specific buddy art into the overlay

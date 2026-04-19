@@ -118,6 +118,7 @@ class ResearchRunner:
         fetch_url: Callable[[str], Any],
         *,
         log_callback: LogFn,
+        status_callback: Callable[[str], None] | None = None,
         max_queries: int = 3,
         max_fetches: int = 5,
         token_budget: int = 6000,
@@ -128,6 +129,7 @@ class ResearchRunner:
         self._llm = llm
         self._fetch = fetch_url
         self._log = log_callback
+        self._status = status_callback
         self._max_queries = max_queries
         self._max_fetches = max_fetches
         self._token_budget = token_budget
@@ -139,9 +141,18 @@ class ResearchRunner:
             for name, limit in _BACKEND_CONCURRENCY.items()
         }
 
+    def _set_status(self, label: str) -> None:
+        if self._status is None:
+            return
+        try:
+            self._status(label)
+        except Exception:
+            log.exception("research status_callback raised")
+
     async def run(self, question: str) -> ResearchSession:
         session = ResearchSession(question=question)
         self._log(f"? {question}")
+        self._set_status("researching: planning")
 
         try:
             session.queries = await self._plan(question, session)
@@ -161,12 +172,14 @@ class ResearchRunner:
             session.stopped_reason = ResearchStopReason.TOKEN_BUDGET
             return session
 
+        self._set_status("researching: searching")
         hits = await self._search_all(session.queries)
         if not hits:
             session.stopped_reason = ResearchStopReason.NO_SOURCES
             return session
 
         capped = hits[: self._max_fetches]
+        self._set_status(f"researching: reading 0/{len(capped)}")
         session.sources = await self._read_all(capped)
         for src in session.sources:
             self._log(f"  [{src.number}] {src.url}")
@@ -185,6 +198,7 @@ class ResearchRunner:
                 "will be thin", len(session.sources), _THIN_POOL_THRESHOLD,
             )
 
+        self._set_status("researching: synthesizing")
         try:
             result, raw_text, used = await self._synthesize(question, session.sources)
         except Exception:
@@ -193,6 +207,7 @@ class ResearchRunner:
             return session
 
         session.tokens_used += used
+        self._set_status("researching: validating")
         session.answer = self._finalize_answer(result, raw_text, session.sources)
         session.stopped_reason = ResearchStopReason.COMPLETE
         return session
@@ -321,10 +336,16 @@ class ResearchRunner:
         """Fan fetches out in parallel with bounded concurrency so one slow
         host can't stall the pipeline. Source numbers match hit order."""
         sem = asyncio.Semaphore(3)
+        total = len(hits)
+        done = 0
 
         async def _one(i: int, hit: SearchResult) -> Source | None:
+            nonlocal done
             async with sem:
-                return await self._read(i, hit)
+                src = await self._read(i, hit)
+            done += 1
+            self._set_status(f"researching: reading {done}/{total}")
+            return src
 
         results = await asyncio.gather(
             *(_one(i, h) for i, h in enumerate(hits, start=1))

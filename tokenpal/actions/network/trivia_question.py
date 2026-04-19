@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.network._base import consent_error, web_fetches_granted
-from tokenpal.actions.network._http import fetch_json, wrap_result
+from tokenpal.actions.network._http import fetch_json, scrub_body, wrap_result
 from tokenpal.actions.registry import register_action
 
 _TOKEN_URL = "https://opentdb.com/api_token.php?command=request"
@@ -122,4 +122,8 @@ class TriviaQuestionAction(AbstractAction):
         results = data.get("results") or []
         if not results:
             return ActionResult(output="No trivia question returned.", success=False)
-        return ActionResult(output=wrap_result(self.action_name, _format_question(results[0])))
+        body = _format_question(results[0])
+        return ActionResult(
+            output=wrap_result(self.action_name, body),
+            display_text=scrub_body(body),
+        )

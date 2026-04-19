@@ -222,6 +222,7 @@ async def test_joke_happy(monkeypatch: pytest.MonkeyPatch) -> None:
     result = await joke_of_the_day.JokeOfTheDayAction({}).execute()
     assert result.success
     assert "chicken" in result.output
+    assert result.display_text == "Why did the chicken..."
 
 
 async def test_joke_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,23 +238,33 @@ async def test_joke_consent_denied(deny_consent) -> None:  # type: ignore[no-unt
 
 # ---------- word_of_the_day ----------
 
-_WOTD_RSS = """<?xml version='1.0'?>
-<rss><channel>
-  <item>
-    <title>perspicacious</title>
-    <description>having a ready insight into things</description>
-  </item>
-</channel></rss>"""
+_WOTD_HTML = """
+<html><body>
+  <div id='wotd'>
+    <div class="content_column">
+      <h1><a href="/words/perspicacious">perspicacious</a></h1>
+      <div class="word-module module-definitions" id="define">
+        <ul>
+          <li><abbr title="partOfSpeech">adjective</abbr> Having a ready insight into things.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</body></html>
+"""
 
 
 async def test_wotd_happy(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_text(*_a: Any, **_k: Any) -> tuple[str, None]:
-        return _WOTD_RSS, None
+        return _WOTD_HTML, None
 
     monkeypatch.setattr(word_of_the_day, "fetch_text", fake_text)
     result = await word_of_the_day.WordOfTheDayAction({}).execute()
     assert result.success
     assert "perspicacious" in result.output
+    assert "adjective" in result.output
+    assert "ready insight" in result.output
+    assert result.display_text and "perspicacious" in result.display_text
 
 
 async def test_wotd_network_error(monkeypatch: pytest.MonkeyPatch) -> None:

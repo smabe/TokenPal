@@ -146,6 +146,16 @@ brave_api_key = ""  # or set TOKENPAL_BRAVE_KEY env var
 enabled = true
 retention_days = 30
 
+[session_summary]
+# Periodic LLM-generated handoff notes. Every interval_s, if the window had
+# any activity, the brain compresses recent observations into a terse 2-3
+# sentence note and writes it to memory.db. At startup, the most recent note
+# within max_lookback_h hours is surfaced to the buddy's first observation
+# prompt so it can reference what you were doing last session.
+enabled = true
+interval_s = 300      # 5min — cache-friendly + bounded data loss on crash
+max_lookback_h = 24   # don't surface notes older than this on boot
+
 [actions]
 enabled = true
 timer = true

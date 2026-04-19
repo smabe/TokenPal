@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.network._base import consent_error, web_fetches_granted
-from tokenpal.actions.network._http import fetch_json, wrap_result
+from tokenpal.actions.network._http import fetch_json, scrub_body, wrap_result
 from tokenpal.actions.registry import register_action
 
 _URL = "https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/{mm}/{dd}"
@@ -49,4 +49,8 @@ class OnThisDayAction(AbstractAction):
                 lines.append(f"{year}: {text}")
         if not lines:
             return ActionResult(output="Events had no usable text.", success=False)
-        return ActionResult(output=wrap_result(self.action_name, "\n".join(lines)))
+        body = "\n".join(lines)
+        return ActionResult(
+            output=wrap_result(self.action_name, body),
+            display_text=scrub_body(body),
+        )

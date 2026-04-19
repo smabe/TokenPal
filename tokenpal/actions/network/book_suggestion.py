@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.network._base import consent_error, web_fetches_granted
-from tokenpal.actions.network._http import fetch_json, wrap_result
+from tokenpal.actions.network._http import fetch_json, scrub_body, wrap_result
 from tokenpal.actions.registry import register_action
 
 _URL = (
@@ -67,4 +67,7 @@ class BookSuggestionAction(AbstractAction):
         if not formatted:
             return ActionResult(output="Books returned without usable metadata.", success=False)
         pick = random.choice(formatted)
-        return ActionResult(output=wrap_result(self.action_name, pick))
+        return ActionResult(
+            output=wrap_result(self.action_name, pick),
+            display_text=scrub_body(pick),
+        )

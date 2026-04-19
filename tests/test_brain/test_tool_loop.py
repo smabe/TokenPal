@@ -72,6 +72,7 @@ class _MockLLM(AbstractLLMBackend):
 def _make_brain(
     llm: _MockLLM,
     actions: list[AbstractAction] | None = None,
+    status_callback: Any = None,
 ) -> Brain:
     personality = PersonalityEngine(
         "You are a test bot. Say 'ok' or [SILENT]."
@@ -82,6 +83,7 @@ def _make_brain(
         ui_callback=MagicMock(),
         personality=personality,
         actions=actions,
+        status_callback=status_callback,
     )
 
 
@@ -266,6 +268,33 @@ async def test_no_target_latency_means_no_kwarg_forwarded():
     brain = _make_brain(llm, actions=[_StubAction()])
     await brain._generate_with_tools("test")
     assert llm.calls[0].get("target_latency_s") is None
+
+
+async def test_tool_call_surfaces_to_status_bar():
+    """During tool execution the status bar should say 'using <tool>...'
+    and stay visible through the follow-up LLM round — a fast gather
+    would otherwise be overwritten before the UI can render it."""
+    tool_response = LLMResponse(
+        text="",
+        tokens_used=10,
+        model_name="mock",
+        latency_ms=5.0,
+        tool_calls=[
+            ToolCall(id="c1", name="stub", arguments={}),
+            ToolCall(id="c2", name="stub", arguments={}),
+        ],
+    )
+    final = LLMResponse(text="done", tokens_used=5, model_name="mock", latency_ms=1.0)
+    llm = _MockLLM([tool_response, final])
+    statuses: list[str] = []
+    brain = _make_brain(
+        llm, actions=[_StubAction()], status_callback=statuses.append,
+    )
+
+    await brain._generate_with_tools("test")
+
+    # Tool label was set and nothing overwrote it inside the loop.
+    assert statuses == ["using stub, stub..."]
 
 
 async def test_assistant_message_has_tool_calls_json():

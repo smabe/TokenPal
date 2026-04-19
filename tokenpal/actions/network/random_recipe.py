@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.network._base import consent_error, web_fetches_granted
-from tokenpal.actions.network._http import fetch_json, wrap_result
+from tokenpal.actions.network._http import fetch_json, scrub_body, wrap_result
 from tokenpal.actions.registry import register_action
 
 _RANDOM_URL = "https://www.themealdb.com/api/json/v1/1/random.php"
@@ -80,4 +80,8 @@ class RandomRecipeAction(AbstractAction):
                 return ActionResult(output="No random meal returned.", success=False)
             meal = meals[0]
 
-        return ActionResult(output=wrap_result(self.action_name, _format_meal(meal)))
+        body = _format_meal(meal)
+        return ActionResult(
+            output=wrap_result(self.action_name, body),
+            display_text=scrub_body(body),
+        )

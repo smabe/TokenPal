@@ -86,6 +86,7 @@ class AgentRunner:
         log_callback: LogFn,
         confirm_callback: ConfirmFn,
         is_sensitive: SensitiveFn,
+        status_callback: Callable[[str], None] | None = None,
         tool_specs: list[dict[str, Any]] | None = None,
         max_steps: int = 8,
         token_budget: int = 12000,
@@ -98,6 +99,7 @@ class AgentRunner:
         self._log = log_callback
         self._confirm = confirm_callback
         self._is_sensitive = is_sensitive
+        self._status = status_callback
         self._tool_specs = (
             tool_specs
             if tool_specs is not None
@@ -160,6 +162,11 @@ class AgentRunner:
             denied = False
             for i, tc in enumerate(response.tool_calls):
                 normalized = _normalize_tool_call(tc, i)
+                if self._status is not None:
+                    try:
+                        self._status(f"using {normalized.name}...")
+                    except Exception:
+                        log.exception("agent status_callback raised")
                 step_record = await self._execute_one(normalized)
                 session.steps.append(step_record)
                 messages.append({
@@ -174,6 +181,10 @@ class AgentRunner:
                 session.stopped_reason = AgentStopReason.DENIED
                 session.final_text = await self._force_synthesis(messages)
                 return session
+            # "using <tool>..." intentionally persists through the follow-up
+            # LLM step; a fast gather would otherwise be overwritten before
+            # the UI can render it. Next iteration resets it when the model
+            # picks a new tool or the run completes.
 
         session.stopped_reason = AgentStopReason.STEP_CAP
         log.info("Agent hit step cap (%d)", self._max_steps)

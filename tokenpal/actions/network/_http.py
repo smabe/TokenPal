@@ -118,11 +118,15 @@ def _scrub_line(line: str) -> str:
     return _SENSITIVE_PLACEHOLDER if contains_sensitive_term(line) else line
 
 
-def wrap_result(tool_name: str, body: str) -> str:
-    """Wrap ``body`` in a ``<tool_result>`` envelope after sensitive-term scrubbing.
-
-    The scrub is line-wise so one bad token doesn't nuke the whole response.
-    """
+def scrub_body(body: str) -> str:
+    """Line-wise sensitive-term scrub. One bad token shouldn't nuke the
+    whole response, so we filter per-line. Used by ``wrap_result`` (LLM
+    path) and by ``ActionResult.display_text`` (chat-log path) so a
+    third-party API can't bleed sensitive-app names into either sink."""
     safe_lines = [_scrub_line(line) for line in body.splitlines() or [body]]
-    filtered = "\n".join(safe_lines)
-    return f'<tool_result tool="{tool_name}">\n{filtered}\n</tool_result>'
+    return "\n".join(safe_lines)
+
+
+def wrap_result(tool_name: str, body: str) -> str:
+    """Wrap ``body`` in a ``<tool_result>`` envelope after sensitive-term scrubbing."""
+    return f'<tool_result tool="{tool_name}">\n{scrub_body(body)}\n</tool_result>'

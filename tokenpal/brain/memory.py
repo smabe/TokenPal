@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,38 @@ CREATE TABLE IF NOT EXISTS llm_throughput_estimators (
 LLM_ESTIMATOR_SCHEMA_VERSION = 1
 
 
+# PRAGMA user_version based migrations. _SCHEMA above stays frozen as the
+# legacy "always idempotent" base; new tables land via migrations. Each entry
+# in _MIGRATIONS takes the db from version (index) to version (index + 1).
+# Bump CURRENT_SCHEMA_VERSION and append a migration when adding a new table
+# or altering an existing one.
+
+
+def _migration_1_session_summaries(conn: sqlite3.Connection) -> None:
+    """v0 -> v1: add session_summaries for the session-handoff feature."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS session_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            session_id TEXT NOT NULL,
+            window_start REAL NOT NULL,
+            window_end REAL NOT NULL,
+            summary TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_session_summaries_time
+            ON session_summaries(timestamp);
+        """
+    )
+
+
+_MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
+    _migration_1_session_summaries,
+]
+
+CURRENT_SCHEMA_VERSION = len(_MIGRATIONS)
+
+
 class MemoryStore:
     """Persists observations to SQLite for cross-session memory."""
 
@@ -143,6 +176,7 @@ class MemoryStore:
         self._conn = self._connect()
         with self._lock:
             self._conn.executescript(_SCHEMA)
+            self._apply_migrations(self._conn)
 
         self._prune()
         self.aggregate_daily_summaries()
@@ -163,6 +197,25 @@ class MemoryStore:
         conn = sqlite3.connect(str(self._db_path), check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         return conn
+
+    @staticmethod
+    def _apply_migrations(conn: sqlite3.Connection) -> None:
+        """Run any pending migrations against conn, bumping user_version."""
+        row = conn.execute("PRAGMA user_version").fetchone()
+        current = int(row[0]) if row else 0
+        if current >= CURRENT_SCHEMA_VERSION:
+            return
+        for idx in range(current, CURRENT_SCHEMA_VERSION):
+            migration = _MIGRATIONS[idx]
+            log.info(
+                "Applying memory.db migration %d -> %d (%s)",
+                idx,
+                idx + 1,
+                migration.__name__,
+            )
+            migration(conn)
+            conn.execute(f"PRAGMA user_version = {idx + 1}")
+        conn.commit()
 
     # ------------------------------------------------------------------
     # Recording
@@ -189,6 +242,120 @@ class MemoryStore:
 
     def record_session_start(self) -> None:
         self.record_observation("system", "session_start", "Session started")
+
+    # ------------------------------------------------------------------
+    # Session summaries — see plans/buddy-utility-wedges.md
+    # ------------------------------------------------------------------
+
+    def record_summary(
+        self, summary: str, window_start: float, window_end: float
+    ) -> None:
+        """Insert a periodic session summary row."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO session_summaries "
+                "(timestamp, session_id, window_start, window_end, summary) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (time.time(), self._session_id, window_start, window_end, summary),
+            )
+            self._conn.commit()
+
+    def get_latest_summary(
+        self, max_lookback_s: float
+    ) -> tuple[float, str] | None:
+        """Return (timestamp, summary) of the most recent summary within
+        max_lookback_s seconds, or None.
+        """
+        if not self._enabled or not self._conn:
+            return None
+        cutoff = time.time() - max_lookback_s
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT timestamp, summary FROM session_summaries "
+                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 1",
+                (cutoff,),
+            ).fetchone()
+        if row is None:
+            return None
+        return float(row[0]), str(row[1])
+
+    def get_recent_summaries(
+        self, since_ts: float, limit: int = 5
+    ) -> list[tuple[float, str]]:
+        """Return [(timestamp, summary)] newer than since_ts, newest first."""
+        if not self._enabled or not self._conn:
+            return []
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT timestamp, summary FROM session_summaries "
+                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT ?",
+                (since_ts, limit),
+            ).fetchall()
+        return [(float(r[0]), str(r[1])) for r in rows]
+
+    def count_observations_in_window(
+        self, window_start: float, window_end: float
+    ) -> int:
+        """How many observations landed in [window_start, window_end)?
+
+        Used as the skip-if-idle guard for the session summarizer — zero
+        means the window was pure-idle and shouldn't be summarized.
+        """
+        if not self._enabled or not self._conn:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM observations "
+                "WHERE timestamp >= ? AND timestamp < ?",
+                (window_start, window_end),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_window_digest(
+        self,
+        window_start: float,
+        window_end: float,
+        max_apps: int = 5,
+        max_events: int = 20,
+    ) -> dict[str, Any]:
+        """Compact representation of activity in [window_start, window_end).
+
+        Returns a dict with top apps by visit count, per-sense event counts,
+        and up to max_events individual event summaries ordered by time.
+        Fed to the session summarizer's LLM prompt — keeps the prompt size
+        bounded regardless of how busy the window was.
+        """
+        if not self._enabled or not self._conn:
+            return {"apps": [], "sense_counts": {}, "events": []}
+        with self._lock:
+            app_rows = self._conn.execute(
+                "SELECT summary, COUNT(*) FROM observations "
+                "WHERE event_type = 'app_switch' "
+                "AND timestamp >= ? AND timestamp < ? "
+                "GROUP BY summary ORDER BY COUNT(*) DESC LIMIT ?",
+                (window_start, window_end, max_apps),
+            ).fetchall()
+            sense_rows = self._conn.execute(
+                "SELECT sense_name, COUNT(*) FROM observations "
+                "WHERE timestamp >= ? AND timestamp < ? "
+                "GROUP BY sense_name",
+                (window_start, window_end),
+            ).fetchall()
+            event_rows = self._conn.execute(
+                "SELECT timestamp, sense_name, event_type, summary FROM observations "
+                "WHERE timestamp >= ? AND timestamp < ? "
+                "ORDER BY timestamp ASC LIMIT ?",
+                (window_start, window_end, max_events),
+            ).fetchall()
+        return {
+            "apps": [(str(r[0]), int(r[1])) for r in app_rows],
+            "sense_counts": {str(r[0]): int(r[1]) for r in sense_rows},
+            "events": [
+                (float(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in event_rows
+            ],
+        }
 
     # ------------------------------------------------------------------
     # LLM throughput estimator persistence — see plans/gpu-scaling.md

@@ -306,6 +306,41 @@ async def test_runner_search_timeout_survives_gather(
 
 
 @pytest.mark.asyncio
+async def test_status_callback_fires_at_each_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Runner should push a status label at planning, searching, reading,
+    synthesizing, and validating so the overlay can show progress."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=10),
+        _ok("Answer [1].", tokens=30),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda q, backend="duckduckgo", limit=5, **_: [
+            _hit("https://example.com", "T", "snip", "duckduckgo")
+        ],
+    )
+    statuses: list[str] = []
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        status_callback=statuses.append,
+    )
+    session = await runner.run("q")
+
+    assert session.stopped_reason == ResearchStopReason.COMPLETE
+    assert "researching: planning" in statuses
+    assert "researching: searching" in statuses
+    assert any(s.startswith("researching: reading ") for s in statuses)
+    assert "researching: synthesizing" in statuses
+    assert "researching: validating" in statuses
+
+
+@pytest.mark.asyncio
 async def test_fetch_replaces_snippet_with_article_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

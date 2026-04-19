@@ -6,7 +6,7 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.network._base import consent_error, web_fetches_granted
-from tokenpal.actions.network._http import fetch_json, wrap_result
+from tokenpal.actions.network._http import fetch_json, scrub_body, wrap_result
 from tokenpal.actions.registry import register_action
 
 _URL = "https://uselessfacts.jsph.pl/api/v2/facts/random?language=en"
@@ -30,4 +30,7 @@ class RandomFactAction(AbstractAction):
         text = str(data.get("text") or "").strip()
         if not text:
             return ActionResult(output="No fact returned.", success=False)
-        return ActionResult(output=wrap_result(self.action_name, text))
+        return ActionResult(
+            output=wrap_result(self.action_name, text),
+            display_text=scrub_body(text),
+        )

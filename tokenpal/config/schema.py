@@ -276,6 +276,17 @@ class ConversationConfig:
 
 
 @dataclass
+class SessionSummaryConfig:
+    # Periodic LLM-generated handoff notes. Writes every interval_s seconds
+    # when the window has any activity (skip-if-idle), read back at startup
+    # so the buddy can reference last session's work. See
+    # plans/buddy-utility-wedges.md.
+    enabled: bool = True
+    interval_s: int = 300
+    max_lookback_h: int = 24
+
+
+@dataclass
 class TokenPalConfig:
     senses: SensesConfig = field(default_factory=SensesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -296,3 +307,4 @@ class TokenPalConfig:
     network_state: NetworkStateConfig = field(default_factory=NetworkStateConfig)
     filesystem_pulse: FilesystemPulseConfig = field(default_factory=FilesystemPulseConfig)
     idle_tools: IdleToolsConfig = field(default_factory=IdleToolsConfig)
+    session_summary: SessionSummaryConfig = field(default_factory=SessionSummaryConfig)

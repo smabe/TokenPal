@@ -27,6 +27,7 @@ from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
+from tokenpal.brain.session_summarizer import SessionSummarizer
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
@@ -35,6 +36,7 @@ from tokenpal.config.schema import (
     IdleToolsConfig,
     MinTokensPerPathConfig,
     ResearchConfig,
+    SessionSummaryConfig,
     TargetLatencyConfig,
 )
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
@@ -207,6 +209,7 @@ class Brain:
         idle_tools_config: IdleToolsConfig | None = None,
         target_latency_s: TargetLatencyConfig | None = None,
         min_tokens_per_path: MinTokensPerPathConfig | None = None,
+        session_summary_config: SessionSummaryConfig | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -298,6 +301,15 @@ class Brain:
             min_tokens_per_path or MinTokensPerPathConfig()
         )
 
+        # Session handoff — periodic summarizer + the last note we loaded
+        # at startup. See plans/buddy-utility-wedges.md.
+        self._session_summary_config: SessionSummaryConfig = (
+            session_summary_config or SessionSummaryConfig()
+        )
+        self._previous_session_note: str | None = None
+        self._session_summarizer: SessionSummarizer | None = None
+        self._session_summary_task: asyncio.Task[None] | None = None
+
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
         self._running = True
@@ -330,7 +342,52 @@ class Brain:
         if self._idle_tools_config.enabled:
             asyncio.create_task(self._idle_tools.warm_daily_cache())
 
+        # Session handoff: read last summary (if any) + spawn the periodic
+        # summarizer task. Summaries never emit bubbles; they just write to
+        # memory.db so the next session can reference them.
+        self._load_previous_session_note()
+        self._start_session_summarizer()
+
         await self._run_loop()
+
+    def _load_previous_session_note(self) -> None:
+        """Pull the most recent session summary within the lookback window."""
+        if (
+            self._memory is None
+            or not self._memory.enabled
+            or not self._session_summary_config.enabled
+        ):
+            return
+        try:
+            lookback_s = self._session_summary_config.max_lookback_h * 3600
+            row = self._memory.get_latest_summary(lookback_s)
+        except Exception:
+            log.debug("get_latest_summary failed", exc_info=True)
+            return
+        if row is None:
+            return
+        _ts, text = row
+        self._previous_session_note = text
+        log.info("Loaded previous session handoff note (%d chars)", len(text))
+
+    def _start_session_summarizer(self) -> None:
+        """Spawn the periodic summarizer task; no-op if disabled."""
+        if (
+            self._memory is None
+            or not self._memory.enabled
+            or not self._session_summary_config.enabled
+        ):
+            return
+        self._session_summarizer = SessionSummarizer(
+            memory=self._memory,
+            llm=self._llm,
+            interval_s=self._session_summary_config.interval_s,
+            target_latency_s=self._budgets.observation,
+            min_tokens=self._min_tokens.observation,
+        )
+        self._session_summary_task = asyncio.create_task(
+            self._session_summarizer.run_forever()
+        )
 
     def _compute_first_session_of_day(self) -> bool:
         """True when no prior session_start landed in today's memory.db."""
@@ -1012,7 +1069,10 @@ class Brain:
         if memory_lines:
             log.debug("Memory: %s", " | ".join(memory_lines))
         prompt = self._personality.build_prompt(
-            snapshot, memory_lines=memory_lines, callback_lines=callback_lines,
+            snapshot,
+            memory_lines=memory_lines,
+            callback_lines=callback_lines,
+            previous_session=self._previous_session_note,
         )
 
         try:
@@ -1149,9 +1209,16 @@ class Brain:
 
             messages.append(response.to_assistant_message())
 
+            if self._status_callback:
+                names = ", ".join(tc.name for tc in response.tool_calls)
+                self._status_callback(f"using {names}...")
+
             results = await asyncio.gather(
                 *(self._execute_tool_call(tc) for tc in response.tool_calls),
             )
+            # Leave "using X..." visible through the follow-up LLM round so a
+            # fast gather isn't overwritten before the UI can render it. The
+            # caller clears status via _push_status once the full reply lands.
             for tc, result_text in zip(response.tool_calls, results):
                 if log.isEnabledFor(logging.DEBUG):
                     log.debug("Tool round %d result [%s]: %.200s", _round, tc.name, result_text)
@@ -1224,6 +1291,8 @@ class Brain:
                     "Action '%s'(%s) -> %.200s",
                     tc.name, fmt_args(tc.arguments), result.output,
                 )
+            if result.display_text and self._log_callback:
+                self._log_callback(result.display_text)
             if result.display_url and self._log_callback:
                 self._log_callback("Source:", url=result.display_url)
             if result.display_urls and self._log_callback:
@@ -1285,6 +1354,7 @@ class Brain:
             log_callback=self._agent.log_callback,
             confirm_callback=self._agent.confirm_callback,
             is_sensitive=self._sensitive_check,
+            status_callback=self._status_callback,
             max_steps=self._agent.config.max_steps,
             token_budget=self._agent.config.token_budget,
             per_step_timeout_s=self._agent.config.per_step_timeout_s,
@@ -1392,6 +1462,7 @@ class Brain:
             llm=self._llm,
             fetch_url=_fetch,
             log_callback=log_cb,
+            status_callback=self._status_callback,
             max_queries=self._research.config.max_queries,
             max_fetches=self._research.config.max_fetches,
             token_budget=self._research.config.token_budget,

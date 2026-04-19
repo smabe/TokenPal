@@ -305,6 +305,8 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." — boring.
 
 {session_notes}
 
+{previous_session_block}
+
 {memory_block}
 
 {callbacks_block}
@@ -374,6 +376,8 @@ Rules:
 {mood_line}
 
 {session_notes}
+
+{previous_session_block}
 
 {memory_block}
 
@@ -692,6 +696,7 @@ class PersonalityEngine:
         context_snapshot: str,
         memory_lines: list[str] | None = None,
         callback_lines: list[str] | None = None,
+        previous_session: str | None = None,
     ) -> str:
         """Combine persona + rotating examples + context into a full LLM prompt."""
         mood_line = self._mood_line()
@@ -717,12 +722,18 @@ class PersonalityEngine:
         else:
             cb_block = ""
 
+        if previous_session:
+            prev_block = f"Last session handoff: {previous_session}"
+        else:
+            prev_block = ""
+
         running_bits = self._running_bits_block()
 
         if self.is_finetuned:
             return _FINETUNED_OBSERVE_TEMPLATE.format(
                 mood_line=mood_line,
                 session_notes=session_notes,
+                previous_session_block=prev_block,
                 memory_block=mem_block,
                 callbacks_block=cb_block,
                 running_bits_block=running_bits,
@@ -737,6 +748,7 @@ class PersonalityEngine:
             examples=self._sample_examples(),
             context=context_snapshot,
             session_notes=session_notes,
+            previous_session_block=prev_block,
             memory_block=mem_block,
             callbacks_block=cb_block,
             running_bits_block=running_bits,
