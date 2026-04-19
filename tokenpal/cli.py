@@ -157,6 +157,45 @@ def _check_actions(config: object) -> None:
         print(f"  {_WARN} No actions enabled")
 
 
+def _check_utility_wedges(config: object) -> None:
+    """Report on the session handoff / intent / EOD / rage / git-nudge
+    features. Informational only; none of these raise validation problems.
+    See plans/shipped/buddy-utility-wedges.md.
+    """
+    summary = getattr(config, "session_summary", None)
+    if summary and getattr(summary, "enabled", False):
+        print(
+            f"  {_CHECK} Session handoff on "
+            f"(every {summary.interval_s}s, {summary.max_lookback_h}h lookback)"
+        )
+    else:
+        print(f"  {_WARN} Session handoff off")
+
+    intent = getattr(config, "intent", None)
+    if intent:
+        drift_min = int(getattr(intent, "drift_min_dwell_s", 0))
+        print(
+            f"  {_CHECK} /intent drift detection "
+            f"({drift_min}s dwell, "
+            f"{len(getattr(intent, 'distraction_apps', []))} distraction apps)"
+        )
+
+    print(f"  {_CHECK} EOD summary available via /summary")
+
+    rage = getattr(config, "rage_detect", None)
+    if rage and getattr(rage, "enabled", False):
+        print(f"  {_CHECK} Rage detect on")
+    else:
+        print(f"  {_WARN} Rage detect off (opt-in)")
+
+    git_nudge = getattr(config, "git_nudge", None)
+    if git_nudge and getattr(git_nudge, "enabled", False):
+        stale_h = getattr(git_nudge, "wip_stale_hours", 0)
+        print(f"  {_CHECK} Proactive git nudge on (>{stale_h}h WIP)")
+    else:
+        print(f"  {_WARN} Proactive git nudge off")
+
+
 def _print_summary(problems: int) -> None:
     """Print pass/fail summary."""
     print()
@@ -239,6 +278,9 @@ async def _validate(config_path: Path | None) -> int:
     # 6. Senses + actions
     problems += _check_senses(config)
     _check_actions(config)
+
+    # 6b. Utility wedges (session handoff, intent, EOD, rage, git nudge)
+    _check_utility_wedges(config)
 
     # 7. macOS Accessibility reminder
     if plat == "Darwin":
