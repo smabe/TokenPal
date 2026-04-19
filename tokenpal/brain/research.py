@@ -346,6 +346,9 @@ class ResearchRunner:
         name = (planned or "").strip().lower()
         if not name:
             return self._default_backend()
+        # The planner prompt uses "ddg" as shorthand; accept it.
+        if name == "ddg":
+            name = "duckduckgo"
         if name == "tavily" and not self._cloud_search_active:
             return "duckduckgo"
         if name not in _BACKEND_CONCURRENCY:
@@ -1121,7 +1124,8 @@ The current year is {current_year}.
 
 Rules:
 - Output ONLY a JSON array. No prose, no markdown fences.
-- Each item is an object with "query" (search string) and "intent" (what you hope to learn).
+- Each item is an object with "query" (search string), "intent" (what you hope to
+  learn), and OPTIONALLY "backend" (which source to search).
 - For a single-hop factual lookup, emit ONE query. Do NOT inflate into sub-questions.
 - For a multi-hop question (comparisons, causes, timelines), emit 2-4 queries
   targeting distinct sub-topics.
@@ -1129,6 +1133,21 @@ Rules:
   current state of anything), append "{current_year}" to your queries so search
   results favor recent sources over outdated ones.
 - Never exceed {max_queries} queries.
+
+Backend routing (the "backend" field is optional; omit for default):
+- "stackexchange" — programming/code/API/error-message questions (answers live on
+  Stack Overflow). Use for: "how do I X in language Y", "why does Z throw W",
+  "best practice for X in language Y".
+- "hn" — tech news, Show HN / Ask HN discussions, startup launches, industry
+  events, developer tooling announcements. Use for: "what is everyone saying
+  about X", "show HN Y", "latest on framework Z".
+- "tavily" — product comparisons, reviews, buying advice, "best X for Y"
+  questions (premium extraction, higher-quality than general web). Use for:
+  "best laptop for Z", "X vs Y review", "recommended X".
+- "brave" — alternative to the default web index; use when you want a second
+  general-web opinion alongside the default.
+- Omit (or "ddg") — anything else: general knowledge, history, explainers,
+  cross-domain synthesis.
 
 Examples
 
@@ -1146,6 +1165,30 @@ Question: Compare Rust and Go for backend services
   {{"query": "Rust vs Go backend performance benchmarks {current_year}", "intent": "runtime tradeoffs"}},
   {{"query": "Rust vs Go ecosystem maturity {current_year}", "intent": "libraries and tooling"}},
   {{"query": "Rust vs Go hiring market {current_year}", "intent": "practical adoption"}}
+]
+
+Question: How do I parse a multipart form in Python?
+[
+  {{"query": "python parse multipart form upload",
+    "intent": "canonical parsing approach",
+    "backend": "stackexchange"}}
+]
+
+Question: What's the community reaction to the new Zed editor release?
+[
+  {{"query": "Zed editor release {current_year}",
+    "intent": "HN discussion and launch posts",
+    "backend": "hn"}}
+]
+
+Question: Best mechanical keyboard for programming in {current_year}
+[
+  {{"query": "best mechanical keyboard programming {current_year} review",
+    "intent": "top picks with reasoning",
+    "backend": "tavily"}},
+  {{"query": "mechanical keyboard switch comparison {current_year}",
+    "intent": "tactile vs linear vs clicky",
+    "backend": "tavily"}}
 ]
 
 Question: {question}
