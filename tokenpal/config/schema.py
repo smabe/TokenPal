@@ -335,6 +335,21 @@ class IntentConfig:
 
 
 @dataclass
+class CloudLLMConfig:
+    # Opt-in cloud inference for the /research synth stage ONLY. Never used
+    # for observations, conversation, planner, or idle-tool rolls — those
+    # stay local for privacy. Managed via the /cloud slash command; the API
+    # key lives at ~/.tokenpal/.secrets.json (0o600), not here.
+    enabled: bool = False
+    provider: Literal["anthropic"] = "anthropic"
+    model: str = "claude-haiku-4-5"
+    timeout_s: float = 30.0
+    # Per-call-site toggle. Currently only research synth is wired to use
+    # the cloud path; more sites (if any) would get their own flag here.
+    research_synth: bool = True
+
+
+@dataclass
 class SessionSummaryConfig:
     # Periodic LLM-generated handoff notes. Writes every interval_s seconds
     # when the window has any activity (skip-if-idle), read back at startup
@@ -370,3 +385,4 @@ class TokenPalConfig:
     intent: IntentConfig = field(default_factory=IntentConfig)
     rage_detect: RageDetectConfig = field(default_factory=RageDetectConfig)
     git_nudge: GitNudgeConfig = field(default_factory=GitNudgeConfig)
+    cloud_llm: CloudLLMConfig = field(default_factory=CloudLLMConfig)

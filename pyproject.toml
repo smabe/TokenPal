@@ -20,6 +20,7 @@ dependencies = [
     "trafilatura>=2.0",
     "readability-lxml>=0.8.1",
     "newspaper4k>=0.9",
+    "anthropic>=0.45",
 ]
 
 [project.optional-dependencies]
