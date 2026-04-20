@@ -61,9 +61,11 @@ def _good_json_payload() -> str:
             "outfit": "#3da8e8",
             "accent": "#ffd700",
             "shadow": "#2a6fa5",
+            "highlight": "#66ccff",
         },
         "eye": "●",
         "mouth": "▽",
+        "zones": {"headwear": "none"},
     })
 
 
