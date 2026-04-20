@@ -16,6 +16,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 - Platform installers: `bash scripts/install-macos.sh`, `powershell scripts/install-windows.ps1`, `bash scripts/install-linux.sh` — standalone fresh-machine setup with interactive client/server/both prompt and VRAM-based model recommendation
 - `python3 setup_tokenpal.py` — lightweight setup for when Python is already installed. `--client` for remote GPU, `--local` for full local
 - `tokenpal` — run the buddy (first-run wizard on fresh install)
+- `./run.sh` (macOS/Linux), `.\run.ps1` (Windows) — day-to-day launchers at the **repo root** (NOT `scripts/`). Activate venv, auto-sync deps via `pip install -e .[<extras>]` when `pyproject.toml` is newer than `.venv/.tokenpal-deps-synced`, then exec tokenpal with passed args. Force resync: `TOKENPAL_FORCE_SYNC=1`. `scripts/` holds one-shot installers + utilities, never runtime wrappers -- edit `run.sh`/`run.ps1` in place when touching launch behavior
 - `tokenpal --check` — quick verify: inference engine, model, senses, actions
 - `tokenpal --validate` — full preflight: Python version, platform deps, git, inference engine, model, config, senses, macOS permissions
 - `tokenpal --verbose` — show debug logs in terminal
