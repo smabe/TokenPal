@@ -949,7 +949,10 @@ class TokenPalApp(App[None]):
         ts_label: str,
     ) -> str:
         safe = text if markup else _esc_markup(text)
-        line = f"──────────────────────\n\\[{ts_label}]\n{_esc_markup(name)}: {safe}"
+        line = (
+            f"──────────────────────\n\\[{ts_label}]\n"
+            f"[#4ade80]{_esc_markup(name)}:[/#4ade80] [#ffffff]{safe}[/#ffffff]"
+        )
         if url:
             idx = len(self._link_urls)
             self._link_urls.append(url)

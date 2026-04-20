@@ -30,7 +30,7 @@ from tokenpal.senses.web_search.client import (
 
 log = logging.getLogger(__name__)
 
-LogFn = Callable[[str], None]
+LogFn = Callable[..., None]
 FetchFn = Callable[[str], "asyncio.Future[str | None]"] | Callable[[str], Any]
 
 
@@ -295,7 +295,7 @@ class ResearchRunner:
         self._set_status(f"researching: reading 0/{len(capped)}")
         session.sources = await self._read_all(capped)
         for src in session.sources:
-            self._log(f"  [{src.number}] {src.url}")
+            self._log(f"  [{src.number}] {src.url}", url=src.url)
 
         if not session.sources:
             session.stopped_reason = ResearchStopReason.NO_SOURCES
@@ -801,7 +801,7 @@ class ResearchRunner:
         result, sources = _parse_synth_json_deep(raw_text)
         session.sources = sources
         for src in session.sources:
-            self._log(f"  [{src.number}] {src.url}")
+            self._log(f"  [{src.number}] {src.url}", url=src.url)
 
         session.answer = self._finalize_answer_deep(result, raw_text, sources)
         session.stopped_reason = ResearchStopReason.COMPLETE

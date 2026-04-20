@@ -110,9 +110,11 @@ class ResearchAction(AbstractAction):
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
-            log_callback=lambda s: log.info(
-                "research%s: %s",
-                f" ({cloud_mode})" if cloud_mode else "", s,
+            log_callback=lambda s, *, url=None: log.info(
+                "research%s: %s%s",
+                f" ({cloud_mode})" if cloud_mode else "",
+                s,
+                f" ({url})" if url else "",
             ),
             max_queries=cfg.max_queries,
             max_fetches=cfg.max_fetches,

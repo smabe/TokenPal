@@ -1817,7 +1817,7 @@ class Brain:
     async def _handle_research(self, question: str) -> ResearchSession:
         """Run one /research pipeline. Log callback routes to chat log via
         the agent log sink (same stream — trace lines, not speech bubbles)."""
-        log_cb = self._agent.log_callback or (lambda _s: None)
+        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
 
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
@@ -1964,7 +1964,7 @@ class Brain:
         (refine is explicitly a cloud-powered deeper look). Falls back with
         a clear error if no recent research is available or cloud isn't
         configured."""
-        log_cb = self._agent.log_callback or (lambda _s: None)
+        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
 
         if self._memory is None or not self._memory.enabled:
             self._ui_callback(

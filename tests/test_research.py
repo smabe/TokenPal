@@ -72,7 +72,11 @@ async def _noop_fetch(_url: str) -> str | None:
 
 def _logs() -> tuple[list[str], Any]:
     buf: list[str] = []
-    return buf, buf.append
+
+    def _cb(msg: str, *, url: str | None = None) -> None:
+        buf.append(f"{msg} <{url}>" if url else msg)
+
+    return buf, _cb
 
 
 # ---------------------------------------------------------------------------

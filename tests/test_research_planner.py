@@ -144,7 +144,7 @@ def _runner(*, cloud_search_enabled: bool = False, tavily_key: str = "") -> Rese
     return ResearchRunner(
         llm=_ScriptedLLM([]),
         fetch_url=_noop_fetch,
-        log_callback=lambda _: None,
+        log_callback=lambda _s, **_kw: None,
         cloud_search=CloudSearchConfig(enabled=cloud_search_enabled),
         tavily_api_key=tavily_key,
     )
@@ -232,7 +232,7 @@ async def test_runner_emits_end_of_run_telemetry(
     runner = ResearchRunner(
         llm=llm,
         fetch_url=_noop_fetch,
-        log_callback=logs.append,
+        log_callback=lambda msg, **_kw: logs.append(msg),
         max_queries=2,
         max_fetches=3,
     )
@@ -258,7 +258,7 @@ async def test_runner_telemetry_fires_on_no_queries() -> None:
     llm = _ScriptedLLM([_ok("")])
     logs: list[str] = []
     runner = ResearchRunner(
-        llm=llm, fetch_url=_noop_fetch, log_callback=logs.append,
+        llm=llm, fetch_url=_noop_fetch, log_callback=lambda msg, **_kw: logs.append(msg),
         max_queries=2,
     )
     await runner.run("?")
@@ -300,7 +300,7 @@ async def test_runner_preserves_backend_routing_through_plan_stage(
     runner = ResearchRunner(
         llm=llm,
         fetch_url=_noop_fetch,
-        log_callback=lambda _: None,
+        log_callback=lambda _s, **_kw: None,
         max_queries=3,
         max_fetches=3,
     )
@@ -336,7 +336,7 @@ async def test_telemetry_includes_tried_field_even_on_no_sources(
 
     logs: list[str] = []
     runner = ResearchRunner(
-        llm=llm, fetch_url=_noop_fetch, log_callback=logs.append,
+        llm=llm, fetch_url=_noop_fetch, log_callback=lambda msg, **_kw: logs.append(msg),
         max_queries=1,
     )
     await runner.run("?")
