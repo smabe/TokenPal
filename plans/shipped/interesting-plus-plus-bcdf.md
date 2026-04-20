@@ -67,4 +67,6 @@ One commit per phase. Parking lot stays available for "ooh shiny" thoughts acros
 - Overall: can ship any single phase independently without breaking prior phases. Each commit is revertable in isolation.
 
 ## Parking lot
-(empty at start)
+- **Phase C extension: git commit enrichment** — deferred because it needs new subprocess wiring (repo root, commit counting) separate from the git sense. Would land as `_enrich_git` in observation_enricher.py alongside the existing handlers. Prerequisite: decide whether to reuse the git sense's own subprocess path or add a dedicated helper.
+- **Phase C extension: new-domain enrichment** — deferred because it needs a new web-lookup path distinct from AppEnricher (app-vs-domain lookup queries are different enough to warrant separation). Adds a privacy surface (new domain names hitting the network) so should ride its own consent UX review.
+- **C shipped with 2 handlers (app_awareness + process_heat), not 3** — the extensible architecture was the load-bearing deliverable and it's in place. Extending to the two deferred senses is a one-file-plus-tests add each.
