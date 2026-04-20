@@ -24,7 +24,13 @@ from typing import Any
 
 @dataclass(frozen=True)
 class IdleToolContext:
-    """Snapshot passed to each rule's predicate."""
+    """Snapshot passed to each rule's predicate.
+
+    Personalization signals (daily_streak_days, install_age_days,
+    pattern_callbacks) are populated by `Brain._build_idle_context`
+    from the MemoryStore. They default to empty so predicates-under-test
+    can omit them without boilerplate.
+    """
 
     now: datetime
     session_minutes: int
@@ -34,6 +40,9 @@ class IdleToolContext:
     weather_summary: str
     time_since_last_comment_s: float
     consent_web_fetches: bool
+    daily_streak_days: int = 0
+    install_age_days: int = 0
+    pattern_callbacks: tuple[str, ...] = ()
 
     @property
     def hour(self) -> int:
@@ -200,6 +209,46 @@ def _productivity_streak(ctx: IdleToolContext) -> bool:
         return False
     summary = getattr(reading, "summary", "")
     return isinstance(summary, str) and "focus streak" in summary.lower()
+
+
+_ANNIVERSARY_MILESTONES: frozenset[int] = frozenset({7, 30, 90, 180, 365})
+
+
+def _daily_streak_active(ctx: IdleToolContext) -> bool:
+    """Fires during a 3+ consecutive-day run, after the user is settled."""
+    return (
+        ctx.daily_streak_days >= 3
+        and ctx.session_minutes > 15
+        and ctx.time_since_last_comment_s > 420.0
+    )
+
+
+def _long_session_arc(ctx: IdleToolContext) -> bool:
+    """Fires when the current session has crossed the 3-hour mark.
+
+    A true per-user percentile comparison is deferred — the 180min
+    cutoff is a good-enough proxy for "this is a marathon session"
+    that doesn't need history to bootstrap.
+    """
+    return ctx.session_minutes >= 180 and ctx.time_since_last_comment_s > 600.0
+
+
+def _habit_rehearsal_moment(ctx: IdleToolContext) -> bool:
+    """Fires very early in a session when the user has a first-app pattern.
+
+    Silent running bit — the rule itself never speaks; it just injects
+    'user tends to open X first' as context the LLM can riff on later
+    in the session. Cheap, personal, hard to be cringe about because
+    it never announces itself.
+    """
+    if ctx.session_minutes >= 10:
+        return False
+    return any("open" in cb.lower() and "first" in cb.lower() for cb in ctx.pattern_callbacks)
+
+
+def _anniversary_milestone(ctx: IdleToolContext) -> bool:
+    """Fires on 7/30/90/180/365-day install-age milestones."""
+    return ctx.install_age_days in _ANNIVERSARY_MILESTONES
 
 
 def _late_night_host_window(ctx: IdleToolContext) -> bool:
@@ -493,6 +542,85 @@ M1_RULES: tuple[IdleToolRule, ...] = (
             "The user is on a long focus streak. Acknowledge the streak in one "
             "short beat, then pose the trivia question as a reward aside. "
             "Do not reveal the answer. One paragraph."
+        ),
+    ),
+    IdleToolRule(
+        name="callback_streak",
+        tool_name="memory_query",
+        description=(
+            "Rewards a 3+ consecutive-day run with a callback that rides "
+            "along for 3h, so the buddy can reference the streak naturally "
+            "rather than announcing it once and forgetting."
+        ),
+        weight=1.0,
+        cooldown_s=6 * 3600,
+        predicate=_daily_streak_active,
+        framing=(
+            "User is on a multi-day streak — context riding along: {output}. "
+            "Slip a single celebratory reference in organically if a beat "
+            "comes up. Do not re-state the streak count every quip."
+        ),
+        running_bit=True,
+        bit_decay_s=3 * 3600,
+        opener_framing=(
+            "User just crossed a multi-day streak threshold. Acknowledge it "
+            "once in-character without a gushing celebration. One line."
+        ),
+        needs_web_fetches=False,
+    ),
+    IdleToolRule(
+        name="session_arc",
+        tool_name="memory_query",
+        description=(
+            "One-shot observation when the current session has run past "
+            "the 3-hour mark — points at the long arc rather than the "
+            "moment."
+        ),
+        weight=0.6,
+        cooldown_s=12 * 3600,
+        predicate=_long_session_arc,
+        framing=(
+            "User has been at this for 3+ hours. Zoom out — comment on the "
+            "session arc using one concrete stat from this recall. One line, "
+            "in-character. Do not tell them to stop or rest."
+        ),
+        needs_web_fetches=False,
+    ),
+    IdleToolRule(
+        name="habit_rehearsal",
+        tool_name="memory_query",
+        description=(
+            "Silent running bit — caches the user's typical first-app "
+            "pattern for 30min at session start so later observations "
+            "can reference the routine without any opener."
+        ),
+        weight=0.8,
+        cooldown_s=20 * 3600,
+        predicate=_habit_rehearsal_moment,
+        framing=(
+            "Background context about the user's session routine: {output}. "
+            "If a natural moment opens in the first hour, weave a light "
+            "reference to the routine. Never announce this context directly."
+        ),
+        running_bit=True,
+        bit_decay_s=30 * 60,
+        opener_framing="",
+        needs_web_fetches=False,
+    ),
+    IdleToolRule(
+        name="anniversary",
+        tool_name="random_fact",
+        description=(
+            "Easter-egg: fires on 7/30/90/180/365-day install-age "
+            "milestones with a celebratory random-fact aside."
+        ),
+        weight=2.0,
+        cooldown_s=24 * 3600,
+        predicate=_anniversary_milestone,
+        framing=(
+            "Today is a TokenPal-with-the-user milestone day. Acknowledge "
+            "the run briefly, then drop the random fact as a cosmic reward "
+            "aside. One short paragraph, in-character. No gushing."
         ),
     ),
     IdleToolRule(

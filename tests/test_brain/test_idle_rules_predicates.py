@@ -18,6 +18,9 @@ def _ctx(
     active_readings: dict[str, Any] | None = None,
     mood: str = "snarky", time_since_last_comment_s: float = 30.0,
     consent_web_fetches: bool = True,
+    daily_streak_days: int = 0,
+    install_age_days: int = 0,
+    pattern_callbacks: tuple[str, ...] = (),
 ) -> IdleToolContext:
     return IdleToolContext(
         now=now or datetime(2026, 4, 17, 10, 0),
@@ -28,6 +31,9 @@ def _ctx(
         weather_summary="",
         time_since_last_comment_s=time_since_last_comment_s,
         consent_web_fetches=consent_web_fetches,
+        daily_streak_days=daily_streak_days,
+        install_age_days=install_age_days,
+        pattern_callbacks=pattern_callbacks,
     )
 
 
@@ -345,6 +351,78 @@ def test_streak_celebration_blocks_without_streak() -> None:
 def test_streak_celebration_blocks_without_productivity_reading() -> None:
     rule = rule_by_name("streak_celebration")
     assert not rule.predicate(_ctx())
+
+
+# -- callback_streak / session_arc / habit_rehearsal / anniversary ----------
+
+def test_callback_streak_fires_after_three_days_settled() -> None:
+    rule = rule_by_name("callback_streak")
+    assert rule is not None
+    assert rule.predicate(
+        _ctx(session_minutes=20, time_since_last_comment_s=500, daily_streak_days=5)
+    )
+
+
+def test_callback_streak_blocks_under_three_days() -> None:
+    rule = rule_by_name("callback_streak")
+    assert not rule.predicate(
+        _ctx(session_minutes=20, time_since_last_comment_s=500, daily_streak_days=2)
+    )
+
+
+def test_session_arc_fires_after_three_hours() -> None:
+    rule = rule_by_name("session_arc")
+    long_session = _ctx(session_minutes=200, time_since_last_comment_s=700)
+    assert rule.predicate(long_session)
+
+
+def test_session_arc_blocks_short_session() -> None:
+    rule = rule_by_name("session_arc")
+    short = _ctx(session_minutes=90, time_since_last_comment_s=700)
+    assert not rule.predicate(short)
+
+
+def test_habit_rehearsal_fires_early_with_pattern() -> None:
+    rule = rule_by_name("habit_rehearsal")
+    assert rule.predicate(
+        _ctx(
+            session_minutes=5,
+            pattern_callbacks=("You open Ghostty first in 8 of your last 10 sessions",),
+        )
+    )
+
+
+def test_habit_rehearsal_blocks_late_in_session() -> None:
+    rule = rule_by_name("habit_rehearsal")
+    assert not rule.predicate(
+        _ctx(
+            session_minutes=45,
+            pattern_callbacks=("You open Ghostty first in 8 of your last 10 sessions",),
+        )
+    )
+
+
+def test_habit_rehearsal_silent_running_bit() -> None:
+    """Must register without announcing — opener_framing is empty."""
+    rule = rule_by_name("habit_rehearsal")
+    assert rule.running_bit
+    assert rule.opener_framing == ""
+
+
+def test_anniversary_fires_on_milestones() -> None:
+    rule = rule_by_name("anniversary")
+    for days in (7, 30, 90, 180, 365):
+        assert rule.predicate(_ctx(install_age_days=days)), (
+            f"anniversary should fire at {days} days"
+        )
+
+
+def test_anniversary_blocks_non_milestones() -> None:
+    rule = rule_by_name("anniversary")
+    for days in (0, 6, 8, 31, 100, 364):
+        assert not rule.predicate(_ctx(install_age_days=days)), (
+            f"anniversary must not fire at {days} days"
+        )
 
 
 # -- running-bit promotions --------------------------------------------------

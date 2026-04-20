@@ -50,7 +50,7 @@ windows — is preserved.
 
 ## Rule catalog
 
-All 16 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
+All 20 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
 frozen `IdleToolRule` dataclass.
 
 | Rule | Tool | Window / predicate | Cooldown | Running-bit? |
@@ -71,6 +71,10 @@ frozen `IdleToolRule` dataclass.
 | `late_night_host` | chain of 3 | 23:00–01:59, not focused, >10min silence | 24h | — |
 | `git_shipped_callback` | `random_fact` | git sense `changed_from` + non-WIP msg | 1h | 2h |
 | `streak_celebration` | `trivia_question` | productivity summary contains "focus streak" | 6h | — |
+| `callback_streak` | `memory_query` | daily_streak_days >= 3, settled, >7min silence | 6h | 3h |
+| `session_arc` | `memory_query` | session_minutes >= 180, >10min silence | 12h | — |
+| `habit_rehearsal` | `memory_query` | session_minutes < 10 + first-app pattern cached | 20h | 30min (silent) |
+| `anniversary` | `random_fact` | install_age_days in {7, 30, 90, 180, 365} | 24h | — |
 
 **Offline floor:** `memory_recall` is the only rule with
 `needs_web_fetches=False`. Every other rule silently drops when the
@@ -130,6 +134,9 @@ class IdleToolContext:
     weather_summary: str
     time_since_last_comment_s: float
     consent_web_fetches: bool
+    daily_streak_days: int = 0             # personalization: from MemoryStore
+    install_age_days: int = 0              # personalization: from MemoryStore
+    pattern_callbacks: tuple[str, ...] = ()  # personalization: from MemoryStore
     @property
     def hour(self) -> int
     @property
@@ -139,6 +146,12 @@ class IdleToolContext:
 `first_session_of_day` uses a memory-store lookup in
 `Brain._compute_first_session_of_day()`. It's True only until the first
 emission of the day, not across the whole first session.
+
+**Personalization signals** default to empties so unit-tested predicates
+that don't need them can construct an `IdleToolContext` without
+plumbing a MemoryStore. `Brain._build_idle_context` populates all three
+from the live store each tick; `get_pattern_callbacks` is cached for
+the session, the other two are single-query reads.
 
 ### `IdleToolRule`
 

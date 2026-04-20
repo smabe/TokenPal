@@ -41,6 +41,10 @@ max_per_hour = 4             # hard rate cap
 # late_night_host = true     # chains trivia + random_fact + moon_phase post-23:00
 # git_shipped_callback = true # running-bit: celebrates a non-WIP commit for 2h
 # streak_celebration = true   # rewards a sustained productivity focus streak
+# callback_streak = true      # running-bit: celebrates a 3+ daily-session streak
+# session_arc = true          # one-shot observation when session exceeds 3 hours
+# habit_rehearsal = true      # silent running-bit: caches first-app routine for 30min
+# anniversary = true          # easter-egg: fires on 7/30/90/180/365-day milestones
 
 [llm]
 backend = "http"

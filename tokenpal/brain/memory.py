@@ -12,7 +12,7 @@ import time
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -838,6 +838,52 @@ class MemoryStore:
         """Check if an app name matches the sensitive app exclusion list."""
         app_lower = app.lower()
         return any(s in app_lower for s in exclude)
+
+    def get_daily_streak_days(self) -> int:
+        """How many consecutive days ending today have at least one
+        observation recorded. Matches the `memory_query streaks` action
+        but returns an int so idle-rule predicates can threshold on it.
+
+        Returns 0 when DB is disabled, empty, or the most recent
+        recorded date isn't today (the user hasn't opened the buddy yet).
+        """
+        if not self._enabled or not self._conn:
+            return 0
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT DISTINCT date(timestamp, 'unixepoch', 'localtime') "
+                "FROM observations ORDER BY 1 DESC LIMIT 60"
+            ).fetchall()
+        if not rows:
+            return 0
+        today = datetime.now().date()
+        streak = 0
+        for i, (d,) in enumerate(rows):
+            dt = datetime.strptime(d, "%Y-%m-%d").date()
+            if dt == today - timedelta(days=i):
+                streak += 1
+            else:
+                break
+        return streak
+
+    def get_install_age_days(self) -> int:
+        """Days between the oldest observation timestamp and today.
+
+        Used by the anniversary idle rule to fire on 7/30/90/180/365 day
+        milestones. Returns 0 when DB is disabled or empty — the rule's
+        predicate then has nothing to match on.
+        """
+        if not self._enabled or not self._conn:
+            return 0
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MIN(timestamp) FROM observations"
+            ).fetchone()
+        if not row or row[0] is None:
+            return 0
+        oldest = datetime.fromtimestamp(float(row[0]))
+        delta = datetime.now() - oldest
+        return max(0, delta.days)
 
     def get_pattern_callbacks(
         self,

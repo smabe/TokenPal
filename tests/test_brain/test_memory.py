@@ -462,3 +462,49 @@ class TestThroughputEstimator:
         )
         store._conn.commit()
         assert store.get_llm_throughput_estimator("http://x/v1", "gemma4") is None
+
+
+class TestPersonalizationSignals:
+    """Helpers that feed IdleToolContext's personalization fields."""
+
+    def test_streak_days_empty_db(self, store: MemoryStore) -> None:
+        assert store.get_daily_streak_days() == 0
+
+    def test_streak_days_three_in_a_row(self, store: MemoryStore) -> None:
+        today = datetime.now().date()
+        for offset in (0, 1, 2):
+            ts = datetime.combine(
+                today - timedelta(days=offset),
+                datetime.min.time(),
+            ).timestamp() + 3600
+            _insert_app_switch(store, "Ghostty", ts, session_id=f"s{offset}")
+        assert store.get_daily_streak_days() == 3
+
+    def test_streak_days_gap_breaks_run(self, store: MemoryStore) -> None:
+        today = datetime.now().date()
+        # Today + two days ago (missing yesterday = gap).
+        for offset in (0, 2, 3):
+            ts = datetime.combine(
+                today - timedelta(days=offset),
+                datetime.min.time(),
+            ).timestamp() + 3600
+            _insert_app_switch(store, "Ghostty", ts, session_id=f"s{offset}")
+        # Streak = 1 (just today).
+        assert store.get_daily_streak_days() == 1
+
+    def test_streak_days_zero_when_most_recent_is_old(self, store: MemoryStore) -> None:
+        yesterday = datetime.now() - timedelta(days=1)
+        _insert_app_switch(store, "Ghostty", yesterday.timestamp())
+        # No observation today -> streak is 0 by design.
+        assert store.get_daily_streak_days() == 0
+
+    def test_install_age_empty_db(self, store: MemoryStore) -> None:
+        assert store.get_install_age_days() == 0
+
+    def test_install_age_counts_days_since_oldest(self, store: MemoryStore) -> None:
+        ninety_days_ago = (datetime.now() - timedelta(days=90)).timestamp()
+        _insert_app_switch(store, "Ghostty", ninety_days_ago)
+        # Oldest row was 90 days ago; today matches milestone.
+        age = store.get_install_age_days()
+        # Allow ±1 for clock rollover at test midnight.
+        assert 89 <= age <= 91

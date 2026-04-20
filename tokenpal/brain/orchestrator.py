@@ -1172,6 +1172,27 @@ class Brain:
         return True
 
     def _build_idle_context(self) -> Any:
+        # Personalization signals — MemoryStore caches pattern_callbacks
+        # for the session and both new helpers are single-query reads,
+        # so pulling these every tick is cheap. Default-safe when memory
+        # is None (tests, disabled config).
+        daily_streak_days = 0
+        install_age_days = 0
+        pattern_callbacks: tuple[str, ...] = ()
+        if self._memory is not None:
+            try:
+                daily_streak_days = self._memory.get_daily_streak_days()
+                install_age_days = self._memory.get_install_age_days()
+                pattern_callbacks = tuple(
+                    self._memory.get_pattern_callbacks(
+                        sensitive_apps=SENSITIVE_APPS,
+                    )
+                )
+            except Exception:
+                log.debug(
+                    "Personalization signal fetch failed; using defaults",
+                    exc_info=True,
+                )
         return build_context(
             now=datetime.now(),
             session_minutes=int(
@@ -1182,6 +1203,9 @@ class Brain:
             mood=str(self._personality.mood),
             time_since_last_comment_s=time.monotonic() - self._last_comment_time,
             consent_web_fetches=has_consent(Category.WEB_FETCHES),
+            daily_streak_days=daily_streak_days,
+            install_age_days=install_age_days,
+            pattern_callbacks=pattern_callbacks,
         )
 
     async def _maybe_fire_idle_tool(self, snapshot: str) -> None:

@@ -394,8 +394,15 @@ def build_context(
     mood: str,
     time_since_last_comment_s: float,
     consent_web_fetches: bool,
+    daily_streak_days: int = 0,
+    install_age_days: int = 0,
+    pattern_callbacks: tuple[str, ...] = (),
 ) -> IdleToolContext:
-    """Convenience constructor used by Brain; derives weather_summary."""
+    """Convenience constructor used by Brain; derives weather_summary.
+
+    Personalization signals default to empties so call sites that don't
+    wire MemoryStore still produce a valid context.
+    """
     weather = active_readings.get("weather")
     weather_summary = ""
     if weather is not None:
@@ -409,4 +416,7 @@ def build_context(
         weather_summary=weather_summary,
         time_since_last_comment_s=time_since_last_comment_s,
         consent_web_fetches=consent_web_fetches,
+        daily_streak_days=daily_streak_days,
+        install_age_days=install_age_days,
+        pattern_callbacks=pattern_callbacks,
     )
