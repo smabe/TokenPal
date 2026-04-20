@@ -162,6 +162,46 @@ def _coffee_break_window(ctx: IdleToolContext) -> bool:
     )
 
 
+_GIT_WIP_SUBSTRINGS: tuple[str, ...] = ("wip", "tmp", "todo", "fixup!", "fixup")
+
+
+def _git_shipped(ctx: IdleToolContext) -> bool:
+    """Fires when git sense reports a fresh non-WIP commit.
+
+    git_nudge owns the WIP-complaint path; this rule is the other side —
+    celebrate a real ship. The git sense populates data['last_commit_msg']
+    every poll and sets `changed_from` only when HEAD actually moved, so
+    we key off both.
+    """
+    reading = ctx.active_readings.get("git")
+    if reading is None:
+        return False
+    if not getattr(reading, "changed_from", None):
+        return False
+    data = getattr(reading, "data", {})
+    msg = data.get("last_commit_msg") if isinstance(data, dict) else None
+    if not msg or not isinstance(msg, str):
+        return False
+    lowered = msg.lower()
+    if any(marker in lowered for marker in _GIT_WIP_SUBSTRINGS):
+        return False
+    return True
+
+
+def _productivity_streak(ctx: IdleToolContext) -> bool:
+    """Fires while the productivity sense reports a sustained focus streak.
+
+    The productivity sense summary contains 'long focus streak' when the
+    user has stuck with one app past the 30-min bucket threshold — that's
+    the moment we want to reward, not a regular lull.
+    """
+    reading = ctx.active_readings.get("productivity")
+    if reading is None:
+        return False
+    summary = getattr(reading, "summary", "")
+    return isinstance(summary, str) and "focus streak" in summary.lower()
+
+
 def _late_night_host_window(ctx: IdleToolContext) -> bool:
     """23:00-01:59, long-silence bar, mood isn't 'focused'.
 
@@ -252,13 +292,24 @@ M1_RULES: tuple[IdleToolRule, ...] = (
     IdleToolRule(
         name="long_focus_fact",
         tool_name="random_fact",
-        description="Drops a random fact when the user has been in deep focus.",
+        description=(
+            "Deep-focus companion — a random fact that rides along as callback "
+            "material for 2h so the buddy can reference it naturally across "
+            "multiple observations rather than orphaning it on one line."
+        ),
         weight=0.8,
         cooldown_s=2 * 3600,
         predicate=_deep_focus_reading,
         framing=(
-            "User is in deep focus. Drop this unrelated fact as a one-line aside, "
-            "like you just remembered it. Do not interrupt their work further."
+            "Background fact riding along during a deep-focus session: {output}. "
+            "Slip it in once if a natural beat opens; never re-state it outright. "
+            "Skip it entirely if it would interrupt the user's work."
+        ),
+        running_bit=True,
+        bit_decay_s=2 * 3600,
+        opener_framing=(
+            "You just remembered a random fact while the user is in deep focus. "
+            "Drop it as a one-line aside, in-character. Do not interrupt their work."
         ),
     ),
     IdleToolRule(
@@ -276,11 +327,22 @@ M1_RULES: tuple[IdleToolRule, ...] = (
     IdleToolRule(
         name="on_this_day_opener",
         tool_name="on_this_day",
-        description="Opens a new session with a historical this-day-in-history pick.",
+        description=(
+            "Morning this-day-in-history opener — announces one pick and then "
+            "rides along for 3h as callback material so the buddy can reference "
+            "it organically later in the morning rather than burn it in one line."
+        ),
         weight=1.3,
         cooldown_s=18 * 3600,
         predicate=_first_session_morning,
         framing=(
+            "Today's this-day-in-history nugget riding along: {output}. Slip it "
+            "in naturally once if a relevant moment comes up this morning. Never "
+            "re-announce or list more items — pick one angle."
+        ),
+        running_bit=True,
+        bit_decay_s=3 * 3600,
+        opener_framing=(
             "Pick ONE item from this-day-in-history and reference it in one line, "
             "in-character. Never a list."
         ),
@@ -288,11 +350,23 @@ M1_RULES: tuple[IdleToolRule, ...] = (
     IdleToolRule(
         name="lunar_override",
         tool_name="moon_phase",
-        description="Easter-egg: forced lunar callout on a full moon after 10pm.",
+        description=(
+            "Full-moon easter-egg — announces the lunar moment and keeps it "
+            "rideable for 4h so the buddy can keep the vibe across later quips."
+        ),
         weight=3.0,
         cooldown_s=24 * 3600,
         predicate=_full_moon_late,
-        framing="It's a full moon and it's late. Lean into it. One line, in-character.",
+        framing=(
+            "Full-moon vibe riding along tonight: {output}. Reference the "
+            "moon-phase context once more at most if a fitting moment comes up, "
+            "in-character. Do not keep calling out the phase."
+        ),
+        running_bit=True,
+        bit_decay_s=4 * 3600,
+        opener_framing=(
+            "It's a full moon and it's late. Lean into it. One line, in-character."
+        ),
     ),
     IdleToolRule(
         name="todays_joke_bit",
@@ -380,6 +454,46 @@ M1_RULES: tuple[IdleToolRule, ...] = (
             "Do not reveal the trivia answer."
         ),
         extra_tool_names=("trivia_question",),
+    ),
+    IdleToolRule(
+        name="git_shipped_callback",
+        tool_name="random_fact",
+        description=(
+            "Celebrates a real (non-WIP) commit — pairs a random fact with "
+            "the ship as a reward callback that rides along for 2h."
+        ),
+        weight=1.1,
+        cooldown_s=60 * 60,
+        predicate=_git_shipped,
+        framing=(
+            "You just registered that the user shipped a real commit, and this "
+            "random fact is riding along as a reward callback: {output}. "
+            "Reference it naturally once if a beat comes up. Do not keep "
+            "pointing at the commit."
+        ),
+        running_bit=True,
+        bit_decay_s=2 * 3600,
+        opener_framing=(
+            "The user just landed a real (non-WIP) commit. Acknowledge the "
+            "ship and drop the random fact as a celebratory aside, in-character. "
+            "One line. Do not read the commit message back."
+        ),
+    ),
+    IdleToolRule(
+        name="streak_celebration",
+        tool_name="trivia_question",
+        description=(
+            "Rewards a sustained focus streak with a trivia aside — one-shot, "
+            "no running bit, so it doesn't crowd out the focus-fact callback."
+        ),
+        weight=0.7,
+        cooldown_s=6 * 3600,
+        predicate=_productivity_streak,
+        framing=(
+            "The user is on a long focus streak. Acknowledge the streak in one "
+            "short beat, then pose the trivia question as a reward aside. "
+            "Do not reveal the answer. One paragraph."
+        ),
     ),
     IdleToolRule(
         name="late_night_host",

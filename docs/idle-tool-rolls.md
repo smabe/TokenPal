@@ -50,7 +50,7 @@ windows — is preserved.
 
 ## Rule catalog
 
-All 14 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
+All 16 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
 frozen `IdleToolRule` dataclass.
 
 | Rule | Tool | Window / predicate | Cooldown | Running-bit? |
@@ -59,16 +59,18 @@ frozen `IdleToolRule` dataclass.
 | `morning_word` | `word_of_the_day` | first-session 6–10, morning | 18h | 8h |
 | `monday_joke` | `joke_of_the_day` | Mon first-session 6–10 | 7d | — |
 | `weather_change` | `weather_forecast_week` | weather reading just changed | 6h | — |
-| `long_focus_fact` | `random_fact` | any reading contains "Deep focus" | 2h | — |
+| `long_focus_fact` | `random_fact` | any reading contains "Deep focus" | 2h | 2h |
 | `deep_lull_trivia` | `trivia_question` | >15min since last comment, not focused | 2h | — |
-| `on_this_day_opener` | `on_this_day` | first-session 6–12 | 18h | — |
-| `lunar_override` | `moon_phase` | full-moon approx + hour ≥ 22 | 24h | — |
+| `on_this_day_opener` | `on_this_day` | first-session 6–12 | 18h | 3h |
+| `lunar_override` | `moon_phase` | full-moon approx + hour ≥ 22 | 24h | 4h |
 | `todays_joke_bit` | `joke_of_the_day` | 11–14 midday lull, settled | 12h | 4h (silent) |
 | `morning_monologue` | chain of 3 | first-session 6–9 | 24h | — |
 | `memory_recall` | `memory_query` | >15min session + >10min silence | 3h | — |
 | `friday_wrap` | chain of 3 | Fri 15–18, settled, >7min silence | 7d | — |
 | `coffee_break` | chain of 2 | 10–12, NOT first-session, settled | 12h | — |
 | `late_night_host` | chain of 3 | 23:00–01:59, not focused, >10min silence | 24h | — |
+| `git_shipped_callback` | `random_fact` | git sense `changed_from` + non-WIP msg | 1h | 2h |
+| `streak_celebration` | `trivia_question` | productivity summary contains "focus streak" | 6h | — |
 
 **Offline floor:** `memory_recall` is the only rule with
 `needs_web_fetches=False`. Every other rule silently drops when the

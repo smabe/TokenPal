@@ -274,6 +274,101 @@ def test_late_night_host_blocks_busy_daytime() -> None:
     assert not rule.predicate(ctx)
 
 
+# -- git_shipped_callback ----------------------------------------------------
+
+class _GitStub:
+    def __init__(self, summary: str = "", changed_from: str = "", msg: str = "") -> None:
+        self.summary = summary
+        self.changed_from = changed_from
+        self.data: dict[str, Any] = {"last_commit_msg": msg}
+
+
+def test_git_shipped_fires_on_real_commit() -> None:
+    rule = rule_by_name("git_shipped_callback")
+    assert rule is not None
+    reading = _GitStub(
+        summary="New commit landed",
+        changed_from="prev-commit-sha",
+        msg="feat: add real feature",
+    )
+    ctx = _ctx(active_readings={"git": reading})
+    assert rule.predicate(ctx)
+
+
+def test_git_shipped_blocks_wip_msg() -> None:
+    """git_nudge owns WIP-complaining; this rule must stay out of its lane."""
+    rule = rule_by_name("git_shipped_callback")
+    for msg in ("wip save", "tmp", "TODO cleanup later", "fixup! into prior"):
+        reading = _GitStub(
+            summary="commit", changed_from="prev", msg=msg,
+        )
+        ctx = _ctx(active_readings={"git": reading})
+        assert not rule.predicate(ctx), f"WIP marker {msg!r} should block"
+
+
+def test_git_shipped_blocks_without_change() -> None:
+    """changed_from is set only on actual HEAD transitions; without it, no fire."""
+    rule = rule_by_name("git_shipped_callback")
+    reading = _GitStub(summary="idle", changed_from="", msg="feat: shipped")
+    ctx = _ctx(active_readings={"git": reading})
+    assert not rule.predicate(ctx)
+
+
+def test_git_shipped_blocks_without_git_reading() -> None:
+    rule = rule_by_name("git_shipped_callback")
+    assert not rule.predicate(_ctx())
+
+
+# -- streak_celebration ------------------------------------------------------
+
+class _ProductivityStub:
+    def __init__(self, summary: str) -> None:
+        self.summary = summary
+        self.changed_from = ""
+
+
+def test_streak_celebration_fires_on_focus_streak() -> None:
+    rule = rule_by_name("streak_celebration")
+    assert rule is not None
+    reading = _ProductivityStub("Working, long focus streak")
+    ctx = _ctx(active_readings={"productivity": reading})
+    assert rule.predicate(ctx)
+
+
+def test_streak_celebration_blocks_without_streak() -> None:
+    rule = rule_by_name("streak_celebration")
+    reading = _ProductivityStub("Working, calm pace")
+    ctx = _ctx(active_readings={"productivity": reading})
+    assert not rule.predicate(ctx)
+
+
+def test_streak_celebration_blocks_without_productivity_reading() -> None:
+    rule = rule_by_name("streak_celebration")
+    assert not rule.predicate(_ctx())
+
+
+# -- running-bit promotions --------------------------------------------------
+
+def test_long_focus_fact_is_running_bit() -> None:
+    rule = rule_by_name("long_focus_fact")
+    assert rule.running_bit
+    assert rule.bit_decay_s >= 3600
+    assert "{output}" in rule.framing
+
+
+def test_on_this_day_opener_is_running_bit() -> None:
+    rule = rule_by_name("on_this_day_opener")
+    assert rule.running_bit
+    assert rule.bit_decay_s >= 3600
+    assert rule.opener_framing  # announces itself on first fire
+
+
+def test_lunar_override_is_running_bit() -> None:
+    rule = rule_by_name("lunar_override")
+    assert rule.running_bit
+    assert rule.bit_decay_s >= 3600
+
+
 # -- catalog integrity -------------------------------------------------------
 
 def test_all_rules_have_unique_names() -> None:

@@ -39,6 +39,8 @@ max_per_hour = 4             # hard rate cap
 # friday_wrap = true         # chains joke + random_fact + on_this_day on Fri PM
 # coffee_break = true        # chains word_of_the_day + trivia on mid-AM lull
 # late_night_host = true     # chains trivia + random_fact + moon_phase post-23:00
+# git_shipped_callback = true # running-bit: celebrates a non-WIP commit for 2h
+# streak_celebration = true   # rewards a sustained productivity focus streak
 
 [llm]
 backend = "http"
