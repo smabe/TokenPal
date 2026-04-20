@@ -1252,6 +1252,7 @@ class Brain:
             return
 
         filtered = self._personality.filter_response(response.text)
+        filter_reason = self._personality._last_filter_reason
         if filtered and self._is_near_duplicate(filtered):
             log.info(
                 "TokenPal (idle-tool %s suppressed near-duplicate): %s",
@@ -1263,14 +1264,18 @@ class Brain:
             # ignores it). But it would also starve freeform + drift nudges
             # for 2 minutes, and a single bad riff framing shouldn't do that.
             # The rule's own cooldown already prevents re-rolling it soon.
+            filter_reason = "near_duplicate"
             filtered = ""
 
         if not filtered:
             log.debug(
-                "Idle-tool riff filtered out: %r",
+                "Idle-tool riff filtered out (%s): %r",
+                filter_reason or "empty",
                 response.text[:80] if response.text else "",
             )
-            self._record_idle_fire(fire, emitted=False)
+            self._record_idle_fire(
+                fire, emitted=False, filter_reason=filter_reason or "empty",
+            )
             return
 
         log.info(
@@ -1281,22 +1286,37 @@ class Brain:
         self._recent_outputs.append(filtered)
         self._record_idle_fire(fire, emitted=True)
 
-    def _record_idle_fire(self, fire: IdleFireResult, *, emitted: bool) -> None:
-        """Write a telemetry row so memory_query can surface idle-tool stats."""
+    def _record_idle_fire(
+        self,
+        fire: IdleFireResult,
+        *,
+        emitted: bool,
+        filter_reason: str = "",
+    ) -> None:
+        """Write a telemetry row so memory_query can surface idle-tool stats.
+
+        filter_reason is "" on a successful emit. On a swallow it's one of
+        the filter_response reasons (drifted, anchor_regurgitation,
+        cross_franchise, too_short, silent_marker, near_duplicate, empty)
+        so we can tune framing without tailing logs.
+        """
         if self._memory is None:
             return
+        data: dict[str, Any] = {
+            "tool": fire.tool_name,
+            "emitted": emitted,
+            "tool_success": fire.success,
+            "running_bit": fire.running_bit,
+            "latency_ms": int(fire.latency_ms),
+        }
+        if filter_reason:
+            data["filter_reason"] = filter_reason
         try:
             self._memory.record_observation(
                 sense_name="idle_tools",
                 event_type="idle_tool_fire",
                 summary=fire.rule_name,
-                data={
-                    "tool": fire.tool_name,
-                    "emitted": emitted,
-                    "tool_success": fire.success,
-                    "running_bit": fire.running_bit,
-                    "latency_ms": int(fire.latency_ms),
-                },
+                data=data,
             )
         except Exception:
             log.debug("idle_tool_fire telemetry write failed", exc_info=True)

@@ -48,6 +48,20 @@ _RE_ASTERISK = re.compile(r"\*[^*]+\*\s*")
 _RE_LEAKED_TAG = re.compile(r"\[[^\]]{2,}\]")
 _RE_DASHES = re.compile(r"---.*?---")
 _RE_LEADING_DASH = re.compile(r"^\s*[-\u2013\u2014:]\s*")
+_RE_NON_ALNUM_SPACE = re.compile(r"[^a-z0-9 ]+")
+
+
+def _anchor_normalize(text: str) -> str:
+    """Lowercase, strip non-alphanumerics, collapse whitespace.
+
+    Used by the anchor-regurgitation guard so "Why do I smell like
+    pineapples?" matches "why do i smell like pineapples" matches
+    "Why... do I smell, like pineapples!" — punctuation and casing
+    shouldn't defeat a clear verbatim copy.
+    """
+    lowered = text.lower()
+    stripped = _RE_NON_ALNUM_SPACE.sub(" ", lowered)
+    return " ".join(stripped.split())
 _RE_PREFIX = re.compile(
     r"^(Comment|Response|Answer|Output|Note)\s*:\s*", re.IGNORECASE
 )
@@ -551,6 +565,11 @@ class PersonalityEngine:
         # Running bits — multi-hour callback prompts slotted into system msg.
         self._running_bits: list[RunningBit] = []
 
+        # Last filter_response drop reason; set by filter_response on every
+        # call. "" means the call returned a clean string. Callers that
+        # want to log the reason inspect this after calling filter_response.
+        self._last_filter_reason: str = ""
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -972,34 +991,77 @@ class PersonalityEngine:
         return _MOOD_PROMPTS[self._mood]
 
     def filter_response(self, text: str) -> str | None:
-        """Return the cleaned response, or None if the buddy chose silence."""
+        """Return the cleaned response, or None if the buddy chose silence.
+
+        Sets `self._last_filter_reason` to a short string identifying why
+        the response was dropped (or `""` on success). Callers that want
+        to log or surface the reason read that attribute — kept off the
+        return type so every existing callsite stays source-compatible.
+        """
+        self._last_filter_reason = ""
         text = text.strip().strip(_QUOTES).strip()
 
         for marker in _SILENT_MARKERS:
             if marker in text:
                 log.debug("Filter: [SILENT] marker found")
+                self._last_filter_reason = "silent_marker"
                 return None
 
         if not text or len(text) < 15:
             log.debug("Filter: too short (%d chars): %r", len(text), text[:50])
+            self._last_filter_reason = "too_short"
             return None
 
         if not is_clean_english(text):
             log.warning("Filter: drifted response suppressed: %r", text[:80])
+            self._last_filter_reason = "drifted"
+            return None
+
+        if self._is_anchor_regurgitation(text):
+            log.info("Filter: voice-anchor regurgitation suppressed: %r", text[:80])
+            self._last_filter_reason = "anchor_regurgitation"
             return None
 
         text = self._clean_llm_text(text)
 
         if self._has_cross_franchise(text):
+            self._last_filter_reason = "cross_franchise"
             return None
 
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
             log.debug("Filter: too short after cleanup (%d chars): %r", len(text), text[:50])
+            self._last_filter_reason = "too_short_post_cleanup"
             return None
 
         return text
+
+    def _is_anchor_regurgitation(self, text: str) -> bool:
+        """True if `text` is effectively one of the voice's anchor lines.
+
+        Confused small models fall back to copying a few-shot example
+        verbatim instead of generating new content ("Why do I smell like
+        pineapples?" appeared 5+ times from the Finn anchor pool in one
+        overnight run). Rejecting this pushes the model toward a fresh
+        generation on retry and surfaces the drift in telemetry.
+
+        Normalizes both sides to lowercase + alphanumerics-and-spaces
+        so punctuation and ellipses don't defeat the match.
+        """
+        if not self._anchor_pool:
+            return False
+        normalized = _anchor_normalize(text)
+        if not normalized:
+            return False
+        for anchor in self._anchor_pool:
+            if len(anchor) < 15:
+                # Shorter anchors would already fail the length gate;
+                # also too generic to meaningfully match here.
+                continue
+            if _anchor_normalize(anchor) == normalized:
+                return True
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers
