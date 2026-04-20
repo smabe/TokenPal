@@ -26,6 +26,22 @@ _SILENT_MARKERS = ["[SILENT]", "[silent]", "SILENT"]
 _MAX_RUNNING_BITS = 3
 
 
+class FilterReason(str, enum.Enum):
+    """Why filter_response dropped (or kept) a response.
+
+    Inherits from str so .value is usable wherever a stable string key
+    is needed (telemetry JSON, log lines) without `.value` boilerplate.
+    """
+
+    OK = ""
+    SILENT_MARKER = "silent_marker"
+    TOO_SHORT = "too_short"
+    DRIFTED = "drifted"
+    ANCHOR_REGURGITATION = "anchor_regurgitation"
+    CROSS_FRANCHISE = "cross_franchise"
+    TOO_SHORT_POST_CLEANUP = "too_short_post_cleanup"
+
+
 @dataclass
 class RunningBit:
     """A multi-hour callback prompt that rides along in every system message.
@@ -565,10 +581,7 @@ class PersonalityEngine:
         # Running bits — multi-hour callback prompts slotted into system msg.
         self._running_bits: list[RunningBit] = []
 
-        # Last filter_response drop reason; set by filter_response on every
-        # call. "" means the call returned a clean string. Callers that
-        # want to log the reason inspect this after calling filter_response.
-        self._last_filter_reason: str = ""
+        self.last_filter_reason: FilterReason = FilterReason.OK
 
     # ------------------------------------------------------------------
     # Public API
@@ -622,6 +635,9 @@ class PersonalityEngine:
         self._voice_structure_hints = (voice.structure_hints or []) if voice else []
         self._finetuned_model = voice.finetuned_model if voice else ""
         self._anchor_pool = (voice.anchor_lines or []) if voice else []
+        self._anchor_pool_normalized: frozenset[str] = frozenset(
+            _anchor_normalize(a) for a in self._anchor_pool if len(a) >= 15
+        )
         self._banned_names = (voice.banned_names or []) if voice else []
         self._banned_names_lower: frozenset[str] = frozenset(
             n.lower() for n in self._banned_names
@@ -993,75 +1009,61 @@ class PersonalityEngine:
     def filter_response(self, text: str) -> str | None:
         """Return the cleaned response, or None if the buddy chose silence.
 
-        Sets `self._last_filter_reason` to a short string identifying why
-        the response was dropped (or `""` on success). Callers that want
-        to log or surface the reason read that attribute — kept off the
-        return type so every existing callsite stays source-compatible.
+        Stamps `self.last_filter_reason` every call — `OK` on success,
+        a concrete `FilterReason` member on drop. Kept off the return
+        type so every existing call site stays source-compatible.
         """
-        self._last_filter_reason = ""
+        self.last_filter_reason = FilterReason.OK
         text = text.strip().strip(_QUOTES).strip()
 
         for marker in _SILENT_MARKERS:
             if marker in text:
                 log.debug("Filter: [SILENT] marker found")
-                self._last_filter_reason = "silent_marker"
+                self.last_filter_reason = FilterReason.SILENT_MARKER
                 return None
 
         if not text or len(text) < 15:
             log.debug("Filter: too short (%d chars): %r", len(text), text[:50])
-            self._last_filter_reason = "too_short"
+            self.last_filter_reason = FilterReason.TOO_SHORT
             return None
 
         if not is_clean_english(text):
             log.warning("Filter: drifted response suppressed: %r", text[:80])
-            self._last_filter_reason = "drifted"
+            self.last_filter_reason = FilterReason.DRIFTED
             return None
 
         if self._is_anchor_regurgitation(text):
             log.info("Filter: voice-anchor regurgitation suppressed: %r", text[:80])
-            self._last_filter_reason = "anchor_regurgitation"
+            self.last_filter_reason = FilterReason.ANCHOR_REGURGITATION
             return None
 
         text = self._clean_llm_text(text)
 
         if self._has_cross_franchise(text):
-            self._last_filter_reason = "cross_franchise"
+            self.last_filter_reason = FilterReason.CROSS_FRANCHISE
             return None
 
         text = text.strip(_QUOTES).strip()
 
         if not text or len(text) < 15:
             log.debug("Filter: too short after cleanup (%d chars): %r", len(text), text[:50])
-            self._last_filter_reason = "too_short_post_cleanup"
+            self.last_filter_reason = FilterReason.TOO_SHORT_POST_CLEANUP
             return None
 
         return text
 
     def _is_anchor_regurgitation(self, text: str) -> bool:
-        """True if `text` is effectively one of the voice's anchor lines.
-
-        Confused small models fall back to copying a few-shot example
-        verbatim instead of generating new content ("Why do I smell like
-        pineapples?" appeared 5+ times from the Finn anchor pool in one
-        overnight run). Rejecting this pushes the model toward a fresh
-        generation on retry and surfaces the drift in telemetry.
-
-        Normalizes both sides to lowercase + alphanumerics-and-spaces
-        so punctuation and ellipses don't defeat the match.
+        """True if `text` matches a voice-anchor line verbatim, modulo
+        case + punctuation. Anchors < 15 chars are excluded at voice-load
+        time — the length gate already handles them and they're too
+        generic to fingerprint.
         """
-        if not self._anchor_pool:
+        if not self._anchor_pool_normalized:
             return False
         normalized = _anchor_normalize(text)
         if not normalized:
             return False
-        for anchor in self._anchor_pool:
-            if len(anchor) < 15:
-                # Shorter anchors would already fail the length gate;
-                # also too generic to meaningfully match here.
-                continue
-            if _anchor_normalize(anchor) == normalized:
-                return True
-        return False
+        return normalized in self._anchor_pool_normalized
 
     # ------------------------------------------------------------------
     # Internal helpers

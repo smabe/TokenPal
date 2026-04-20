@@ -1282,18 +1282,15 @@ class Brain:
             return
 
         filtered = self._personality.filter_response(response.text)
-        filter_reason = self._personality._last_filter_reason
+        filter_reason = self._personality.last_filter_reason.value
         if filtered and self._is_near_duplicate(filtered):
             log.info(
                 "TokenPal (idle-tool %s suppressed near-duplicate): %s",
                 fire.rule_name, filtered,
             )
-            # Do NOT call _handle_suppressed_output — that would flip the
-            # observation-path silence window on, which in turn would only
-            # silence observations, not idle rolls (_idle_tools_eligible
-            # ignores it). But it would also starve freeform + drift nudges
-            # for 2 minutes, and a single bad riff framing shouldn't do that.
-            # The rule's own cooldown already prevents re-rolling it soon.
+            # Skip _handle_suppressed_output — the observation-path silence
+            # window would starve freeform + drift nudges for 2 minutes on
+            # one bad framing. The rule's own cooldown is enough.
             filter_reason = "near_duplicate"
             filtered = ""
 

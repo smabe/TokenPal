@@ -93,6 +93,8 @@ CREATE TABLE IF NOT EXISTS llm_throughput_estimators (
 # decode_tps / ttft_s readings. Rows with a lower version are ignored.
 LLM_ESTIMATOR_SCHEMA_VERSION = 1
 
+_PERSONALIZATION_CACHE_TTL_S = 60.0
+
 
 # PRAGMA user_version based migrations. _SCHEMA above stays frozen as the
 # legacy "always idempotent" base; new tables land via migrations. Each entry
@@ -182,6 +184,10 @@ class MemoryStore:
         # per-insert writes don't pay a SELECT COUNT every call.
         self._chat_log_max_persisted: int = 200
         self._chat_log_count: int = 0
+        # TTL caches for per-tick personalization reads — _build_idle_context
+        # fires every 2-3s and these values don't change that fast.
+        self._streak_cache: tuple[int, float] | None = None
+        self._install_age_cache: tuple[int, float] | None = None
 
     @property
     def enabled(self) -> bool:
@@ -844,9 +850,15 @@ class MemoryStore:
         observation recorded. Matches the `memory_query streaks` action
         but returns an int so idle-rule predicates can threshold on it.
 
-        Returns 0 when DB is disabled, empty, or the most recent
-        recorded date isn't today (the user hasn't opened the buddy yet).
+        Cached with a 60s TTL — `_build_idle_context` calls this every
+        brain tick (~2-3s), but the underlying value only changes at
+        date rollover. Cache cost amortizes the SQLite scan across
+        ~20-30 ticks per minute.
         """
+        cached = self._streak_cache
+        now_mono = time.monotonic()
+        if cached is not None and now_mono - cached[1] < _PERSONALIZATION_CACHE_TTL_S:
+            return cached[0]
         if not self._enabled or not self._conn:
             return 0
         with self._lock:
@@ -854,36 +866,41 @@ class MemoryStore:
                 "SELECT DISTINCT date(timestamp, 'unixepoch', 'localtime') "
                 "FROM observations ORDER BY 1 DESC LIMIT 60"
             ).fetchall()
-        if not rows:
-            return 0
-        today = datetime.now().date()
         streak = 0
-        for i, (d,) in enumerate(rows):
-            dt = datetime.strptime(d, "%Y-%m-%d").date()
-            if dt == today - timedelta(days=i):
-                streak += 1
-            else:
-                break
+        if rows:
+            today = datetime.now().date()
+            for i, (d,) in enumerate(rows):
+                dt = datetime.strptime(d, "%Y-%m-%d").date()
+                if dt == today - timedelta(days=i):
+                    streak += 1
+                else:
+                    break
+        self._streak_cache = (streak, now_mono)
         return streak
 
     def get_install_age_days(self) -> int:
         """Days between the oldest observation timestamp and today.
 
-        Used by the anniversary idle rule to fire on 7/30/90/180/365 day
-        milestones. Returns 0 when DB is disabled or empty — the rule's
-        predicate then has nothing to match on.
+        Used by the anniversary idle rule to fire on 7/30/90/180/365-day
+        milestones. Cached with the same 60s TTL as the streak count —
+        both are per-tick reads that effectively never change mid-session.
         """
+        cached = self._install_age_cache
+        now_mono = time.monotonic()
+        if cached is not None and now_mono - cached[1] < _PERSONALIZATION_CACHE_TTL_S:
+            return cached[0]
         if not self._enabled or not self._conn:
             return 0
         with self._lock:
             row = self._conn.execute(
                 "SELECT MIN(timestamp) FROM observations"
             ).fetchone()
-        if not row or row[0] is None:
-            return 0
-        oldest = datetime.fromtimestamp(float(row[0]))
-        delta = datetime.now() - oldest
-        return max(0, delta.days)
+        age = 0
+        if row and row[0] is not None:
+            oldest = datetime.fromtimestamp(float(row[0]))
+            age = max(0, (datetime.now() - oldest).days)
+        self._install_age_cache = (age, now_mono)
+        return age
 
     def get_pattern_callbacks(
         self,

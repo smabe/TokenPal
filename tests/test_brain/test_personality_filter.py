@@ -1,14 +1,8 @@
-"""Tests for PersonalityEngine.filter_response — cleanup + drop reasons.
-
-The buddy filter is the last line of defense between "LLM drifted into
-gibberish or regurgitated a voice anchor" and the user. Every drop
-reason is also surfaced via `_last_filter_reason` so telemetry can
-attribute swallows without tailing logs.
-"""
+"""Tests for PersonalityEngine.filter_response — cleanup + drop reasons."""
 
 from __future__ import annotations
 
-from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.brain.personality import FilterReason, PersonalityEngine
 from tokenpal.tools.voice_profile import VoiceProfile
 
 
@@ -24,46 +18,39 @@ def _engine_with_anchors(*anchor_lines: str) -> PersonalityEngine:
     return PersonalityEngine(persona_prompt="", voice=voice)
 
 
-def test_passes_plain_text_sets_empty_reason() -> None:
+def test_passes_plain_text_sets_ok_reason() -> None:
     eng = _engine_with_anchors()
     out = eng.filter_response("Hey there buddy, sounds like a solid plan today.")
     assert out is not None
-    assert eng._last_filter_reason == ""
+    assert eng.last_filter_reason is FilterReason.OK
 
 
 def test_anchor_regurgitation_suppressed() -> None:
-    """Verbatim copy of a voice anchor must be rejected."""
     eng = _engine_with_anchors(
         "Why do I smell like pineapples?",
         "Is this a dream or a do-over?",
     )
     out = eng.filter_response("Why do I smell like pineapples?")
     assert out is None
-    assert eng._last_filter_reason == "anchor_regurgitation"
+    assert eng.last_filter_reason is FilterReason.ANCHOR_REGURGITATION
 
 
 def test_anchor_regurgitation_ignores_punctuation() -> None:
-    """Case + punctuation + extra spaces must not defeat the match."""
     eng = _engine_with_anchors("Why do I smell like pineapples?")
     out = eng.filter_response("why do i smell like  pineapples")
     assert out is None
-    assert eng._last_filter_reason == "anchor_regurgitation"
+    assert eng.last_filter_reason is FilterReason.ANCHOR_REGURGITATION
 
 
 def test_anchor_regurgitation_ignores_short_anchors() -> None:
-    """Anchors < 15 chars would fail the length gate anyway and are too
-    generic to reliably fingerprint a regurgitation (e.g. 'Yeah!').
-    """
+    """Anchors < 15 chars are too generic to fingerprint — skipped."""
     eng = _engine_with_anchors("Yeah!", "Oh no!")
-    # Plain text that happens to contain a short anchor substring should
-    # still pass — it's a normal generation, not a regurgitation.
     out = eng.filter_response("Yeah! That's actually a great plan today, buddy.")
     assert out is not None
-    assert eng._last_filter_reason == ""
+    assert eng.last_filter_reason is FilterReason.OK
 
 
 def test_anchor_regurgitation_allows_paraphrase() -> None:
-    """The LLM paraphrasing an anchor line is fine; we only guard verbatim."""
     eng = _engine_with_anchors("Why do I smell like pineapples?")
     out = eng.filter_response("Something smells fruity in here — maybe pineapples?")
     assert out is not None
@@ -72,19 +59,24 @@ def test_anchor_regurgitation_allows_paraphrase() -> None:
 def test_too_short_reason() -> None:
     eng = _engine_with_anchors()
     assert eng.filter_response("no.") is None
-    assert eng._last_filter_reason == "too_short"
+    assert eng.last_filter_reason is FilterReason.TOO_SHORT
 
 
 def test_silent_marker_reason() -> None:
     eng = _engine_with_anchors()
     assert eng.filter_response("[SILENT] I have nothing to add here") is None
-    assert eng._last_filter_reason == "silent_marker"
+    assert eng.last_filter_reason is FilterReason.SILENT_MARKER
 
 
 def test_reason_cleared_on_success() -> None:
-    """Reason set by a prior failed call must not leak into the next success."""
     eng = _engine_with_anchors()
     eng.filter_response("no.")
-    assert eng._last_filter_reason == "too_short"
+    assert eng.last_filter_reason is FilterReason.TOO_SHORT
     eng.filter_response("Hey there buddy, that's actually a solid observation.")
-    assert eng._last_filter_reason == ""
+    assert eng.last_filter_reason is FilterReason.OK
+
+
+def test_enum_value_is_telemetry_friendly() -> None:
+    """FilterReason inherits from str so .value works without `.value` boilerplate."""
+    assert FilterReason.TOO_SHORT.value == "too_short"
+    assert FilterReason.OK.value == ""
