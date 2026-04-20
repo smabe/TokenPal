@@ -60,6 +60,9 @@ class HttpBackend(AbstractLLMBackend):
         self._reachable: bool = False
         self._model_available: bool = False
         self._using_fallback: bool = False
+        # Snapshot of the active server's /v1/models response. Refreshed on
+        # every _try_connect; UI reads this to populate the model picker.
+        self._available_models: tuple[str, ...] = ()
         # Throughput estimator state. None until MIN_SAMPLES_FOR_ESTIMATE calls
         # accumulate. See plans/shipped/gpu-scaling.md for the TTFT/decode split.
         self._sample_count: int = 0
@@ -90,6 +93,7 @@ class HttpBackend(AbstractLLMBackend):
 
             models = resp.json().get("data", [])
             model_ids = [m.get("id", "") for m in models if m.get("id")]
+            self._available_models = tuple(model_ids)
 
             if self._model_name in model_ids:
                 self._model_available = True
@@ -497,6 +501,13 @@ class HttpBackend(AbstractLLMBackend):
     @property
     def primary_url(self) -> str:
         return self._primary_url
+
+    @property
+    def available_models(self) -> tuple[str, ...]:
+        """Model IDs advertised by the active server's /v1/models endpoint.
+        Refreshed on every connect/switch. Empty until the first successful
+        probe completes."""
+        return self._available_models
 
     def set_model(self, model_name: str) -> None:
         """Swap the active model. Next generation call uses the new model."""

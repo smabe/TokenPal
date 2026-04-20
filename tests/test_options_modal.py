@@ -18,7 +18,12 @@ from tokenpal.config.chatlog_writer import (
     clamp_max_persisted,
     set_max_persisted,
 )
-from tokenpal.ui.options_modal import OptionsModalResult, OptionsModalState
+from tokenpal.ui.options_modal import (
+    OptionsModalResult,
+    OptionsModalState,
+    ServerEntry,
+    _same_server,
+)
 
 
 def test_state_and_result_dataclasses_are_frozen() -> None:
@@ -56,6 +61,90 @@ def test_clamp_handles_non_digit_safely() -> None:
     on unparseable input, which the modal catches."""
     with pytest.raises((ValueError, TypeError)):
         clamp_max_persisted("1; DROP TABLE chat_log")  # type: ignore[arg-type]
+
+
+def test_result_carries_switch_server_to() -> None:
+    r = OptionsModalResult(
+        max_persisted=42,
+        switch_server_to="http://localhost:11434/v1",
+    )
+    assert r.switch_server_to == "http://localhost:11434/v1"
+    assert r.navigate_to is None
+
+
+def test_result_defaults_switch_server_to_none() -> None:
+    r = OptionsModalResult(max_persisted=42)
+    assert r.switch_server_to is None
+
+
+def test_state_accepts_known_servers_tuple() -> None:
+    entries = (
+        ServerEntry(
+            url="http://localhost:11434/v1", label="local", model="gemma4"
+        ),
+        ServerEntry(
+            url="http://10.0.0.2:8585/v1", label="remote", model=None
+        ),
+    )
+    s = OptionsModalState(
+        max_persisted=200,
+        persist_enabled=True,
+        current_api_url="http://localhost:11434/v1",
+        known_servers=entries,
+    )
+    assert s.known_servers == entries
+    assert s.known_servers[1].model is None
+
+
+def test_state_known_servers_defaults_empty() -> None:
+    s = OptionsModalState(max_persisted=200, persist_enabled=True)
+    assert s.known_servers == ()
+    assert s.current_api_url == ""
+
+
+def test_result_carries_switch_model_to() -> None:
+    r = OptionsModalResult(max_persisted=42, switch_model_to="gemma4")
+    assert r.switch_model_to == "gemma4"
+    assert r.switch_server_to is None
+
+
+def test_result_defaults_switch_model_to_none() -> None:
+    r = OptionsModalResult(max_persisted=42)
+    assert r.switch_model_to is None
+
+
+def test_state_accepts_available_models_and_current() -> None:
+    s = OptionsModalState(
+        max_persisted=200,
+        persist_enabled=True,
+        current_model="gemma4",
+        available_models=("gemma4", "gemma2", "tokenpal-bmo"),
+    )
+    assert s.current_model == "gemma4"
+    assert s.available_models == ("gemma4", "gemma2", "tokenpal-bmo")
+
+
+def test_state_model_fields_default_empty() -> None:
+    s = OptionsModalState(max_persisted=200, persist_enabled=True)
+    assert s.current_model == ""
+    assert s.available_models == ()
+
+
+def test_same_server_canonicalizes() -> None:
+    # Same URL with and without trailing /v1 or slash collapses.
+    assert _same_server(
+        "http://h:11434", "http://h:11434/v1"
+    ) is True
+    assert _same_server(
+        "http://h:11434/v1/", "http://h:11434/v1"
+    ) is True
+    # Different hosts don't match.
+    assert _same_server(
+        "http://h:11434/v1", "http://other:11434/v1"
+    ) is False
+    # Empty strings never match (guards the "no current URL" case).
+    assert _same_server("", "http://h:11434/v1") is False
+    assert _same_server("http://h:11434/v1", "") is False
 
 
 def test_set_max_persisted_writes_clamped_value(

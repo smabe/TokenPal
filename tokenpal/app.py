@@ -519,12 +519,50 @@ def main() -> None:
         return CommandResult("")
 
     def _open_options_modal() -> bool:
-        from tokenpal.ui.options_modal import OptionsModalResult, OptionsModalState
+        from tokenpal.config.toml_writer import canon_server_url
+        from tokenpal.ui.options_modal import (
+            OptionsModalResult,
+            OptionsModalState,
+            ServerEntry,
+        )
 
         cl = config.chat_log
+
+        # Build known-server list: configured local + configured remote +
+        # every key already in per_server_models. Dedup via canon_server_url.
+        local_url = "http://localhost:11434/v1"
+        remote_host = (
+            config.server.host if config.server.host != "127.0.0.1"
+            else "localhost"
+        )
+        remote_url = f"http://{remote_host}:{config.server.port}/v1"
+        current_key = canon_server_url(llm.api_url)
+
+        seen: dict[str, ServerEntry] = {}
+
+        def _add(url: str, label: str) -> None:
+            key = canon_server_url(url)
+            if key in seen:
+                return
+            remembered = config.llm.per_server_models.get(key)
+            model: str | None = remembered
+            if model is None and key == current_key:
+                # Active server fallback so a fresh machine shows something.
+                model = llm.model_name or None
+            seen[key] = ServerEntry(url=key, label=label, model=model)
+
+        _add(local_url, "local")
+        _add(remote_url, "remote")
+        for persisted_key in config.llm.per_server_models:
+            _add(persisted_key, "saved")
+
         state = OptionsModalState(
             max_persisted=cl.max_persisted,
             persist_enabled=cl.persist,
+            current_api_url=llm.api_url,
+            known_servers=tuple(seen.values()),
+            current_model=llm.model_name or "",
+            available_models=tuple(getattr(llm, "available_models", ())),
         )
 
         def on_save(result: OptionsModalResult | None) -> None:
@@ -546,6 +584,22 @@ def main() -> None:
                 return
             if nav == "voice":
                 _open_voice_modal()
+                return
+
+            if result.switch_server_to:
+                target = result.switch_server_to.strip()
+                if target:
+                    res = _cmd_server(f"switch {target}")
+                    if res.message:
+                        overlay.log_buddy_message(res.message)
+                return
+
+            if result.switch_model_to:
+                target = result.switch_model_to.strip()
+                if target and target != (llm.model_name or ""):
+                    res = _cmd_model(target)
+                    if res.message:
+                        overlay.log_buddy_message(res.message)
                 return
 
             # Navigation was None — apply field edits.

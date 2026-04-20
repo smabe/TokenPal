@@ -18,7 +18,7 @@ chatlog_writer.clamp_max_persisted before handing the value to the app.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
@@ -36,12 +36,37 @@ from tokenpal.config.chatlog_writer import (
 NavigateTo = Literal["cloud", "senses", "tools", "voice"]
 
 
+def _same_server(a: str, b: str) -> bool:
+    """Compare two api URLs with the same normalization /server switch uses."""
+
+    def _norm(u: str) -> str:
+        u = u.strip().rstrip("/")
+        if u and not u.endswith("/v1"):
+            u += "/v1"
+        return u
+
+    return bool(a) and bool(b) and _norm(a) == _norm(b)
+
+
+@dataclass(frozen=True)
+class ServerEntry:
+    """One row in the Server section's known-servers list."""
+
+    url: str           # canonical URL used for switching
+    label: str         # short display label (e.g. "local", "remote", host)
+    model: str | None  # remembered model, or None if we haven't seen one
+
+
 @dataclass(frozen=True)
 class OptionsModalState:
     """Current state fed into the modal."""
 
     max_persisted: int
     persist_enabled: bool
+    current_api_url: str = ""
+    known_servers: tuple[ServerEntry, ...] = field(default_factory=tuple)
+    current_model: str = ""
+    available_models: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -51,11 +76,15 @@ class OptionsModalResult:
     (any max_persisted edit is discarded in that case).
     ``clear_history`` True means the user clicked Clear; the app wipes
     both the persisted table and the live widget.
+    ``switch_server_to`` non-None means the user picked a different
+    server; the app re-dispatches through ``/server switch <value>``.
     """
 
     max_persisted: int
     clear_history: bool = False
     navigate_to: NavigateTo | None = None
+    switch_server_to: str | None = None
+    switch_model_to: str | None = None
 
 
 class OptionsModal(ModalScreen[OptionsModalResult | None]):
@@ -112,6 +141,29 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
     OptionsModal Button {
         margin-left: 1;
     }
+    OptionsModal .server-row {
+        height: auto;
+        width: 100%;
+        padding-top: 0;
+    }
+    OptionsModal .server-row Button {
+        margin-left: 0;
+        margin-right: 1;
+        width: 100%;
+    }
+    OptionsModal .server-row Button.active {
+        text-style: bold;
+    }
+    OptionsModal #custom-server-row {
+        height: auto;
+        width: 100%;
+        padding-top: 1;
+    }
+    OptionsModal #custom-server-input {
+        width: 1fr;
+        margin-right: 1;
+        margin-bottom: 0;
+    }
     """
 
     BINDINGS: ClassVar[
@@ -156,6 +208,74 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                     id="clear-history-btn",
                     variant="warning",
                 )
+
+            # --------------------------------------------------------------
+            # Server section — pick an inference server to connect to.
+            # --------------------------------------------------------------
+            yield Label("Server", classes="section-header")
+            if s.current_api_url:
+                yield Label(
+                    f"Active: {s.current_api_url}",
+                    classes="section-help",
+                )
+            else:
+                yield Label(
+                    "Pick a server below, or enter a custom URL.",
+                    classes="section-help",
+                )
+            for i, entry in enumerate(s.known_servers):
+                model_col = entry.model or "(no model)"
+                label = f"{entry.label}  —  {entry.url}  —  {model_col}"
+                is_active = _same_server(entry.url, s.current_api_url)
+                if is_active:
+                    label = "● " + label
+                btn = Button(
+                    label,
+                    id=f"server-row-{i}",
+                    variant="primary" if is_active else "default",
+                    disabled=is_active,
+                )
+                if is_active:
+                    btn.add_class("active")
+                with Horizontal(classes="server-row"):
+                    yield btn
+            with Horizontal(id="custom-server-row"):
+                yield Input(
+                    placeholder="Custom URL or host (e.g. 192.168.1.50)",
+                    id="custom-server-input",
+                )
+                yield Button("Apply", id="custom-server-btn")
+
+            # --------------------------------------------------------------
+            # Models section — pick a model served by the active server.
+            # --------------------------------------------------------------
+            yield Label("Models (on this server)", classes="section-header")
+            if not s.available_models:
+                hint = (
+                    f"Active: {s.current_model} (probing server…)"
+                    if s.current_model
+                    else "Connecting to server — model list unavailable."
+                )
+                yield Label(hint, classes="section-help")
+            else:
+                yield Label(
+                    f"Active: {s.current_model}" if s.current_model
+                    else "Pick a model.",
+                    classes="section-help",
+                )
+                for i, name in enumerate(s.available_models):
+                    is_active = name == s.current_model
+                    label = ("● " if is_active else "") + name
+                    btn = Button(
+                        label,
+                        id=f"model-row-{i}",
+                        variant="primary" if is_active else "default",
+                        disabled=is_active,
+                    )
+                    if is_active:
+                        btn.add_class("active")
+                    with Horizontal(classes="server-row"):
+                        yield btn
 
             # --------------------------------------------------------------
             # Settings shortcuts — launchers for existing modals
@@ -208,6 +328,24 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             self.dismiss(self._nav("tools"))
         elif btn_id == "launch-voice-btn":
             self.dismiss(self._nav("voice"))
+        elif btn_id == "custom-server-btn":
+            self._apply_custom_server()
+        elif btn_id.startswith("server-row-"):
+            try:
+                idx = int(btn_id.removeprefix("server-row-"))
+            except ValueError:
+                return
+            if 0 <= idx < len(self._state.known_servers):
+                entry = self._state.known_servers[idx]
+                self.dismiss(self._switch(entry.url))
+        elif btn_id.startswith("model-row-"):
+            try:
+                idx = int(btn_id.removeprefix("model-row-"))
+            except ValueError:
+                return
+            if 0 <= idx < len(self._state.available_models):
+                name = self._state.available_models[idx]
+                self.dismiss(self._switch_model(name))
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -227,6 +365,31 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             clear_history=False,
             navigate_to=target,
         )
+
+    def _switch(self, url: str) -> OptionsModalResult:
+        return OptionsModalResult(
+            max_persisted=self._state.max_persisted,
+            clear_history=False,
+            navigate_to=None,
+            switch_server_to=url,
+        )
+
+    def _switch_model(self, name: str) -> OptionsModalResult:
+        return OptionsModalResult(
+            max_persisted=self._state.max_persisted,
+            clear_history=False,
+            navigate_to=None,
+            switch_model_to=name,
+        )
+
+    def _apply_custom_server(self) -> None:
+        try:
+            raw = self.query_one("#custom-server-input", Input).value.strip()
+        except Exception:
+            return
+        if not raw:
+            return
+        self.dismiss(self._switch(raw))
 
     def _read_max_persisted(self) -> int:
         try:
