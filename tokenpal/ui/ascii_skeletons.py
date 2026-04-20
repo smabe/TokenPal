@@ -34,6 +34,7 @@ from tokenpal.ui.ascii_zones import (
     apply_replace_zones,
     headwear_prefix,
     normalize_zones,
+    trailing_suffix,
 )
 
 # --- humanoid-tall: standard hero/adventurer build ---
@@ -349,11 +350,14 @@ def render(
     slots = {"c": "[/]", **palette}
     normalized = normalize_zones(skeleton_name, zones or {})
     prefix_rows = headwear_prefix(normalized.get("headwear", "none"), slots)
+    suffix_rows = trailing_suffix(
+        normalized.get("trailing", "none"), skeleton_name, slots,
+    )
     # splitlines preserves leading/trailing blanks (e.g. creature_small uses
     # blank rows as padding) where rstrip+split would drop the trailing one.
     body_rows = template.format(**slots).splitlines()
     body_rows = apply_replace_zones(body_rows, skeleton_name, normalized, slots)
-    return [_pad_line(line) for line in prefix_rows + body_rows]
+    return [_pad_line(line) for line in prefix_rows + body_rows + suffix_rows]
 
 
 def _preview() -> None:

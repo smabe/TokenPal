@@ -16,12 +16,16 @@ from tokenpal.ui.ascii_zones import (
     HEADWEAR_OPTIONS,
     HEADWEAR_OVERLAYS,
     HEADWEAR_RUBRIC,
+    TRAILING_OPTIONS,
+    TRAILING_OVERLAYS,
+    TRAILING_RUBRIC,
     _REPLACE_TARGETS,
     _ZONE_COMPAT,
     _ZONE_MODES,
     apply_replace_zones,
     headwear_prefix,
     normalize_zones,
+    trailing_suffix,
 )
 
 
@@ -69,7 +73,7 @@ def test_normalize_zones_ignores_unknown_zone_keys() -> None:
     out = normalize_zones("humanoid_tall", {"fictional_zone": "anything"})
     assert "fictional_zone" not in out
     assert set(out.keys()) == {
-        "headwear", "facial_hair", "body_motif", "eye_region",
+        "headwear", "facial_hair", "body_motif", "eye_region", "trailing",
     }
 
 
@@ -273,5 +277,53 @@ def test_eye_region_coerces_to_none_on_unsupported_skeleton() -> None:
     plain = render("robot_boxy", palette)
     with_illegal = render(
         "robot_boxy", palette, {"eye_region": "single_cyclops"},
+    )
+    assert plain == with_illegal
+
+
+# ---------------------------------------------------------------
+# trailing append-mode zone
+# ---------------------------------------------------------------
+
+
+def test_every_trailing_option_has_overlay_and_rubric() -> None:
+    for option in TRAILING_OPTIONS:
+        assert option in TRAILING_OVERLAYS
+        assert option in TRAILING_RUBRIC
+
+
+def test_trailing_zone_is_registered_as_append_mode() -> None:
+    assert _ZONE_MODES["trailing"] == "append"
+
+
+def test_trailing_suffix_none_returns_empty_list() -> None:
+    slots = {"c": "[/]", **_SAMPLE_PALETTES["animal_quadruped"]}
+    assert trailing_suffix("none", "animal_quadruped", slots) == []
+
+
+def test_tail_curly_adds_rows_below_animal_quadruped() -> None:
+    palette = _SAMPLE_PALETTES["animal_quadruped"]
+    plain = render("animal_quadruped", palette)
+    with_tail = render(
+        "animal_quadruped", palette, {"trailing": "tail_curly"},
+    )
+    assert len(with_tail) == len(plain) + 1
+    assert plain == with_tail[:len(plain)]
+
+
+def test_hair_drift_adds_rows_below_ghost_floating() -> None:
+    palette = _SAMPLE_PALETTES["ghost_floating"]
+    plain = render("ghost_floating", palette)
+    with_drift = render(
+        "ghost_floating", palette, {"trailing": "hair_drift"},
+    )
+    assert len(with_drift) == len(plain) + 1
+
+
+def test_trailing_coerces_to_none_on_unsupported_skeleton() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_illegal = render(
+        "humanoid_tall", palette, {"trailing": "tail_curly"},
     )
     assert plain == with_illegal

@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-ZoneMode = Literal["prepend", "replace"]
+ZoneMode = Literal["prepend", "replace", "append"]
 
 # Headwear overlays — multi-line Rich-markup strings prepended above a
 # skeleton's first row. Each uses the palette slots the renderer
@@ -190,6 +190,45 @@ EYE_REGION_RUBRIC: dict[str, str] = {
 }
 
 
+# Trailing overlays — append-mode content that adds rows BELOW the
+# skeleton. Mirror of headwear_prefix but on the bottom edge. Start
+# minimal: tail_curly (Rigby-style ringed tail) on animal_quadruped,
+# hair_drift (Marceline-style floating wisps) on ghost_floating.
+TRAILING_OVERLAYS: dict[str, dict[str, str]] = {
+    "none": {
+        "animal_quadruped": "",
+        "ghost_floating": "",
+    },
+    "tail_curly": {
+        "animal_quadruped": (
+            "{hair}   ∿∿∿∿{c}\n"
+        ),
+    },
+    "hair_drift": {
+        "ghost_floating": (
+            "{hair}  ░  ░  ░  ░  {c}\n"
+        ),
+    },
+}
+
+TRAILING_OPTIONS: tuple[str, ...] = tuple(TRAILING_OVERLAYS.keys())
+
+
+TRAILING_RUBRIC: dict[str, str] = {
+    "none": (
+        "no trailing element (DEFAULT — almost every character)"
+    ),
+    "tail_curly": (
+        "ringed/striped tail curling behind the body (Rigby, raccoon "
+        "and squirrel characters)"
+    ),
+    "hair_drift": (
+        "floating hair/wisps drifting down from a hovering body "
+        "(Marceline's hair, floating spirits)"
+    ),
+}
+
+
 BODY_MOTIF_RUBRIC: dict[str, str] = {
     "none": (
         "no chest/body detail (DEFAULT — most characters have plain "
@@ -229,6 +268,15 @@ _ZONE_MODES: dict[str, ZoneMode] = {
     "facial_hair": "replace",
     "body_motif": "replace",
     "eye_region": "replace",
+    "trailing": "append",
+}
+
+
+# Append-mode overlays — zone name → option → skeleton → template.
+# Mirror of _REPLACE_OVERLAYS for append mode. Kept parallel so adding
+# a second append zone is a single-line registration.
+_APPEND_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
+    "trailing": TRAILING_OVERLAYS,
 }
 
 
@@ -322,6 +370,16 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none", "oversized_spiral"},
         "winged": {"none"},
     },
+    "trailing": {
+        "humanoid_tall": {"none"},
+        "humanoid_stocky": {"none"},
+        "robot_boxy": {"none"},
+        "creature_small": {"none"},
+        "mystical_cloaked": {"none"},
+        "ghost_floating": {"none", "hair_drift"},
+        "animal_quadruped": {"none", "tail_curly"},
+        "winged": {"none"},
+    },
 }
 
 
@@ -355,6 +413,22 @@ def headwear_prefix(
     fail loudly in tests instead of rendering broken markup.
     """
     tmpl = HEADWEAR_OVERLAYS.get(headwear, "")
+    if not tmpl:
+        return []
+    return tmpl.format(**slots).splitlines()
+
+
+def trailing_suffix(
+    trailing: str, skeleton: str, slots: dict[str, str],
+) -> list[str]:
+    """Return rendered rows appended BELOW a skeleton's body.
+
+    Mirror of ``headwear_prefix`` for append-mode zones. The trailing
+    overlays live in a zone→option→skeleton nested dict because a tail
+    has to match the skeleton's footprint (a quadruped tail vs a ghost
+    wisp drift different in shape).
+    """
+    tmpl = TRAILING_OVERLAYS.get(trailing, {}).get(skeleton, "")
     if not tmpl:
         return []
     return tmpl.format(**slots).splitlines()

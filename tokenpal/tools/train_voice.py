@@ -47,6 +47,7 @@ from tokenpal.ui.ascii_zones import (
     EYE_REGION_RUBRIC,
     FACIAL_HAIR_RUBRIC,
     HEADWEAR_RUBRIC,
+    TRAILING_RUBRIC,
     normalize_zones,
     rubric_block,
 )
@@ -394,7 +395,7 @@ _DEFAULT_CLASSIFICATION: dict = {
     "mouth": "▽",
     "zones": {
         "headwear": "none", "facial_hair": "none",
-        "body_motif": "none", "eye_region": "none",
+        "body_motif": "none", "eye_region": "none", "trailing": "none",
     },
 }
 
@@ -516,13 +517,17 @@ def _build_classifier_prompt(
         + 'character picks this. Only override for characters with '
         + 'truly unusual eye treatments on screen:\n'
         + rubric_block(EYE_REGION_RUBRIC)
+        + 'Pick ONE trailing zone. "none" is fronted — only override for '
+        + 'characters with a distinctive trailing element (tail, '
+        + 'drifting hair):\n'
+        + rubric_block(TRAILING_RUBRIC)
         + 'Output ONLY this JSON, no prose:\n'
         + '{"skeleton":"...","palette":{"hair":"#rrggbb",'
         + '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
         + '"shadow":"#rrggbb","highlight":"#rrggbb"},'
         + '"eye":"...","mouth":"...",'
         + '"zones":{"headwear":"none","facial_hair":"none",'
-        + '"body_motif":"none","eye_region":"none"}}'
+        + '"body_motif":"none","eye_region":"none","trailing":"none"}}'
     )
 
 
