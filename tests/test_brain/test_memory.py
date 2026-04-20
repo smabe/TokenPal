@@ -423,6 +423,85 @@ class TestResearchCache:
         assert store.get_latest_research(3600) is None
         assert store.get_latest_research(10800) is not None
 
+    def test_append_research_sources_dedups_and_caps(
+        self, store: MemoryStore,
+    ) -> None:
+        """Supplemental refine appends new sources to the cached row;
+        canonical-URL dedup prevents re-adding an existing source, and the
+        cap truncates the oldest/tail so growth is bounded across many
+        refines."""
+        existing = (
+            '[{"number": 1, "url": "https://a.example", "title": "a"},'
+            ' {"number": 2, "url": "https://b.example", "title": "b"}]'
+        )
+        store.cache_research_answer("qh", "q", "a", existing)
+
+        new = [
+            # Dup of existing (tracking-param tail should be stripped by
+            # canonical-URL before compare).
+            {"number": 3, "url": "https://a.example?utm_source=foo", "title": "dup"},
+            # Fresh URLs.
+            {"number": 4, "url": "https://c.example", "title": "c"},
+            {"number": 5, "url": "https://d.example", "title": "d"},
+        ]
+        added = store.append_research_sources("qh", new, cap=10)
+        assert added == 2  # only c + d, a was dup
+
+        # Read back and verify order: original pool first, appended at tail.
+        hit = store.get_latest_research(3600)
+        assert hit is not None
+        import json as _json
+        parsed = _json.loads(hit[2])
+        assert [s["url"] for s in parsed] == [
+            "https://a.example",
+            "https://b.example",
+            "https://c.example",
+            "https://d.example",
+        ]
+
+    def test_append_research_sources_enforces_cap(
+        self, store: MemoryStore,
+    ) -> None:
+        """When total after append exceeds cap, the tail (newest
+        supplemental) is truncated so the original research pool wins."""
+        existing = (
+            '[{"url": "https://a.example"},'
+            ' {"url": "https://b.example"},'
+            ' {"url": "https://c.example"}]'
+        )
+        store.cache_research_answer("qh", "q", "a", existing)
+
+        new = [{"url": f"https://new{i}.example"} for i in range(5)]
+        added = store.append_research_sources("qh", new, cap=5)
+        assert added == 5  # all 5 are fresh
+
+        hit = store.get_latest_research(3600)
+        assert hit is not None
+        import json as _json
+        parsed = _json.loads(hit[2])
+        assert len(parsed) == 5  # capped
+        # Original pool preserved at the head.
+        assert parsed[0]["url"] == "https://a.example"
+        assert parsed[1]["url"] == "https://b.example"
+        assert parsed[2]["url"] == "https://c.example"
+
+    def test_append_research_sources_missing_row_returns_zero(
+        self, store: MemoryStore,
+    ) -> None:
+        added = store.append_research_sources(
+            "nonexistent", [{"url": "https://x.example"}], cap=10,
+        )
+        assert added == 0
+
+    def test_append_research_sources_zero_cap_noop(
+        self, store: MemoryStore,
+    ) -> None:
+        store.cache_research_answer("qh", "q", "a", "[]")
+        added = store.append_research_sources(
+            "qh", [{"url": "https://x.example"}], cap=0,
+        )
+        assert added == 0
+
 
 # ------------------------------------------------------------------
 # LLM throughput estimator persistence

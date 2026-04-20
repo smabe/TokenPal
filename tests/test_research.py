@@ -1052,15 +1052,17 @@ async def test_refine_calls_cloud_with_combined_prompt() -> None:
         Source(number=1, url="https://ex", title="t",
                excerpt="source text about pillows", backend="duckduckgo"),
     ]
-    result, raw, tokens = await runner.refine(
+    outcome = await runner.refine(
         original_question="best pillow",
         prior_answer="Previous answer here.",
         sources=sources,
         follow_up="what about side sleepers?",
     )
-    assert result is not None
-    assert result.kind == "factual"
-    assert tokens == 60
+    assert outcome.result is not None
+    assert outcome.result.kind == "factual"
+    assert outcome.tokens_used == 60
+    assert outcome.new_sources == []
+    assert outcome.supplemental_stop == "none"
     assert len(cloud.calls) == 1
     prompt = cloud.calls[0]["prompt"]
     assert "best pillow" in prompt  # original question
@@ -1086,6 +1088,291 @@ async def test_refine_without_cloud_backend_raises() -> None:
             follow_up="f",
         )
     assert exc.value.kind == "not_configured"
+
+
+class _ScriptedCloud:
+    """Cloud stand-in that returns a different response per call, so the
+    two refine passes can be asserted independently."""
+
+    def __init__(self, responses: list[LLMResponse]) -> None:
+        self.model = "claude-haiku-4-5"
+        self._responses = list(responses)
+        self.calls: list[dict[str, Any]] = []
+
+    def synthesize(self, prompt: str, **kwargs: Any) -> LLMResponse:
+        self.calls.append({"prompt": prompt, **kwargs})
+        if not self._responses:
+            return LLMResponse(
+                text="", tokens_used=0,
+                model_name="claude-haiku-4-5", latency_ms=0.0,
+            )
+        return self._responses.pop(0)
+
+
+async def _real_fetch_returns_body(_url: str) -> str | None:
+    """Fetch stub for supplemental refine tests: returns body text so the
+    Source extracts excerpt via the non-preloaded path."""
+    return "The VIC-20 used a MOS 6502 processor at about 1.1 MHz."
+
+
+@pytest.mark.asyncio
+async def test_refine_pool_sufficient_skips_supplemental(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """needs_fresh_search=false → no supplemental search, one cloud call,
+    new_sources is empty."""
+    cloud = _ScriptedCloud([
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "Covered [1].",'
+                ' "citations": [1], "needs_fresh_search": false}'
+            ),
+            tokens_used=50, model_name="claude-haiku-4-5", latency_ms=100.0,
+        ),
+    ])
+    # If supplemental *did* fire, this would raise — asserts "never called".
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("supplemental search must not fire")
+        ),
+    )
+
+    llm = _ScriptedLLM([])
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_real_fetch_returns_body, log_callback=log_cb,
+        cloud_backend=cloud,
+        cloud_search=CloudSearchConfig(refine_max_supplemental=2),
+    )
+    sources = [
+        Source(number=1, url="https://a.example", title="t",
+               excerpt="covers the follow-up", backend="duckduckgo"),
+    ]
+    outcome = await runner.refine(
+        original_question="q", prior_answer="prior",
+        sources=sources, follow_up="covered follow-up",
+    )
+
+    assert len(cloud.calls) == 1
+    assert outcome.new_sources == []
+    assert outcome.supplemental_queries == []
+    assert outcome.supplemental_stop == "none"
+    assert outcome.result is not None
+    assert outcome.result.kind == "factual"
+
+
+@pytest.mark.asyncio
+async def test_refine_pool_insufficient_fires_supplemental(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """needs_fresh_search=true → search fires, new sources fetched and
+    deduped, second cloud pass runs against expanded pool."""
+    cloud = _ScriptedCloud([
+        # First pass flags gap
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "need more",'
+                ' "citations": [], "needs_fresh_search": true,'
+                ' "gap_query": "VIC-20 CPU"}'
+            ),
+            tokens_used=40, model_name="claude-haiku-4-5", latency_ms=100.0,
+        ),
+        # Second pass answers using the fresh source
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "VIC-20 used MOS 6502 [2].",'
+                ' "citations": [2], "needs_fresh_search": false}'
+            ),
+            tokens_used=60, model_name="claude-haiku-4-5", latency_ms=150.0,
+        ),
+    ])
+
+    # One of the supplemental hits is a dup of the cached pool; the other is
+    # fresh. Dedup should keep only the fresh one.
+    search_calls: list[tuple[str, str]] = []
+
+    def _fake_search(q: str, backend: str = "duckduckgo", limit: int = 5, **_: Any):
+        search_calls.append((q, backend))
+        return [
+            _hit("https://cached.example", "dup", "dup body"),
+            _hit("https://fresh.example", "fresh", "vic 20 fresh snippet"),
+        ]
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many", _fake_search,
+    )
+
+    llm = _ScriptedLLM([])
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_real_fetch_returns_body, log_callback=log_cb,
+        cloud_backend=cloud,
+        cloud_search=CloudSearchConfig(refine_max_supplemental=2),
+    )
+    sources = [
+        Source(number=1, url="https://cached.example", title="c",
+               excerpt="c64 cpu", backend="duckduckgo"),
+    ]
+    outcome = await runner.refine(
+        original_question="c64 cpu", prior_answer="prior",
+        sources=sources, follow_up="what about the vic 20?",
+    )
+
+    assert len(cloud.calls) == 2, "supplemental must trigger a second cloud pass"
+    assert outcome.supplemental_queries == ["VIC-20 CPU"]
+    assert outcome.supplemental_stop == "ok"
+    assert len(outcome.new_sources) == 1
+    assert outcome.new_sources[0].url == "https://fresh.example"
+    # Fresh source continues the numbering after the cached pool.
+    assert outcome.new_sources[0].number == 2
+    # Second synth's result wins.
+    assert outcome.result is not None
+    assert "MOS 6502" in outcome.result.answer
+    # Expanded marker range reached the synth: [1]..[2]
+    assert "[1]..[2]" in cloud.calls[1]["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_refine_supplemental_no_new_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All supplemental hits dup the cached pool → supplemental_stop flips
+    to 'no_new_urls', second synth does NOT fire, first-pass result is
+    returned as-is."""
+    cloud = _ScriptedCloud([
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "need more",'
+                ' "citations": [], "needs_fresh_search": true,'
+                ' "gap_query": "vic 20"}'
+            ),
+            tokens_used=40, model_name="claude-haiku-4-5", latency_ms=100.0,
+        ),
+    ])
+
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda *_a, **_kw: [
+            _hit("https://cached.example", "dup", "dup"),
+        ],
+    )
+
+    llm = _ScriptedLLM([])
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_real_fetch_returns_body, log_callback=log_cb,
+        cloud_backend=cloud,
+        cloud_search=CloudSearchConfig(refine_max_supplemental=2),
+    )
+    sources = [
+        Source(number=1, url="https://cached.example", title="c",
+               excerpt="c64", backend="duckduckgo"),
+    ]
+    outcome = await runner.refine(
+        original_question="q", prior_answer="p",
+        sources=sources, follow_up="follow",
+    )
+
+    assert len(cloud.calls) == 1, "second synth must not fire on no new URLs"
+    assert outcome.supplemental_stop == "no_new_urls"
+    assert outcome.new_sources == []
+    assert outcome.supplemental_queries == ["vic 20"]
+
+
+@pytest.mark.asyncio
+async def test_refine_supplemental_fetch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh URLs found but every fetch returns None → supplemental_stop
+    is 'fetch_failed', second synth doesn't fire."""
+    cloud = _ScriptedCloud([
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "need more",'
+                ' "citations": [], "needs_fresh_search": true,'
+                ' "gap_query": "vic 20"}'
+            ),
+            tokens_used=40, model_name="claude-haiku-4-5", latency_ms=100.0,
+        ),
+    ])
+
+    # Empty text so _read() can't fall back to the snippet; combined with
+    # a failing fetch this forces _read to return None for every hit.
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda *_a, **_kw: [
+            _hit("https://fresh.example", "fresh", ""),
+        ],
+    )
+
+    async def _fetch_fail(_url: str) -> str | None:
+        return None
+
+    llm = _ScriptedLLM([])
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_fetch_fail, log_callback=log_cb,
+        cloud_backend=cloud,
+        cloud_search=CloudSearchConfig(refine_max_supplemental=2),
+    )
+    sources = [
+        Source(number=1, url="https://cached.example", title="c",
+               excerpt="snippet", backend="duckduckgo"),
+    ]
+    outcome = await runner.refine(
+        original_question="q", prior_answer="p",
+        sources=sources, follow_up="follow",
+    )
+
+    assert len(cloud.calls) == 1
+    assert outcome.supplemental_stop == "fetch_failed"
+    assert outcome.new_sources == []
+
+
+@pytest.mark.asyncio
+async def test_refine_max_supplemental_zero_disables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """refine_max_supplemental=0 → supplemental path is bypassed even when
+    the cloud flags needs_fresh_search=true. Mirrors today's re-synth-only
+    behavior for users who don't want extra searches on refines."""
+    cloud = _ScriptedCloud([
+        LLMResponse(
+            text=(
+                '{"kind": "factual", "answer": "need more",'
+                ' "citations": [], "needs_fresh_search": true,'
+                ' "gap_query": "vic 20"}'
+            ),
+            tokens_used=40, model_name="claude-haiku-4-5", latency_ms=100.0,
+        ),
+    ])
+    monkeypatch.setattr(
+        "tokenpal.brain.research.search_many",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("search must not fire when cap=0")
+        ),
+    )
+
+    llm = _ScriptedLLM([])
+    _, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm, fetch_url=_real_fetch_returns_body, log_callback=log_cb,
+        cloud_backend=cloud,
+        cloud_search=CloudSearchConfig(refine_max_supplemental=0),
+    )
+    sources = [
+        Source(number=1, url="https://cached.example", title="c",
+               excerpt="snippet", backend="duckduckgo"),
+    ]
+    outcome = await runner.refine(
+        original_question="q", prior_answer="p",
+        sources=sources, follow_up="follow",
+    )
+
+    assert len(cloud.calls) == 1
+    assert outcome.supplemental_stop == "none"
+    assert outcome.new_sources == []
 
 
 @pytest.mark.asyncio
@@ -1490,6 +1777,94 @@ async def test_default_backend_is_ddg_when_cloud_search_disabled(
     await runner.run("q?")
     # Even though planner said "tavily", dispatch fell back to duckduckgo.
     assert call_log == ["duckduckgo"]
+
+
+@pytest.mark.asyncio
+async def test_default_backend_precedence_tavily_brave_ddg(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_default_backend follows Tavily > Brave > DDG precedence.
+
+    Tavily wins when active because preloaded content skips the local
+    fetch stage. Brave takes over when only its key is set (presence of
+    key = active). DDG is the floor when neither is keyed.
+
+    Runner's default-backend choice drives both the planner-omitted-
+    backend path AND /refine supplemental search, so covering the three
+    precedence cases here pins behavior for both call sites.
+    """
+    llm = _ScriptedLLM([])
+
+    # (cloud_search_enabled, tavily_key, brave_key, expected)
+    cases = [
+        (True, "tv-x", "bv-y", "tavily"),   # both keyed, tavily wins
+        (True, "tv-x", "", "tavily"),       # tavily only
+        (False, "", "bv-y", "brave"),       # brave only
+        (False, "", "", "duckduckgo"),      # neither
+        # cloud_search disabled but tavily key present → tavily inactive,
+        # brave still wins over DDG when keyed.
+        (False, "tv-x", "bv-y", "brave"),
+    ]
+    for cs_enabled, tavily_key, brave_key, expected in cases:
+        keys: dict[str, str] = {}
+        if tavily_key:
+            keys["tavily"] = tavily_key
+        if brave_key:
+            keys["brave"] = brave_key
+        runner = ResearchRunner(
+            llm=llm,
+            fetch_url=_noop_fetch,
+            log_callback=(lambda *_a, **_kw: None),
+            cloud_search=CloudSearchConfig(enabled=cs_enabled),
+            api_keys=keys,
+        )
+        assert runner._default_backend() == expected, (
+            f"cs_enabled={cs_enabled} tavily={bool(tavily_key)} "
+            f"brave={bool(brave_key)} expected={expected} "
+            f"got={runner._default_backend()}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_brave_routes_via_default_backend_when_planner_omits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Planner emits a query WITHOUT an explicit backend; with Brave keyed
+    and Tavily off, dispatch actually fires the Brave backend. This
+    exercises the full _default_backend → _resolve_backend → _search_many
+    path that /refine's supplemental search uses."""
+    llm = _ScriptedLLM([
+        _ok('[{"query": "q1"}]', tokens=50),  # no explicit backend
+        _ok('{"kind": "factual", "answer": "A [1].", "citations": [1]}',
+            tokens=60),
+    ])
+
+    call_log: list[str] = []
+
+    def fake_search_many(q, backend="duckduckgo", limit=5, **_):
+        call_log.append(backend)
+        # Return ≥ _THIN_POOL_THRESHOLD sources so the DDG top-up
+        # doesn't fire — we want to pin routing, not pool-sizing behavior.
+        return [
+            _hit("https://brave1", "t1", "b1", "brave"),
+            _hit("https://brave2", "t2", "b2", "brave"),
+            _hit("https://brave3", "t3", "b3", "brave"),
+        ]
+
+    monkeypatch.setattr("tokenpal.brain.research.search_many", fake_search_many)
+
+    logs, log_cb = _logs()
+    runner = ResearchRunner(
+        llm=llm,
+        fetch_url=_noop_fetch,
+        log_callback=log_cb,
+        max_queries=1,
+        max_fetches=3,
+        cloud_search=CloudSearchConfig(enabled=False),  # tavily off
+        api_keys={"brave": "BSA-test"},
+    )
+    await runner.run("q?")
+    assert call_log == ["brave"]
 
 
 def test_parse_planner_output_carries_backend_field() -> None:

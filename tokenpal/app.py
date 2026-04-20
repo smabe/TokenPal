@@ -534,6 +534,7 @@ def main() -> None:
             brave_key_fingerprint=(
                 fingerprint(brave_key) if brave_key else None
             ),
+            refine_max_supplemental=cs.refine_max_supplemental,
         )
 
         def on_save(result: CloudModalResult | None) -> None:
@@ -982,7 +983,8 @@ def main() -> None:
         if not follow_up:
             return CommandResult(
                 "Usage: /refine <follow-up question>. Re-analyzes the most "
-                "recent research's sources with cloud synth - no new search."
+                "recent research's sources with cloud synth; may fetch more "
+                "sources if the cached pool doesn't cover the follow-up."
             )
         gate_err = _refine_gate_error(config)
         if gate_err is not None:
@@ -1630,6 +1632,26 @@ def _apply_cloud_modal_result(result: Any, config: TokenPalConfig) -> None:
             set_brave_key(result.brave_new_api_key)
         except ValueError as e:
             log.warning("cloud modal: bad Brave key shape: %s", e)
+
+    # ----------------------------------------------------------------
+    # /refine supplemental cap
+    # ----------------------------------------------------------------
+    refine_max = max(0, int(result.refine_max_supplemental))
+    if refine_max != cs.refine_max_supplemental:
+        try:
+            from tokenpal.config.toml_writer import update_config
+
+            def _mutate_refine(data: dict[str, Any]) -> None:
+                data.setdefault("cloud_search", {})[
+                    "refine_max_supplemental"
+                ] = refine_max
+
+            update_config(_mutate_refine)
+        except OSError as e:
+            log.warning(
+                "cloud modal: could not persist refine_max_supplemental: %s", e,
+            )
+        cs.refine_max_supplemental = refine_max
 
     log.info(
         "cloud modal: enabled=%s synth=%s plan=%s deep=%s search=%s "

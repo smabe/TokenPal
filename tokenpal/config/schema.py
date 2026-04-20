@@ -393,6 +393,15 @@ class CloudSearchConfig:
     # inside the downstream max_fetches=5 pool comfortably).
     max_results: int = 6
     timeout_s: float = 15.0
+    # When /refine's first cloud pass flags the cached pool as insufficient
+    # for the follow-up, fire up to N supplemental searches and re-synth
+    # once. 0 disables supplemental (pure re-synth, today's behavior).
+    refine_max_supplemental: int = 2
+    # Cap on the cached-source pool for a single research question. Prevents
+    # unbounded growth when a user runs many supplemental refines on the
+    # same question. Oldest supplemental sources evict first; the original
+    # research pool is preserved as long as it fits under the cap.
+    refine_cache_max_sources: int = 15
 
 
 @dataclass

@@ -54,6 +54,9 @@ class CloudModalState:
     tavily_key_fingerprint: str | None = None
     # Brave (key-only; no runtime flag — presence of key = active)
     brave_key_fingerprint: str | None = None
+    # /refine supplemental search cap. 0 disables the supplemental path
+    # (refine behaves as pure re-synth, no new search).
+    refine_max_supplemental: int = 2
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,8 @@ class CloudModalResult:
     tavily_new_api_key: str | None = None
     # Brave
     brave_new_api_key: str | None = None
+    # /refine supplemental cap (0 disables supplemental search).
+    refine_max_supplemental: int = 2
 
 
 class CloudModal(ModalScreen[CloudModalResult | None]):
@@ -312,6 +317,23 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
                     id="brave-api-key-input",
                 )
 
+            # ------------------------------------------------------------
+            # /refine supplemental cap
+            # ------------------------------------------------------------
+            yield Label("/refine behavior", classes="section-header")
+            yield Label(
+                "When the cached source pool can't answer a follow-up, "
+                "/refine may fire a small supplemental search. Cap here "
+                "bounds cost. 0 disables supplemental entirely.",
+                classes="section-help",
+            )
+            yield Input(
+                value=str(max(0, int(s.refine_max_supplemental))),
+                placeholder="2",
+                id="refine-max-supplemental-input",
+                restrict=r"[0-9]*",
+            )
+
             with Horizontal(id="cloud-buttons"):
                 yield Button("Cancel", id="cancel-btn", variant="default")
                 yield Button("Save", id="save-btn", variant="primary")
@@ -448,6 +470,23 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             tavily_enabled = self._state.tavily_enabled
         tavily_depth = self._selected_tavily_depth()
 
+        # /refine supplemental cap. Input restrict="[0-9]*" keeps it
+        # numeric, but an empty string means "leave unchanged", so fall
+        # back to the state default rather than 0.
+        try:
+            raw_cap = self.query_one(
+                "#refine-max-supplemental-input", Input,
+            ).value.strip()
+        except Exception:
+            raw_cap = ""
+        if raw_cap == "":
+            refine_max = self._state.refine_max_supplemental
+        else:
+            try:
+                refine_max = max(0, int(raw_cap))
+            except ValueError:
+                refine_max = self._state.refine_max_supplemental
+
         return CloudModalResult(
             enabled=enabled,
             research_synth=synth,
@@ -460,6 +499,7 @@ class CloudModal(ModalScreen[CloudModalResult | None]):
             tavily_search_depth=tavily_depth,
             tavily_new_api_key=tavily_new_key,
             brave_new_api_key=brave_new_key,
+            refine_max_supplemental=refine_max,
         )
 
     def _collect_key_input(self, selector: str) -> str | None:

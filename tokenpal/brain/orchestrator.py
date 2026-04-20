@@ -2038,15 +2038,39 @@ class Brain:
             self._status_callback("refining...")
         log_cb(f"> refine: {follow_up}")
 
+        # Supplemental refine needs a real fetch + search path: when the
+        # first cloud pass flags a gap, the runner calls _search_many +
+        # _read_all on the cached source pool's cousins. Mirror the
+        # research-side wiring so tavily/DDG routing + keys + timeouts
+        # all behave identically.
+        from tokenpal.actions.research.fetch_url import fetch_and_extract
+        from tokenpal.config.secrets import load_search_keys
+
+        cs_cfg = self._research.cloud_search_config
+        api_keys = load_search_keys(bool(cs_cfg and cs_cfg.enabled))
+
+        async def _fetch(url: str) -> str | None:
+            try:
+                return await fetch_and_extract(
+                    url, timeout_s=self._research.config.per_fetch_timeout_s
+                )
+            except Exception:
+                log.exception("fetch_and_extract raised during refine")
+                return None
+
         runner = ResearchRunner(
             llm=self._llm,
-            fetch_url=lambda _u: None,
+            fetch_url=_fetch,
             log_callback=log_cb,
             status_callback=self._status_callback,
+            per_search_timeout_s=self._research.config.per_search_timeout_s,
+            per_fetch_timeout_s=self._research.config.per_fetch_timeout_s,
             cloud_backend=cloud_backend,
+            cloud_search=cs_cfg,
+            api_keys=api_keys,
         )
         try:
-            result, raw_text, tokens = await runner.refine(
+            outcome = await runner.refine(
                 original_question=prior_question,
                 prior_answer=prior_answer,
                 sources=sources,
@@ -2062,16 +2086,75 @@ class Brain:
             self._mode = BrainMode.IDLE
             self._push_status()
 
+        # Expanded pool = cached sources + any new supplemental sources.
+        # Pass the expanded pool into finalize so citations above the
+        # original pool size still resolve.
+        expanded_sources = list(sources) + list(outcome.new_sources)
+
         # Reuse the same finalize logic that renders a synth result into
         # a human-readable answer with citations + repair.
         fake_session = ResearchSession(
-            question=follow_up, sources=sources, tokens_used=tokens,
+            question=follow_up,
+            sources=expanded_sources,
+            tokens_used=outcome.tokens_used,
             stopped_reason=ResearchStopReason.COMPLETE,
         )
-        fake_session.answer = runner._finalize_answer(result, raw_text, sources)
-        log.info("refine: cloud (%s), %d tokens, %.1fs age of source pool",
-                 cloud_backend.model, tokens, age_s)
-        log_cb(f"= {_format_research_summary(fake_session)}")
+        fake_session.answer = runner._finalize_answer(
+            outcome.result, outcome.raw_text, expanded_sources
+        )
+
+        # Write expanded pool back to research_cache so the next /refine
+        # sees the wider pool. Capped by refine_cache_max_sources.
+        if outcome.new_sources:
+            cap = max(1, int(
+                cs_cfg.refine_cache_max_sources if cs_cfg else 15
+            ))
+            question_hash = MemoryStore.research_cache_key(prior_question)
+            new_payload = [
+                {
+                    "number": s.number,
+                    "url": s.url,
+                    "title": s.title,
+                    "excerpt": s.excerpt,
+                    "backend": s.backend,
+                }
+                for s in outcome.new_sources
+            ]
+            added = self._memory.append_research_sources(
+                question_hash, new_payload, cap
+            )
+            log.info(
+                "refine: appended %d supplemental source(s) to cache "
+                "(cap=%d, stop=%s)",
+                added, cap, outcome.supplemental_stop,
+            )
+
+        log.info(
+            "refine: cloud (%s), %d tokens, %.1fs age of source pool, stop=%s",
+            cloud_backend.model, outcome.tokens_used, age_s,
+            outcome.supplemental_stop,
+        )
+
+        # Status line: supplemental adds "(supplemental: N quer(ies), M new
+        # source(s))" so users can see when /refine went wide vs stayed
+        # cached.
+        counts: list[tuple[str, int]] = [
+            ("quer(ies)", len(outcome.supplemental_queries)),
+            ("source(s)", len(expanded_sources)),
+        ]
+        if outcome.supplemental_queries:
+            counts.append(("new source(s)", len(outcome.new_sources)))
+        tail_note = ""
+        if outcome.supplemental_stop == "no_new_urls":
+            tail_note = " (supplemental: all dup URLs)"
+        elif outcome.supplemental_stop == "fetch_failed":
+            tail_note = " (supplemental: fetches failed)"
+        elif outcome.supplemental_stop == "ok":
+            tail_note = " (supplemental)"
+        summary_line = _format_session_summary(
+            fake_session, _RESEARCH_REASON_LABELS, counts
+        ) + tail_note
+        log_cb(f"= {summary_line}")
         final = fake_session.answer.strip() or "(no refined answer)"
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()

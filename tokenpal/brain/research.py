@@ -449,8 +449,21 @@ class ResearchRunner:
     # ---- Stage 2: search --------------------------------------------------
 
     def _default_backend(self) -> BackendName:
-        """Runtime default when a planned query has no explicit backend."""
-        return "tavily" if self._cloud_search_active else "duckduckgo"
+        """Runtime default when a planned query has no explicit backend.
+
+        Precedence: Tavily > Brave > DDG. Tavily wins when active because
+        its preloaded content means fewer downstream fetches; Brave takes
+        over when only its key is set (presence-of-key = active contract).
+        This is the default chosen for planner queries that omit
+        ``backend`` AND for ``/refine`` supplemental searches (which call
+        this directly), so flipping the precedence here unlocks both at
+        once.
+        """
+        if self._cloud_search_active:
+            return "tavily"
+        if self._api_keys.get("brave"):
+            return "brave"
+        return "duckduckgo"
 
     def _resolve_backend(self, planned: str) -> BackendName:
         """Normalize planner/explicit backend choice + fall back safely when
@@ -855,44 +868,168 @@ class ResearchRunner:
         prior_answer: str,
         sources: list[Source],
         follow_up: str,
-    ) -> tuple[SynthResult | None, str, int]:
+    ) -> RefineOutcome:
         """Re-synthesize against cached sources with a user follow-up.
 
-        Requires a cloud backend - the whole point of /refine is to get a
-        smarter re-analysis than local can manage. Returns the same shape
-        as _synthesize so the renderer handles both identically.
+        Two-pass design: first cloud call parses against ``SYNTH_SCHEMA_REFINE``;
+        if the model flags ``needs_fresh_search`` and supplies a ``gap_query``,
+        we fire up to ``refine_max_supplemental`` supplemental searches (bounded
+        by the cloud_search config), dedup against the cached pool via
+        ``_canonical_url``, fetch surviving hits, then re-synth with the
+        expanded pool. One supplemental round max.
+
+        Requires a cloud backend - /refine is cloud-only.
         """
         if self._cloud_backend is None:
             raise CloudBackendError(
                 "refine requires /cloud enable (no cloud backend configured)",
                 kind="not_configured",
             )
-        sources_block = "\n\n".join(
-            f"[{s.number}] {s.url}\n{s.excerpt}" for s in sources
+
+        def _build_prompt(pool: list[Source]) -> str:
+            sources_block = "\n\n".join(
+                f"[{s.number}] {s.url}\n{s.excerpt}" for s in pool
+            )
+            marker_range = f"[1]..[{len(pool)}]"
+            return _REFINE_PROMPT.format(
+                sources_block=sources_block,
+                original_question=original_question,
+                prior_answer=prior_answer,
+                follow_up=follow_up,
+                marker_range=marker_range,
+            )
+
+        cloud = self._cloud_backend  # captured: checked above, non-None
+
+        async def _cloud_pass(prompt: str) -> tuple[str, int, str | None]:
+            log.info(
+                "research refine: dispatching to cloud (%s)",
+                cloud.model,
+            )
+            response = await asyncio.to_thread(
+                cloud.synthesize,
+                prompt,
+                max_tokens=4000,
+                json_schema=SYNTH_SCHEMA_REFINE,
+            )
+            log.info(
+                "research refine: cloud returned %d tokens in %.1fs",
+                response.tokens_used,
+                response.latency_ms / 1000.0,
+            )
+            if response.finish_reason == "length":
+                log.warning("research refine truncated at max_tokens=4000")
+            return response.text.strip(), response.tokens_used, response.finish_reason
+
+        raw_text, tokens_used, _ = await _cloud_pass(_build_prompt(sources))
+        result, needs_fresh, gap_query = _parse_refine_synth_json(raw_text)
+
+        max_supp = max(0, int(self._cloud_search.refine_max_supplemental))
+        if not needs_fresh or not gap_query or max_supp == 0:
+            return RefineOutcome(
+                result=result,
+                raw_text=raw_text,
+                tokens_used=tokens_used,
+                new_sources=[],
+                supplemental_queries=[],
+                supplemental_stop="none",
+            )
+
+        log.info(
+            "research refine: needs_fresh_search=true, gap_query=%r, "
+            "firing supplemental (max=%d)",
+            gap_query, max_supp,
         )
-        marker_range = f"[1]..[{len(sources)}]"
-        prompt = _REFINE_PROMPT.format(
-            sources_block=sources_block,
-            original_question=original_question,
-            prior_answer=prior_answer,
-            follow_up=follow_up,
-            marker_range=marker_range,
+
+        seen_urls: set[str] = {
+            _canonical_url(s.url) for s in sources if s.url
+        }
+        backend = self._default_backend()
+        hits = await self._search_many(gap_query, backend, limit=max_supp)
+        fresh_hits: list[SearchResult] = []
+        for hit in hits:
+            if not hit.source_url:
+                continue
+            key = _canonical_url(hit.source_url)
+            if key in seen_urls:
+                continue
+            seen_urls.add(key)
+            fresh_hits.append(hit)
+            if len(fresh_hits) >= max_supp:
+                break
+
+        if not fresh_hits:
+            log.info("research refine: supplemental returned no new URLs")
+            return RefineOutcome(
+                result=result,
+                raw_text=raw_text,
+                tokens_used=tokens_used,
+                new_sources=[],
+                supplemental_queries=[gap_query],
+                supplemental_stop="no_new_urls",
+            )
+
+        # Number continues after the cached pool so citations stay stable
+        # when the orchestrator renders "[1]..[N+M]".
+        start_num = (max((s.number for s in sources), default=0)) + 1
+        numbered = list(enumerate(fresh_hits, start=start_num))
+        read_tasks = [self._read(num, hit) for num, hit in numbered]
+        read_results = await asyncio.gather(*read_tasks, return_exceptions=True)
+        new_sources: list[Source] = []
+        for item in read_results:
+            if isinstance(item, BaseException):
+                log.debug("research refine: supplemental fetch failed: %s", item)
+                continue
+            if isinstance(item, Source):
+                new_sources.append(item)
+
+        if not new_sources:
+            log.info(
+                "research refine: supplemental fetched %d hit(s) but all "
+                "failed to extract", len(fresh_hits),
+            )
+            return RefineOutcome(
+                result=result,
+                raw_text=raw_text,
+                tokens_used=tokens_used,
+                new_sources=[],
+                supplemental_queries=[gap_query],
+                supplemental_stop="fetch_failed",
+            )
+
+        expanded = list(sources) + new_sources
+        second_raw, second_tokens, _ = await _cloud_pass(_build_prompt(expanded))
+        second_result, second_needs, _ = _parse_refine_synth_json(second_raw)
+        if second_needs:
+            log.warning(
+                "research refine: second synth still flags needs_fresh_search "
+                "— not looping (one supplemental round max)"
+            )
+        return RefineOutcome(
+            result=second_result or result,
+            raw_text=second_raw or raw_text,
+            tokens_used=tokens_used + second_tokens,
+            new_sources=new_sources,
+            supplemental_queries=[gap_query],
+            supplemental_stop="ok",
         )
-        log.info("research refine: dispatching to cloud (%s)",
-                 self._cloud_backend.model)
-        response = await asyncio.to_thread(
-            self._cloud_backend.synthesize,
-            prompt,
-            max_tokens=4000,
-            json_schema=SYNTH_SCHEMA,
-        )
-        log.info("research refine: cloud returned %d tokens in %.1fs",
-                 response.tokens_used, response.latency_ms / 1000.0)
-        raw_text = response.text.strip()
-        if response.finish_reason == "length":
-            log.warning("research refine truncated at max_tokens=4000")
-        result = _parse_synth_json(raw_text)
-        return result, raw_text, response.tokens_used
+
+
+@dataclass
+class RefineOutcome:
+    """Return value of Research.refine(). Carries both the final synth result
+    and the telemetry the orchestrator needs to render the supplemental
+    status line and write expanded sources back to research_cache."""
+
+    result: SynthResult | None
+    raw_text: str
+    tokens_used: int
+    new_sources: list[Source]
+    supplemental_queries: list[str]
+    # One of: "none" (no supplemental attempted), "no_new_urls" (all dups),
+    # "fetch_failed" (hits returned but extraction failed), "ok" (second
+    # synth ran against expanded pool).
+    supplemental_stop: Literal["none", "no_new_urls", "fetch_failed", "ok"]
 
 
 _JSON_ARRAY_RE = re.compile(r"\[[^\[\]]*(?:\[[^\[\]]*\][^\[\]]*)*\]", re.DOTALL)
@@ -976,6 +1113,51 @@ SYNTH_SCHEMA: dict[str, Any] = {
         },
         "answer": {"type": "string"},
         "citations": {"type": "array", "items": {"type": "integer"}},
+    },
+    "required": ["kind"],
+}
+
+
+# Refine variant: adds ``needs_fresh_search`` + ``gap_query`` so the refine
+# loop can decide whether to fire a supplemental search round. Kept
+# separate from SYNTH_SCHEMA so initial-synth + deep-mode contracts don't
+# accidentally inherit these fields (the orchestrator doesn't read them
+# anywhere else, and emitting them from the observation path is noise).
+SYNTH_SCHEMA_REFINE: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["comparison", "factual"]},
+        "picks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "citation": {"type": "integer"},
+                },
+                "required": ["name", "reason", "citation"],
+            },
+        },
+        "verdict": {
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"},
+                "citation": {"type": "integer"},
+            },
+            "required": ["text", "citation"],
+        },
+        "answer": {"type": "string"},
+        "citations": {"type": "array", "items": {"type": "integer"}},
+        # True when the cached source pool genuinely doesn't cover the
+        # follow-up's subject (topic pivot, or a drill-down into material
+        # none of the cited sources addresses). False when the answer was
+        # synthesizable from the existing excerpts.
+        "needs_fresh_search": {"type": "boolean"},
+        # A crisp search query to run when needs_fresh_search=true.
+        # Ignored when the flag is false. Should be a concise noun phrase
+        # + qualifier, not a full question (planner-style, not chat-style).
+        "gap_query": {"type": "string"},
     },
     "required": ["kind"],
 }
@@ -1132,7 +1314,43 @@ def _parse_synth_json(text: str) -> SynthResult | None:
             return result
 
 
-def _build_synth_result(parsed: dict[str, Any]) -> SynthResult | None:
+def _parse_refine_synth_json(
+    text: str,
+) -> tuple[SynthResult | None, bool, str]:
+    """Like ``_parse_synth_json`` but also extracts the refine-only
+    ``needs_fresh_search`` + ``gap_query`` fields. Returns
+    ``(result, needs_fresh_search, gap_query)``. When the model emits
+    needs_fresh_search=true with an empty placeholder answer, a
+    ``SynthResult`` is still returned so the caller can render fallback
+    text if the supplemental round also fails."""
+    if not text:
+        return None, False, ""
+    decoder = json.JSONDecoder()
+    cursor = 0
+    while True:
+        start = text.find("{", cursor)
+        if start == -1:
+            return None, False, ""
+        try:
+            parsed, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            cursor = start + 1
+            continue
+        cursor = start + 1
+        if not isinstance(parsed, dict):
+            continue
+        needs = bool(parsed.get("needs_fresh_search") or False)
+        gap = str(parsed.get("gap_query") or "").strip()
+        # Build result even when answer is the empty placeholder, so the
+        # caller can show the gap message if supplemental fetching fails.
+        result = _build_synth_result(parsed, allow_empty_answer=needs)
+        if result is not None or needs:
+            return result, needs, gap
+
+
+def _build_synth_result(
+    parsed: dict[str, Any], *, allow_empty_answer: bool = False,
+) -> SynthResult | None:
     kind = parsed.get("kind")
     if kind == "comparison":
         picks = [
@@ -1154,7 +1372,7 @@ def _build_synth_result(parsed: dict[str, Any]) -> SynthResult | None:
         return SynthResult(kind="comparison", picks=picks, verdict=verdict)
     if kind == "factual":
         answer = str(parsed.get("answer") or "").strip()
-        if not answer:
+        if not answer and not allow_empty_answer:
             return None
         citations = [
             int(c) for c in parsed.get("citations") or [] if isinstance(c, (int, float))
@@ -1442,8 +1660,10 @@ Question: {question}
 
 
 _REFINE_PROMPT = """You previously answered a research question using the
-numbered sources below. The user has a follow-up drilling into the same
-topic. Re-analyze the same sources through the lens of the follow-up.
+numbered sources below. The user has a follow-up. It may be a drill-down
+on the same topic, OR a pivot to adjacent subject matter the sources
+don't cover. Re-analyze what IS in the sources, then decide whether a
+fresh search is needed.
 
 Sources:
 {sources_block}
@@ -1455,7 +1675,8 @@ Previous answer (for context):
 
 Follow-up: {follow_up}
 
-Output STRICT JSON ONLY using the SAME two shapes as the original synth:
+Output STRICT JSON ONLY using the shapes below. All shapes also support
+two extra fields: ``needs_fresh_search`` (bool) and ``gap_query`` (string).
 
 For comparison / "best X" / "which X" follow-ups:
 {{
@@ -1463,21 +1684,33 @@ For comparison / "best X" / "which X" follow-ups:
   "picks": [
     {{"name": "<brand + model>", "reason": "<1-2 sentences re: follow-up>", "citation": <N>}}
   ],
-  "verdict": {{"text": "<2-3 sentences, name winner for THIS follow-up>", "citation": <N>}}
+  "verdict": {{"text": "<2-3 sentences, name winner for THIS follow-up>", "citation": <N>}},
+  "needs_fresh_search": false,
+  "gap_query": ""
 }}
 
-For factual / explanatory follow-ups, or when the sources don't cover the
-new angle:
-{{"kind": "factual", "answer": "<3-8 sentences>", "citations": [<N>, ...]}}
+For factual / explanatory follow-ups:
+{{
+  "kind": "factual",
+  "answer": "<3-8 sentences>",
+  "citations": [<N>, ...],
+  "needs_fresh_search": false,
+  "gap_query": ""
+}}
 
 Rules:
 - Use only citation markers in the range {marker_range}.
-- If the sources genuinely don't cover the follow-up angle, say so in the
-  factual shape and describe what's missing - do NOT invent picks from
-  training-data memory.
 - Every "name" in comparison picks MUST appear verbatim in some source's
   excerpt. No exceptions.
-- Every answer MUST cite at least one source.
+- Every answer MUST cite at least one source when needs_fresh_search=false.
+- Set needs_fresh_search=true ONLY when no source's excerpt contains
+  material addressing the follow-up's core subject. In that case, provide
+  a ``gap_query`` — a concise search phrase (noun phrase + qualifier, not
+  a full question) the system will run to find relevant sources. Keep
+  ``answer`` to a short honest placeholder ("Cached sources don't cover
+  X; searching for more...") and do NOT invent picks from training memory.
+- If the sources cover the follow-up even partially, prefer
+  needs_fresh_search=false and answer from what's there.
 """
 
 

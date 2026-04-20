@@ -1234,6 +1234,67 @@ class MemoryStore:
             return None
         return (answer, sources_json, age)
 
+    def append_research_sources(
+        self,
+        question_hash: str,
+        new_sources: list[dict[str, Any]],
+        cap: int,
+    ) -> int:
+        """Append supplemental sources to an existing research_cache row,
+        dedup by canonical URL, truncate to ``cap``. Returns the number of
+        sources added (0 when nothing new landed or the row is missing).
+
+        The original pool is preserved; supplemental sources are appended at
+        the tail. When total > cap, the tail (newest supplemental) is
+        trimmed, not the head, so the planner-chosen initial sources stay
+        intact.
+        """
+        if not self._enabled or not self._conn or cap <= 0 or not new_sources:
+            return 0
+        from tokenpal.brain.research import _canonical_url
+
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT sources_json FROM research_cache WHERE question_hash = ?",
+                (question_hash,),
+            ).fetchone()
+            if row is None:
+                return 0
+            try:
+                existing = json.loads(row[0]) if row[0] else []
+            except (ValueError, TypeError):
+                existing = []
+            if not isinstance(existing, list):
+                return 0
+            seen: set[str] = set()
+            for src in existing:
+                url = src.get("url") if isinstance(src, dict) else None
+                if url:
+                    seen.add(_canonical_url(url))
+            added = 0
+            for src in new_sources:
+                if not isinstance(src, dict):
+                    continue
+                url = src.get("url")
+                if not url:
+                    continue
+                key = _canonical_url(url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                existing.append(src)
+                added += 1
+            if added == 0:
+                return 0
+            if len(existing) > cap:
+                existing = existing[:cap]
+            self._conn.execute(
+                "UPDATE research_cache SET sources_json = ? WHERE question_hash = ?",
+                (json.dumps(existing), question_hash),
+            )
+            self._conn.commit()
+            return added
+
     def get_latest_research(
         self, max_age_s: float
     ) -> tuple[str, str, str, float] | None:
