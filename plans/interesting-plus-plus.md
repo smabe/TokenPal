@@ -156,5 +156,13 @@ The offline-floor rule (`memory_recall`) has the right shape but a blunt impleme
 - If only one thing is picked, it should be the **session-start churn** fix — highest leverage, smallest surface.
 - The `filter_response` swallow telemetry is a prerequisite for any rule-framing tuning work; without it you're flying blind.
 
+## Session churn — not a code bug
+
+68 `session_start` rows between 20:00-22:39 (none since). Traced back: `record_session_start()` has exactly one callsite at `app.py:115`, so every row is a real app boot. `session_end` rows match 1:1 — teardown was clean every time. Errors during the window were all `Freeform generation failed` / `httpx ConnectError`, caught by the brain loop's `log.exception` handler, did NOT crash the app.
+
+The actual trigger was the user's iteration pattern: rapid ctrl-C + relaunch while tuning `/model` and `/server` settings. Once the config stabilized at 22:39 (Qwen3-14B on localhost:11434), session stability returned — the currently running app has been the same session ever since.
+
+No fix needed. Parking for awareness: if future overnight sessions show similar churn WITHOUT a corresponding user-tuning window in chat_log, it's a real bug and session_start should be deferred until after the LLM connect probe succeeds.
+
 ## Parking lot
 (empty at start — append "ooh shiny" thoughts that surface mid-work for later)
