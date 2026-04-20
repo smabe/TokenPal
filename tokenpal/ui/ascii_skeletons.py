@@ -30,6 +30,8 @@ from __future__ import annotations
 from rich.console import Console
 from rich.text import Text
 
+from tokenpal.ui.ascii_zones import headwear_prefix, normalize_zones
+
 # --- humanoid-tall: standard hero/adventurer build ---
 # Finn, Mordecai, Marco, generic protagonist.
 HUMANOID_TALL = """\
@@ -210,8 +212,13 @@ SKELETONS: dict[str, str] = {
 
 
 # Palette keys every skeleton template references. The classifier in
-# train_voice.py imports this to validate LLM output.
-PALETTE_KEYS: tuple[str, ...] = ("hair", "skin", "outfit", "accent", "shadow")
+# train_voice.py imports this to validate LLM output. ``highlight`` is
+# the brighter-than-outfit tone used by zone overlays (crown gleam, wing
+# sheen, etc.) — existing body templates don't reference it directly yet
+# so older renders still work; it's additive.
+PALETTE_KEYS: tuple[str, ...] = (
+    "hair", "skin", "outfit", "accent", "shadow", "highlight",
+)
 
 
 # Sample palettes for the __main__ preview. Tests also import this.
@@ -222,6 +229,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#3da8e8]",     # blue shirt
         "accent": "[#ffd700]",     # gold buttons
         "shadow": "[#2a6fa5]",
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "▽",
     },
@@ -231,6 +239,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#ffffff]",     # lab coat
         "accent": "[#cccccc]",
         "shadow": "[#888888]",
+        "highlight": "[#ffffff]",
         "eye": "◉",
         "mouth": "▽",
     },
@@ -240,6 +249,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#6dbb5c]",     # BMO green
         "accent": "[#ff5555]",
         "shadow": "[#2e5a26]",
+        "highlight": "[#ffffff]",
         "eye": "◉",
         "mouth": "═",
     },
@@ -249,6 +259,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#8a5aa6]",
         "accent": "[#ffd700]",
         "shadow": "[#4e2e5e]",
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "ᗣ",
     },
@@ -258,6 +269,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#4a3a7a]",     # purple robe
         "accent": "[#ffd700]",     # gold trim
         "shadow": "[#241a3a]",
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "▽",
     },
@@ -276,6 +288,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#e09638]",     # darker belly fur
         "accent": "[#cc5500]",     # collar
         "shadow": "[#804a1e]",
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "ᗣ",
     },
@@ -285,6 +298,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#ffffff]",     # white robe
         "accent": "[#e0e0ff]",     # silver-blue wing feathers
         "shadow": "[#888888]",
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "▽",
     },
@@ -310,20 +324,31 @@ def _pad_line(line: str, width: int = CELL_WIDTH) -> str:
     return " " * left + line + " " * right
 
 
-def render(skeleton_name: str, palette: dict[str, str]) -> list[str]:
+def render(
+    skeleton_name: str,
+    palette: dict[str, str],
+    zones: dict[str, str] | None = None,
+) -> list[str]:
     """Substitute palette + glyphs into a skeleton template.
 
-    Returns the list of 14 markup lines, each normalized to ``CELL_WIDTH``
+    Returns the list of markup lines, each normalized to ``CELL_WIDTH``
     visible cells so the Textual overlay has zero edge-jitter between
     rows. Missing palette slots raise KeyError so bad palettes fail
     loudly in tests.
+
+    When ``zones`` carries ``headwear`` (or other future zone picks), the
+    matching overlay from ``ascii_zones`` is prepended to the rendered
+    frame. Total height grows by the overlay's row count; blink + talking
+    frames stay aligned because the overlay is constant across variants.
     """
     template = SKELETONS[skeleton_name]
     slots = {"c": "[/]", **palette}
+    normalized = normalize_zones(skeleton_name, zones or {})
+    prefix_rows = headwear_prefix(normalized.get("headwear", "none"), slots)
     # splitlines preserves leading/trailing blanks (e.g. creature_small uses
     # blank rows as padding) where rstrip+split would drop the trailing one.
-    rendered = template.format(**slots).splitlines()
-    return [_pad_line(line) for line in rendered]
+    body_rows = template.format(**slots).splitlines()
+    return [_pad_line(line) for line in prefix_rows + body_rows]
 
 
 def _preview() -> None:

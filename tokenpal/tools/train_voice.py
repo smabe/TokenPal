@@ -42,6 +42,7 @@ from tokenpal.tools.voice_profile import (
 )
 from tokenpal.ui.ascii_skeletons import PALETTE_KEYS, SKELETONS
 from tokenpal.ui.ascii_skeletons import render as _render_skeleton
+from tokenpal.ui.ascii_zones import HEADWEAR_RUBRIC, normalize_zones
 from tokenpal.util.text_guards import is_clean_english
 
 
@@ -380,9 +381,11 @@ _DEFAULT_CLASSIFICATION: dict = {
         "outfit": "#4080bf",
         "accent": "#ffd700",
         "shadow": "#2a4a6a",
+        "highlight": "#ffffff",
     },
     "eye": "●",
     "mouth": "▽",
+    "zones": {"headwear": "none"},
 }
 
 
@@ -391,29 +394,72 @@ def _generate_ascii_art(
 ) -> tuple[list[str], list[str], list[str]]:
     """Classify the character + pick a palette, then render 3 frames.
 
-    ``source`` is the wiki host (e.g. ``adventuretime.fandom.com``) used
-    to derive franchise context so the classifier knows Finn is from
-    Adventure Time. Omit it only for fallback/default generation.
+    Tries the cloud classifier first when ``cfg.cloud_llm.enabled`` and a
+    key is stored (Haiku's canonical-character recall is materially
+    better than Qwen3-14B's), falling back silently to the local path on
+    any error.
 
     Returns (idle, idle_alt, talking). Falls back to a neutral placeholder
-    if the LLM can't produce valid classification JSON after two attempts.
+    if neither path can produce valid classification JSON.
     """
-    classification = _classify_character_for_skeleton(
-        character, persona, source,
-    )
+    classification = _classify_via_cloud(character, persona, source)
+    if classification is None:
+        classification = _classify_character_for_skeleton(
+            character, persona, source,
+        )
     if classification is None:
         classification = _DEFAULT_CLASSIFICATION
     return _render_skeleton_frames(classification)
 
 
-def _classify_character_for_skeleton(
+def _classify_via_cloud(
     character: str, persona: str, source: str = "",
 ) -> dict | None:
-    """Ask the LLM for a skeleton + palette + face glyphs as JSON.
+    """Route classification through CloudBackend when the user opted in.
 
-    Retries once at a lower temperature. Returns None on persistent
-    failure so callers can fall back to a default.
+    Returns None when cloud is disabled, no key is stored, the SDK isn't
+    installed, or the call errors — caller falls back to the local path.
+    Schema enforcement via Anthropic's ``output_config.format`` makes
+    parse-level retries unnecessary on the cloud path.
     """
+    try:
+        from tokenpal.config.loader import load_config
+        from tokenpal.config.secrets import get_cloud_key
+    except Exception:
+        return None
+    try:
+        cfg = load_config()
+    except Exception:
+        return None
+    if not cfg.cloud_llm.enabled or not cfg.cloud_llm.voice_classifier:
+        return None
+    key = get_cloud_key()
+    if not key:
+        return None
+    try:
+        from tokenpal.llm.cloud_backend import CloudBackend, CloudBackendError
+    except Exception:
+        return None
+    try:
+        backend = CloudBackend(
+            api_key=key, model=cfg.cloud_llm.model,
+            timeout_s=cfg.cloud_llm.timeout_s,
+        )
+    except (ValueError, CloudBackendError):
+        return None
+
+    prompt = _build_classifier_prompt(character, persona, source)
+    try:
+        resp = backend.synthesize(prompt, max_tokens=600)
+    except CloudBackendError:
+        return None
+    return _parse_classification_json(resp.text or "")
+
+
+def _build_classifier_prompt(
+    character: str, persona: str, source: str = "",
+) -> str:
+    """Shared classifier prompt used by both local and cloud paths."""
     franchise = franchise_from_source(source) if source else ""
     origin = f' from {franchise}' if franchise else ""
     visual_tells = parse_visual_tells(persona)
@@ -423,7 +469,7 @@ def _classify_character_for_skeleton(
         '\nPick bright, terminal-readable colors (mid-luminance hex, '
         'nothing near #000000) — dark backgrounds hide dark palettes.\n'
     )
-    prompt = (
+    return (
         f'Pick an ASCII buddy template for "{character}"{origin}.\n'
         f'{visual_block}\n'
         f'Persona:\n{persona[:400]}\n\n'
@@ -436,22 +482,40 @@ def _classify_character_for_skeleton(
         f'- ghost_floating: hovering spirit with no legs\n'
         f'- animal_quadruped: 4-legged pet/creature (Jake dog form)\n'
         f'- winged: humanoid with wings flared behind shoulders\n\n'
-        f'Pick 5 hex colors that match the character:\n'
+        f'Pick 6 hex colors that match the character:\n'
         f'- hair: hair / hat / head-top color\n'
         f'- skin: face / skin tone\n'
         f'- outfit: primary clothing\n'
         f'- accent: secondary trim color (buttons, crowns, gems)\n'
-        f'- shadow: a darker variant for shading\n\n'
+        f'- shadow: a darker variant for shading\n'
+        f'- highlight: a brighter variant of outfit/accent (for sheen, '
+        f'crown gleam, wing tip). One shade up from outfit.\n\n'
         f'Pick one eye glyph: ● ○ ◉ ◎ ⊙ ◐ ◑\n'
         f'Pick one mouth glyph: ▽ ◇ ◡ ⌣ ω ᗣ\n\n'
+        f'Pick ONE headwear zone. "none" is fronted — use it unless '
+        f'the character truly has that accessory in canon:\n'
+        + "".join(f"- {k}: {v}\n" for k, v in HEADWEAR_RUBRIC.items())
+        + '\n'
         f'Output ONLY this JSON, no prose:\n'
         '{"skeleton":"...","palette":{"hair":"#rrggbb",'
         '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
-        '"shadow":"#rrggbb"},"eye":"...","mouth":"..."}'
+        '"shadow":"#rrggbb","highlight":"#rrggbb"},'
+        '"eye":"...","mouth":"...",'
+        '"zones":{"headwear":"none"}}'
     )
 
+
+def _classify_character_for_skeleton(
+    character: str, persona: str, source: str = "",
+) -> dict | None:
+    """Ask the local LLM for a skeleton + palette + face glyphs as JSON.
+
+    Retries once at a lower temperature. Returns None on persistent
+    failure so callers can fall back to a default.
+    """
+    prompt = _build_classifier_prompt(character, persona, source)
     for temp in (0.5, 0.3):
-        text = _ollama_generate(prompt, max_tokens=400, temperature=temp)
+        text = _ollama_generate(prompt, max_tokens=600, temperature=temp)
         parsed = _parse_classification_json(text or "")
         if parsed is not None:
             return parsed
@@ -463,7 +527,9 @@ def _parse_classification_json(text: str) -> dict | None:
 
     Tolerates surrounding prose. Returns None if the blob is missing,
     malformed, uses an unknown skeleton, has a non-hex palette entry,
-    or has multi-character eye/mouth glyphs.
+    or has multi-character eye/mouth glyphs. ``highlight`` is optional
+    for legacy prompts; it falls back to the outfit color. ``zones`` is
+    optional; illegal picks get normalized to ``"none"`` silently.
     """
     if not text:
         return None
@@ -471,7 +537,6 @@ def _parse_classification_json(text: str) -> dict | None:
     # Strip ``` fences the model likes to add.
     text = re.sub(r"```(?:json)?\s*", "", text).replace("```", "")
 
-    # Grab the outermost {...} blob.
     match = re.search(r"\{.*\}", text, re.DOTALL)
     if not match:
         return None
@@ -480,16 +545,20 @@ def _parse_classification_json(text: str) -> dict | None:
     except json.JSONDecodeError:
         return None
 
-    if data.get("skeleton") not in SKELETONS:
+    skeleton = data.get("skeleton")
+    if skeleton not in SKELETONS:
         return None
 
     palette = data.get("palette")
     if not isinstance(palette, dict):
         return None
-    for key in PALETTE_KEYS:
+    for key in ("hair", "skin", "outfit", "accent", "shadow"):
         value = palette.get(key)
         if not isinstance(value, str) or not _HEX_COLOR_RE.fullmatch(value):
             return None
+    highlight = palette.get("highlight")
+    if not isinstance(highlight, str) or not _HEX_COLOR_RE.fullmatch(highlight):
+        highlight = palette["outfit"]
 
     for glyph_key in ("eye", "mouth"):
         glyph = data.get(glyph_key)
@@ -497,11 +566,22 @@ def _parse_classification_json(text: str) -> dict | None:
         if not isinstance(glyph, str) or len(glyph) != 1 or glyph == "[":
             return None
 
+    raw_zones = data.get("zones") if isinstance(data.get("zones"), dict) else {}
+    zones = normalize_zones(skeleton, {k: str(v) for k, v in raw_zones.items()})
+
     return {
-        "skeleton": data["skeleton"],
-        "palette": {k: palette[k] for k in PALETTE_KEYS},
+        "skeleton": skeleton,
+        "palette": {
+            "hair": palette["hair"],
+            "skin": palette["skin"],
+            "outfit": palette["outfit"],
+            "accent": palette["accent"],
+            "shadow": palette["shadow"],
+            "highlight": highlight,
+        },
         "eye": data["eye"],
         "mouth": data["mouth"],
+        "zones": zones,
     }
 
 
@@ -516,9 +596,10 @@ def _render_skeleton_frames(
     base["eye"] = classification["eye"]
     base["mouth"] = classification["mouth"]
     talking_mouth = _TALKING_MOUTH.get(classification["mouth"], "◇")
+    zones = classification.get("zones") or {}
 
     def frame(**overrides: str) -> list[str]:
-        return _render_skeleton(skeleton, base | overrides)
+        return _render_skeleton(skeleton, base | overrides, zones)
 
     return frame(), frame(eye="─"), frame(mouth=talking_mouth)
 

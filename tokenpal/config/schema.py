@@ -371,6 +371,13 @@ class CloudLLMConfig:
     # cost snowball. Mutually exclusive with research_deep (deep wins if both
     # are set, logged as override).
     research_search: bool = False
+    # Voice-training ASCII classifier: route skeleton + palette + zones
+    # picking through Anthropic when enabled. Cost is trivial (~$0.002 per
+    # voice on Haiku) but OFF by default so existing research-cloud users
+    # don't get surprise classifier traffic when training voices. Turn on
+    # via /cloud anthropic voice_classifier on if you want canonical colors
+    # recalled by Haiku/Sonnet instead of Qwen3's spotty memory.
+    voice_classifier: bool = False
 
 
 @dataclass
