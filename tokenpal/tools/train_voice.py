@@ -43,6 +43,7 @@ from tokenpal.tools.voice_profile import (
 from tokenpal.ui.ascii_skeletons import PALETTE_KEYS, SKELETONS
 from tokenpal.ui.ascii_skeletons import render as _render_skeleton
 from tokenpal.ui.ascii_zones import (
+    BODY_MOTIF_RUBRIC,
     FACIAL_HAIR_RUBRIC,
     HEADWEAR_RUBRIC,
     normalize_zones,
@@ -390,7 +391,7 @@ _DEFAULT_CLASSIFICATION: dict = {
     },
     "eye": "●",
     "mouth": "▽",
-    "zones": {"headwear": "none", "facial_hair": "none"},
+    "zones": {"headwear": "none", "facial_hair": "none", "body_motif": "none"},
 }
 
 
@@ -503,12 +504,17 @@ def _build_classifier_prompt(
         + 'Pick ONE facial_hair zone. "none" is fronted — use it '
         + 'unless the character has a canonical beard on screen:\n'
         + rubric_block(FACIAL_HAIR_RUBRIC)
+        + 'Pick ONE body_motif zone. "none" is fronted — almost every '
+        + 'character picks this unless they have an iconic chest '
+        + 'element:\n'
+        + rubric_block(BODY_MOTIF_RUBRIC)
         + 'Output ONLY this JSON, no prose:\n'
         + '{"skeleton":"...","palette":{"hair":"#rrggbb",'
         + '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
         + '"shadow":"#rrggbb","highlight":"#rrggbb"},'
         + '"eye":"...","mouth":"...",'
-        + '"zones":{"headwear":"none","facial_hair":"none"}}'
+        + '"zones":{"headwear":"none","facial_hair":"none",'
+        + '"body_motif":"none"}}'
     )
 
 

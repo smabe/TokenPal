@@ -120,6 +120,48 @@ FACIAL_HAIR_OVERLAYS: dict[str, dict[str, str]] = {
 FACIAL_HAIR_OPTIONS: tuple[str, ...] = tuple(FACIAL_HAIR_OVERLAYS.keys())
 
 
+# Body-motif overlays — replace-mode content that rewrites a 2-row
+# torso block with a recessed rectangle reading as screen / chest door
+# / etc. Ships on robot_boxy only to start (BMO + Bender differ here
+# despite sharing the same silhouette). Extend to humanoid_tall when a
+# strap / belt / belly-stripe variant is actually needed.
+BODY_MOTIF_OVERLAYS: dict[str, dict[str, str]] = {
+    "none": {
+        "robot_boxy": "",
+    },
+    "screen_dpad": {
+        "robot_boxy": (
+            "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
+            "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
+        ),
+    },
+    "chest_door": {
+        "robot_boxy": (
+            "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
+            "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
+        ),
+    },
+}
+
+BODY_MOTIF_OPTIONS: tuple[str, ...] = tuple(BODY_MOTIF_OVERLAYS.keys())
+
+
+BODY_MOTIF_RUBRIC: dict[str, str] = {
+    "none": (
+        "no chest/body detail (DEFAULT — most characters have plain "
+        "torsos at this resolution)"
+    ),
+    "screen_dpad": (
+        "wide recessed display panel taking up most of the chest, "
+        "face-like (BMO's screen, living-gameboy characters)"
+    ),
+    "chest_door": (
+        "small dark rectangular door/panel in the center of the chest "
+        "(Bender's chest compartment)"
+    ),
+}
+
+
 FACIAL_HAIR_RUBRIC: dict[str, str] = {
     "none": (
         "clean-shaven (DEFAULT — most characters, anyone whose chin is "
@@ -141,6 +183,7 @@ FACIAL_HAIR_RUBRIC: dict[str, str] = {
 _ZONE_MODES: dict[str, ZoneMode] = {
     "headwear": "prepend",
     "facial_hair": "replace",
+    "body_motif": "replace",
 }
 
 
@@ -151,6 +194,7 @@ _ZONE_MODES: dict[str, ZoneMode] = {
 # skip in `apply_replace_zones` is defense-in-depth, not normal flow.
 _REPLACE_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
     "facial_hair": FACIAL_HAIR_OVERLAYS,
+    "body_motif": BODY_MOTIF_OVERLAYS,
 }
 
 
@@ -169,6 +213,11 @@ _REPLACE_TARGETS: dict[tuple[str, str, str], tuple[int, int]] = {
     # beard_stubble: just the chin row, body below untouched.
     ("facial_hair", "beard_stubble", "humanoid_tall"): (7, 8),
     ("facial_hair", "beard_stubble", "mystical_cloaked"): (8, 9),
+    # body_motif: center-torso 2-row rectangle. Rows 10-11 on robot_boxy
+    # are plain {outfit} fill with no accent markers, so the motif lands
+    # cleanly without fighting the ◆ rivets on row 9.
+    ("body_motif", "screen_dpad", "robot_boxy"): (10, 12),
+    ("body_motif", "chest_door", "robot_boxy"): (10, 12),
 }
 
 
@@ -198,6 +247,16 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "robot_boxy": {"none"},
         "creature_small": {"none"},
         "mystical_cloaked": {"none", "beard_long", "beard_stubble"},
+        "ghost_floating": {"none"},
+        "animal_quadruped": {"none"},
+        "winged": {"none"},
+    },
+    "body_motif": {
+        "humanoid_tall": {"none"},
+        "humanoid_stocky": {"none"},
+        "robot_boxy": {"none", "screen_dpad", "chest_door"},
+        "creature_small": {"none"},
+        "mystical_cloaked": {"none"},
         "ghost_floating": {"none"},
         "animal_quadruped": {"none"},
         "winged": {"none"},

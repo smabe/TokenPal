@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from tokenpal.ui.ascii_skeletons import SKELETONS, _SAMPLE_PALETTES, render
 from tokenpal.ui.ascii_zones import (
+    BODY_MOTIF_OPTIONS,
+    BODY_MOTIF_OVERLAYS,
+    BODY_MOTIF_RUBRIC,
     FACIAL_HAIR_OPTIONS,
     FACIAL_HAIR_OVERLAYS,
     FACIAL_HAIR_RUBRIC,
@@ -62,7 +65,7 @@ def test_normalize_zones_fills_missing_keys_with_none() -> None:
 def test_normalize_zones_ignores_unknown_zone_keys() -> None:
     out = normalize_zones("humanoid_tall", {"fictional_zone": "anything"})
     assert "fictional_zone" not in out
-    assert set(out.keys()) == {"headwear", "facial_hair"}
+    assert set(out.keys()) == {"headwear", "facial_hair", "body_motif"}
 
 
 def test_headwear_prefix_none_returns_empty_list() -> None:
@@ -117,10 +120,12 @@ def test_facial_hair_zone_is_registered_as_replace_mode() -> None:
 
 
 def test_every_replace_target_points_to_a_real_skeleton_zone_combo() -> None:
+    from tokenpal.ui.ascii_zones import _REPLACE_OVERLAYS
+
     for (zone_name, option, skeleton), rows in _REPLACE_TARGETS.items():
         assert skeleton in SKELETONS
         assert _ZONE_MODES.get(zone_name) == "replace"
-        assert option in FACIAL_HAIR_OPTIONS
+        assert option in _REPLACE_OVERLAYS[zone_name]
         assert option in _ZONE_COMPAT[zone_name][skeleton]
         start, end = rows
         assert 0 <= start < end <= 14
@@ -168,6 +173,54 @@ def test_apply_replace_zones_is_noop_when_all_none() -> None:
     body = SKELETONS["humanoid_tall"].format(**slots).splitlines()
     unchanged = apply_replace_zones(
         body, "humanoid_tall",
-        {"headwear": "none", "facial_hair": "none"}, slots,
+        {"headwear": "none", "facial_hair": "none", "body_motif": "none"},
+        slots,
     )
     assert unchanged == body
+
+
+# ---------------------------------------------------------------
+# body_motif replace-mode zone
+# ---------------------------------------------------------------
+
+
+def test_every_body_motif_option_has_overlay_and_rubric() -> None:
+    for option in BODY_MOTIF_OPTIONS:
+        assert option in BODY_MOTIF_OVERLAYS
+        assert option in BODY_MOTIF_RUBRIC
+
+
+def test_body_motif_zone_is_registered_as_replace_mode() -> None:
+    assert _ZONE_MODES["body_motif"] == "replace"
+
+
+def test_screen_dpad_replaces_mid_torso_on_robot_boxy() -> None:
+    palette = _SAMPLE_PALETTES["robot_boxy"]
+    plain = render("robot_boxy", palette)
+    with_screen = render(
+        "robot_boxy", palette,
+        {"headwear": "none", "facial_hair": "none", "body_motif": "screen_dpad"},
+    )
+    assert len(with_screen) == len(plain)
+    assert plain[:10] == with_screen[:10]
+    assert plain[12:] == with_screen[12:]
+    assert plain[10:12] != with_screen[10:12]
+
+
+def test_chest_door_differs_from_screen_dpad() -> None:
+    palette = _SAMPLE_PALETTES["robot_boxy"]
+    screen = render(
+        "robot_boxy", palette,
+        {"body_motif": "screen_dpad"},
+    )
+    door = render("robot_boxy", palette, {"body_motif": "chest_door"})
+    assert screen[10:12] != door[10:12]
+
+
+def test_body_motif_coerces_to_none_on_unsupported_skeleton() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_illegal = render(
+        "humanoid_tall", palette, {"body_motif": "screen_dpad"},
+    )
+    assert plain == with_illegal
