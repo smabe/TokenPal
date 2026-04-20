@@ -159,9 +159,14 @@ def props_for(env: EnvState) -> tuple[PropSprite, ...]:
     if env.kind is Kind.CLEAR:
         return (SUN_SPRITE if env.is_day else MOON_SPRITE,)
     if env.kind is Kind.CLOUDY:
-        if env.is_day and env.intensity >= _OVERCAST_INTENSITY:
-            return (SUN_SPRITE, OVERCAST_CLOUD_A, OVERCAST_CLOUD_B)
-        return ()
+        luminary = SUN_SPRITE if env.is_day else MOON_SPRITE
+        if env.intensity >= _OVERCAST_INTENSITY:
+            return (luminary, OVERCAST_CLOUD_A, OVERCAST_CLOUD_B)
+        # Partly cloudy day or night: luminary + one drifting cloud. At night
+        # the overlay also populates a sparse starfield (see
+        # night_star_scale) so the moon + cloud pair don't float in a
+        # dead-black sky.
+        return (luminary, OVERCAST_CLOUD_A)
     if env.kind in (Kind.RAIN, Kind.DRIZZLE, Kind.STORM, Kind.SNOW):
         return (RAIN_CLOUD_SPRITE,)
     return ()
@@ -171,3 +176,18 @@ def prop_for(env: EnvState) -> PropSprite | None:
     """Back-compat shim — returns the first sprite from :func:`props_for`."""
     stack = props_for(env)
     return stack[0] if stack else None
+
+
+def night_star_scale(env: EnvState) -> float:
+    """Relative starfield density for ``env`` (0.0 = no stars).
+
+    Clear night = full starfield. Partly-cloudy night = sparse (cloud cover
+    would wash most out). Overcast night and any daytime = no stars.
+    """
+    if env.is_day:
+        return 0.0
+    if env.kind is Kind.CLEAR:
+        return 1.0
+    if env.kind is Kind.CLOUDY and env.intensity < _OVERCAST_INTENSITY:
+        return 0.4
+    return 0.0

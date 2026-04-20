@@ -175,21 +175,26 @@ def test_overcast_layers_cloud_over_sun() -> None:
     assert OVERCAST_CLOUD_A.drift_x_amplitude > 0.0
     assert OVERCAST_CLOUD_B.drift_x_amplitude > 0.0
 
-    # Partly cloudy (WMO 2 → 0.4) stays empty — not the same visual as overcast.
+    # Partly cloudy (WMO 2 → 0.4): sun + a single drifting cloud — distinct
+    # from both clear and overcast.
     partly_cloudy = EnvState.from_inputs(
         weather_data={"weather_code": 2, "temperature": 60, "unit": "°F"},
         idle_event=None, sensitive_suppressed=False,
         now=dt.datetime(2026, 4, 19, 13, 0),
     )
-    assert props_for(partly_cloudy) == ()
+    assert props_for(partly_cloudy) == (SUN_SPRITE, OVERCAST_CLOUD_A)
 
-    # Overcast at night: no sun to cover, so nothing renders.
+    # Overcast at night: moon takes the sun's place behind the same drifting
+    # cloud pair.
+    from tokenpal.ui.ascii_props import MOON_SPRITE
     overcast_night = EnvState.from_inputs(
         weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
         idle_event=None, sensitive_suppressed=False,
         now=dt.datetime(2026, 4, 19, 22, 0),
     )
-    assert props_for(overcast_night) == ()
+    assert props_for(overcast_night) == (
+        MOON_SPRITE, OVERCAST_CLOUD_A, OVERCAST_CLOUD_B,
+    )
 
 
 # --- CloudDrift ---
@@ -230,6 +235,56 @@ def test_cloud_drift_anti_phase_pair_moves_opposite() -> None:
     b = drift.offset_x(amplitude=4.0, phase_offset=math.pi)
     # cos(θ + π) = -cos(θ), so the pair is always exact mirrors.
     assert math.isclose(a, -b, abs_tol=1e-9)
+
+
+def test_night_star_scale_tiers() -> None:
+    import datetime as dt
+
+    from tokenpal.ui.ascii_props import night_star_scale
+
+    night_args = dict(idle_event=None, sensitive_suppressed=False,
+                      now=dt.datetime(2026, 4, 19, 22, 0))
+    day_args = dict(idle_event=None, sensitive_suppressed=False,
+                    now=dt.datetime(2026, 4, 19, 13, 0))
+
+    clear_night = EnvState.from_inputs(
+        weather_data={"weather_code": 0, "temperature": 60, "unit": "°F"},
+        **night_args,
+    )
+    partly_night = EnvState.from_inputs(
+        weather_data={"weather_code": 2, "temperature": 60, "unit": "°F"},
+        **night_args,
+    )
+    overcast_night = EnvState.from_inputs(
+        weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
+        **night_args,
+    )
+    clear_day = EnvState.from_inputs(
+        weather_data={"weather_code": 0, "temperature": 60, "unit": "°F"},
+        **day_args,
+    )
+
+    assert night_star_scale(clear_night) == 1.0
+    assert 0.0 < night_star_scale(partly_night) < 1.0
+    assert night_star_scale(overcast_night) == 0.0
+    assert night_star_scale(clear_day) == 0.0
+
+
+def test_partly_cloudy_night_has_moon_and_single_cloud() -> None:
+    import datetime as dt
+
+    from tokenpal.ui.ascii_props import (
+        MOON_SPRITE,
+        OVERCAST_CLOUD_A,
+        props_for,
+    )
+
+    partly_night = EnvState.from_inputs(
+        weather_data={"weather_code": 2, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=False,
+        now=dt.datetime(2026, 4, 19, 22, 0),
+    )
+    assert props_for(partly_night) == (MOON_SPRITE, OVERCAST_CLOUD_A)
 
 
 def test_cloud_drift_freezes_under_sensitive() -> None:
