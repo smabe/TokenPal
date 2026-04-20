@@ -25,7 +25,12 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-from tokenpal.ui.ascii_props import PropSprite, props_for, style_for
+from tokenpal.ui.ascii_props import (
+    PropSprite,
+    night_star_scale,
+    props_for,
+    style_for,
+)
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import (
@@ -439,7 +444,7 @@ class ParticleSky(Widget):
         # Star field signature: (panel_w, panel_h, max_x). Re-populates
         # whenever the panel resizes OR the moon's left edge moves (e.g.
         # the moon prop arrives after the first tick). None = not populated.
-        self._starfield_for: tuple[int, int, int] | None = None
+        self._starfield_for: tuple[int, int, int, int] | None = None
 
     def on_mount(self) -> None:
         self.set_interval(_PARTICLE_TICK_S, self._sim_tick)
@@ -508,16 +513,19 @@ class ParticleSky(Widget):
         # Star field: pre-populate when entering clear+night; re-populate
         # when the panel resizes OR the moon's left edge changes (e.g. the
         # snapshot arrives after the first tick).
-        starry = env.kind is Kind.CLEAR and not env.is_day
-        if starry:
+        scale = night_star_scale(env)
+        if scale > 0.0:
             max_x = panel_w
             if self._cached_prop_anchors:
                 prop, ax, _ay = self._cached_prop_anchors[0]
                 # ax is panel_w - prop.width - 2; clamp to one cell left of it.
                 max_x = max(1, ax - 1)
-            sig = (panel_w, panel_h, max_x)
+            base_target = min(70, max(12, (panel_w * panel_h) // 25))
+            target = max(1, int(round(base_target * scale)))
+            # sig includes target so switching between clear/partly-cloudy
+            # night re-populates at the new density.
+            sig = (panel_w, panel_h, max_x, target)
             if self._starfield_for != sig:
-                target = min(70, max(12, (panel_w * panel_h) // 25))
                 self._field.populate_starfield(
                     panel_w, panel_h,
                     target_count=target,
@@ -695,6 +703,7 @@ class TokenPalApp(App[None]):
         Binding("f2", "toggle_chat_log", "Toggle chat log", show=False, priority=True),
         Binding("f3", "command_options", "Options", show=False, priority=True),
         Binding("f4", "command_voice", "Voice", show=False, priority=True),
+        Binding("f7", "toggle_buddy", "Toggle buddy (select mode)", show=False, priority=True),
         Binding("ctrl+l", "command_clear", "Clear", show=False, priority=True),
     ]
 
@@ -702,6 +711,7 @@ class TokenPalApp(App[None]):
         super().__init__()
         self._overlay = overlay
         self._chat_log_user_hidden: bool = False
+        self._buddy_user_hidden: bool = False
         self._pending_bubble: SpeechBubble | None = None
         self._last_region_size: tuple[int, int] | None = None
         self._chat_log_lines: list[str] = []
@@ -790,6 +800,9 @@ class TokenPalApp(App[None]):
 
     def _apply_chat_log_width(self) -> None:
         chat_log = self.query_one("#chat-log", VerticalScroll)
+        if self._buddy_user_hidden:
+            chat_log.styles.width = "1fr"
+            return
         chat_log.styles.width = self._chat_log_width
 
     def on_resize(self, _event: Resize) -> None:
@@ -801,6 +814,11 @@ class TokenPalApp(App[None]):
         self._evict_oversized_bubble()
 
     def _apply_chat_log_visibility(self) -> None:
+        if self._buddy_user_hidden:
+            chat_log = self.query_one("#chat-log", VerticalScroll)
+            chat_log.display = True
+            self.query_one(DividerBar).display = False
+            return
         if self._chat_log_user_hidden:
             return
         buddy = self.query_one(BuddyWidget)
@@ -869,6 +887,30 @@ class TokenPalApp(App[None]):
         self._chat_log_user_hidden = not new_display
         if new_display:
             self._apply_chat_log_width()
+
+    def action_toggle_buddy(self) -> None:
+        """Hide the buddy panel so the chat log fills the width.
+
+        Intended for the Shift+drag select-and-copy workflow on Windows
+        Terminal — with the buddy art gone, rectangular terminal selection
+        grabs clean chat-log text. Press F7 again to restore.
+        """
+        panel = self.query_one("#buddy-panel", Vertical)
+        divider = self.query_one(DividerBar)
+        chat_log = self.query_one("#chat-log", VerticalScroll)
+        now_hidden = panel.display  # about to flip
+        panel.display = not now_hidden
+        self._buddy_user_hidden = now_hidden
+        if now_hidden:
+            # Entering select mode: full-width chat log, no divider.
+            divider.display = False
+            chat_log.display = True
+            chat_log.styles.width = "1fr"
+        else:
+            # Leaving select mode: restore chat log to its stored width
+            # and let the visibility rules decide whether to show it.
+            self._apply_chat_log_width()
+            self._apply_chat_log_visibility()
 
     # --- Input handling ---
 
