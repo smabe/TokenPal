@@ -341,7 +341,18 @@ def main() -> None:
             active_summary = next(
                 (s for s in saved if s.slug == active_slug), None,
             )
-        state = VoiceModalState(active_voice=active_summary, saved=saved)
+        cloud_ready = False
+        if config.cloud_llm.enabled:
+            try:
+                from tokenpal.config.secrets import get_cloud_key
+                cloud_ready = bool(get_cloud_key())
+            except Exception:
+                cloud_ready = False
+        state = VoiceModalState(
+            active_voice=active_summary, saved=saved,
+            cloud_ready=cloud_ready,
+            voice_classifier_on=config.cloud_llm.voice_classifier,
+        )
 
         def on_result(result: VoiceModalResult | None) -> None:
             if result is None:
@@ -412,6 +423,17 @@ def main() -> None:
                             path, personality, voices_dir, overlay, llm,
                         )
                     )
+            elif action == "cloud_classifier":
+                from tokenpal.config.cloud_writer import (
+                    set_cloud_voice_classifier,
+                )
+                enabled = payload.get("enabled") == "true"
+                set_cloud_voice_classifier(enabled)
+                config.cloud_llm.voice_classifier = enabled
+                status = "Haiku" if enabled else "local model"
+                overlay.log_buddy_message(
+                    f"ASCII classifier will use {status} on next train."
+                )
 
         return overlay.open_voice_modal(state, on_result)
 

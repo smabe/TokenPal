@@ -56,6 +56,20 @@ def set_cloud_search(enabled: bool) -> Path:
     return update_config(mutate)
 
 
+def set_cloud_voice_classifier(enabled: bool) -> Path:
+    """Flip `[cloud_llm] voice_classifier = true/false` in config.toml.
+
+    Routes the voice-training ASCII classifier through Anthropic (Haiku
+    by default) so canonical character colors come back from a model
+    with stronger pop-culture recall than Qwen3-14B. OFF by default so
+    existing /research cloud users don't get surprise classifier bills.
+    """
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("cloud_llm", {})["voice_classifier"] = enabled
+
+    return update_config(mutate)
+
+
 def set_cloud_search_layer_enabled(enabled: bool) -> Path:
     """Flip `[cloud_search] enabled = true/false` in config.toml.
 

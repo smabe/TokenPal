@@ -29,7 +29,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label, OptionList
+from textual.widgets import Button, Checkbox, Input, Label, OptionList
 from textual.widgets.option_list import Option
 
 from tokenpal.tools.voice_profile import ProfileSummary
@@ -43,6 +43,7 @@ VoiceAction = Literal[
     "regenerate",
     "ascii",
     "import",
+    "cloud_classifier",
 ]
 
 
@@ -51,10 +52,16 @@ class VoiceModalState:
     """Current state fed into the modal.
 
     ``active_voice`` is None when the default TokenPal voice is in use.
+    ``cloud_ready`` is True when cloud_llm.enabled + an Anthropic key
+    are both present; the Haiku-classifier checkbox disables itself
+    otherwise. ``voice_classifier_on`` reflects the current config flag
+    so the checkbox renders with the right initial state.
     """
 
     active_voice: ProfileSummary | None
     saved: list[ProfileSummary] = field(default_factory=list)
+    cloud_ready: bool = False
+    voice_classifier_on: bool = False
 
 
 @dataclass(frozen=True)
@@ -206,6 +213,19 @@ class VoiceModal(ModalScreen["VoiceModalResult | None"]):
                 placeholder="Finn the Human",
                 id="train-character-input",
             )
+            if s.cloud_ready:
+                yield Checkbox(
+                    "Use Haiku for ASCII colors (cloud, ~$0.002/voice)",
+                    value=s.voice_classifier_on,
+                    id="cloud-classifier-toggle",
+                )
+            else:
+                yield Label(
+                    "ASCII colors come from the local model. Enable "
+                    "/cloud anthropic to route canonical-color recall "
+                    "through Haiku for stronger pop-culture knowledge.",
+                    classes="section-help",
+                )
             with Horizontal(classes="action-row"):
                 yield Button("Train", id="train-btn", variant="primary")
 
@@ -332,6 +352,16 @@ class VoiceModal(ModalScreen["VoiceModalResult | None"]):
                         action="import", payload={"path": path},
                     )
                 )
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        if event.checkbox.id != "cloud-classifier-toggle":
+            return
+        self.dismiss(
+            VoiceModalResult(
+                action="cloud_classifier",
+                payload={"enabled": "true" if event.value else "false"},
+            )
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)
