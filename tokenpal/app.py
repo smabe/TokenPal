@@ -984,10 +984,9 @@ def main() -> None:
                 "Usage: /refine <follow-up question>. Re-analyzes the most "
                 "recent research's sources with cloud synth - no new search."
             )
-        if not config.cloud_llm.enabled:
-            return CommandResult(
-                "/refine requires cloud. Run /cloud to enable it."
-            )
+        gate_err = _refine_gate_error(config)
+        if gate_err is not None:
+            return CommandResult(gate_err)
         brain.submit_refine_question(follow_up)
         return CommandResult(f"Refining: {follow_up[:60]}")
 
@@ -1702,6 +1701,38 @@ def _cloud_aggregate_status(config: TokenPalConfig) -> str:
     return "\n".join(lines)
 
 
+def _refine_gate_error(config: TokenPalConfig) -> str | None:
+    """Return a specific reason string if /refine's cloud prerequisites
+    aren't satisfied, or None if ready. Mirrors _build_cloud_backend's
+    None-return cases so the user sees the actual gate that failed
+    instead of a blanket 'requires cloud'."""
+    cfg = config.cloud_llm
+    if not cfg.enabled:
+        return (
+            "/refine: cloud_llm.enabled is false. "
+            "Run /cloud anthropic enable <key> (or flip the toggle in the /cloud modal)."
+        )
+    if not cfg.research_synth:
+        return (
+            "/refine: cloud_llm.research_synth is false. "
+            "Enable 'Use for /research synth' in the /cloud modal, "
+            "or set research_synth = true under [cloud_llm] in config.toml."
+        )
+    if not get_cloud_key():
+        return (
+            "/refine: no Anthropic API key stored. "
+            "Run /cloud anthropic enable <sk-ant-...>."
+        )
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        return (
+            "/refine: anthropic SDK not installed on this machine. "
+            "Run: python -m pip install anthropic"
+        )
+    return None
+
+
 def _anthropic_status_line(config: TokenPalConfig) -> str:
     cfg = config.cloud_llm
     if not cfg.enabled:
@@ -1713,6 +1744,10 @@ def _anthropic_status_line(config: TokenPalConfig) -> str:
         return "Anthropic: enabled but no key — run /cloud anthropic enable <key>"
     from tokenpal.llm.cloud_backend import DEEP_MODE_MODELS
     flags: list[str] = []
+    if cfg.research_synth:
+        flags.append("synth")
+    else:
+        flags.append("synth=OFF")
     if cfg.research_plan:
         flags.append("plan")
     if cfg.research_deep:

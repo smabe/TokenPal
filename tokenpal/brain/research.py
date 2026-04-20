@@ -342,9 +342,15 @@ class ResearchRunner:
             mix[key] = mix.get(key, 0) + 1
         mix_str = ",".join(f"{k}={v}" for k, v in sorted(mix.items())) or "none"
         tried_str = ",".join(sorted(session.backends_tried)) or "none"
+        synth_str = (
+            f"cloud={self._cloud_backend.model}"
+            if self._cloud_backend is not None
+            else "local"
+        )
         self._log(
             f"  telemetry: mode={mix_str} tried={tried_str} "
             f"sources={len(session.sources)} "
+            f"synth={synth_str} "
             f"stopped={session.stopped_reason or 'unknown'}"
         )
 

@@ -2023,8 +2023,13 @@ class Brain:
         from tokenpal.actions.research.research_action import _build_cloud_backend
         cloud_backend = _build_cloud_backend(self._research.cloud_config)
         if cloud_backend is None:
+            # The /refine slash handler already gates on enabled/synth/key/SDK
+            # with specific messages; reaching here means CloudBackend() itself
+            # raised (bad model id, init-time auth sanity check). The log line
+            # from _build_cloud_backend is the authoritative reason.
             self._ui_callback(
-                "/refine requires cloud. Run /cloud to enable it."
+                "/refine: cloud backend init failed — check logs "
+                "(tokenpal --verbose) for the 'cloud:' line."
             )
             return
 
