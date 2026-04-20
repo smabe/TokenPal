@@ -29,6 +29,7 @@ from tokenpal.brain.git_nudge import GitNudgeDetector, GitNudgeSignal
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
+from tokenpal.brain.observation_enricher import ObservationEnricher
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.brain.rage_detector import RageDetector, RageSignal
@@ -309,6 +310,11 @@ class Brain:
 
         self._app_enricher = (
             AppEnricher(memory=self._memory) if self._memory is not None else None
+        )
+        self._observation_enricher = (
+            ObservationEnricher(app_enricher=self._app_enricher)
+            if self._app_enricher is not None
+            else None
         )
 
         # Target-latency budgets + token floors per call-path.
@@ -1414,20 +1420,16 @@ class Brain:
         return snapshot
 
     async def _maybe_enrich_snapshot(self, snapshot: str) -> str:
-        """Splice the active app's description into the snapshot's App: line."""
-        if self._app_enricher is None:
+        """Dispatch to per-sense enrichers to splice descriptions into the snapshot.
+
+        ObservationEnricher owns the concrete handlers (app_awareness,
+        process_heat, …). This wrapper keeps the existing Brain call site
+        stable while the enrichment surface can grow in one file.
+        """
+        if self._observation_enricher is None:
             return snapshot
-        app_reading = self._context.active_readings().get("app_awareness")
-        if app_reading is None:
-            return snapshot
-        app_name = (app_reading.data or {}).get("app_name")
-        if not app_name:
-            return snapshot
-        description = await self._app_enricher.enrich(app_name)
-        if not description:
-            return snapshot
-        return snapshot.replace(
-            f"App: {app_name}", f"App: {app_name} ({description})", 1,
+        return await self._observation_enricher.enrich(
+            snapshot, self._context.active_readings(),
         )
 
     async def _generate_comment(self, snapshot: str | None = None) -> bool:
