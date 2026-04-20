@@ -42,10 +42,14 @@ def test_idle_tools_blocked_when_paused() -> None:
     assert not brain._idle_tools_eligible()
 
 
-def test_idle_tools_blocked_during_forced_silence() -> None:
+def test_idle_tools_ignore_forced_silence() -> None:
+    """Forced-silence is an observation-path backstop for near-dup LLM spam.
+    Idle rolls inject fresh tool output and have their own cooldown regime,
+    so they must stay eligible — they're the right recovery from dead air.
+    """
     brain = _bare_brain()
     brain._forced_silence_until = time.monotonic() + 60.0
-    assert not brain._idle_tools_eligible()
+    assert brain._idle_tools_eligible()
 
 
 def test_record_idle_fire_noop_without_memory() -> None:

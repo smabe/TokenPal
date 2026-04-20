@@ -1148,7 +1148,12 @@ class Brain:
     # ------------------------------------------------------------------
 
     def _idle_tools_eligible(self) -> bool:
-        """Same gates that silence observations also silence idle rolls."""
+        """Hard gates only. Idle rolls self-govern via per-rule + global
+        cooldowns and rate cap — they do NOT inherit the observation-path
+        forced-silence window. That window exists to stop near-dup LLM
+        spam; an idle roll injects fresh tool output and is the right
+        recovery from dead air, not something to suppress further.
+        """
         if not self._idle_tools_config.enabled:
             return False
         if self._paused:
@@ -1156,8 +1161,6 @@ class Brain:
         if self._in_conversation:
             return False
         if self._any_long_task():
-            return False
-        if time.monotonic() < self._forced_silence_until:
             return False
         return True
 
@@ -1247,7 +1250,12 @@ class Brain:
                 "TokenPal (idle-tool %s suppressed near-duplicate): %s",
                 fire.rule_name, filtered,
             )
-            self._handle_suppressed_output(f"idle-tool {fire.rule_name}")
+            # Do NOT call _handle_suppressed_output — that would flip the
+            # observation-path silence window on, which in turn would only
+            # silence observations, not idle rolls (_idle_tools_eligible
+            # ignores it). But it would also starve freeform + drift nudges
+            # for 2 minutes, and a single bad riff framing shouldn't do that.
+            # The rule's own cooldown already prevents re-rolling it soon.
             filtered = ""
 
         if not filtered:
