@@ -7,6 +7,9 @@ from tokenpal.ui.ascii_zones import (
     BODY_MOTIF_OPTIONS,
     BODY_MOTIF_OVERLAYS,
     BODY_MOTIF_RUBRIC,
+    EYE_REGION_OPTIONS,
+    EYE_REGION_OVERLAYS,
+    EYE_REGION_RUBRIC,
     FACIAL_HAIR_OPTIONS,
     FACIAL_HAIR_OVERLAYS,
     FACIAL_HAIR_RUBRIC,
@@ -65,7 +68,9 @@ def test_normalize_zones_fills_missing_keys_with_none() -> None:
 def test_normalize_zones_ignores_unknown_zone_keys() -> None:
     out = normalize_zones("humanoid_tall", {"fictional_zone": "anything"})
     assert "fictional_zone" not in out
-    assert set(out.keys()) == {"headwear", "facial_hair", "body_motif"}
+    assert set(out.keys()) == {
+        "headwear", "facial_hair", "body_motif", "eye_region",
+    }
 
 
 def test_headwear_prefix_none_returns_empty_list() -> None:
@@ -222,5 +227,51 @@ def test_body_motif_coerces_to_none_on_unsupported_skeleton() -> None:
     plain = render("humanoid_tall", palette)
     with_illegal = render(
         "humanoid_tall", palette, {"body_motif": "screen_dpad"},
+    )
+    assert plain == with_illegal
+
+
+# ---------------------------------------------------------------
+# eye_region replace-mode zone
+# ---------------------------------------------------------------
+
+
+def test_every_eye_region_option_has_overlay_and_rubric() -> None:
+    for option in EYE_REGION_OPTIONS:
+        assert option in EYE_REGION_OVERLAYS
+        assert option in EYE_REGION_RUBRIC
+
+
+def test_eye_region_zone_is_registered_as_replace_mode() -> None:
+    assert _ZONE_MODES["eye_region"] == "replace"
+
+
+def test_single_cyclops_replaces_eye_row_on_humanoid_tall() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_cyclops = render(
+        "humanoid_tall", palette, {"eye_region": "single_cyclops"},
+    )
+    assert len(with_cyclops) == len(plain)
+    assert plain[:4] == with_cyclops[:4]
+    assert plain[5:] == with_cyclops[5:]
+    assert plain[4] != with_cyclops[4]
+
+
+def test_oversized_spiral_on_animal_quadruped_has_spiral_glyphs() -> None:
+    palette = _SAMPLE_PALETTES["animal_quadruped"]
+    with_spiral = render(
+        "animal_quadruped", palette, {"eye_region": "oversized_spiral"},
+    )
+    eye_row = with_spiral[5]
+    assert "◉" in eye_row
+    assert "◎" in eye_row
+
+
+def test_eye_region_coerces_to_none_on_unsupported_skeleton() -> None:
+    palette = _SAMPLE_PALETTES["robot_boxy"]
+    plain = render("robot_boxy", palette)
+    with_illegal = render(
+        "robot_boxy", palette, {"eye_region": "single_cyclops"},
     )
     assert plain == with_illegal

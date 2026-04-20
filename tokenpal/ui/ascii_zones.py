@@ -146,6 +146,50 @@ BODY_MOTIF_OVERLAYS: dict[str, dict[str, str]] = {
 BODY_MOTIF_OPTIONS: tuple[str, ...] = tuple(BODY_MOTIF_OVERLAYS.keys())
 
 
+# Eye-region overlays — replace-mode content that rewrites the eye row
+# with a non-standard eye treatment. When active, the blink/talking
+# frame pipeline's ``{eye}`` substitution has nothing to substitute, so
+# these overlays render identically across all 3 frames (spirals pulse
+# in the buddy's mood-based frame cycle instead of blinking). Start
+# minimal: ``single_cyclops`` for Leela-style characters and
+# ``oversized_spiral`` for Hypnotoad-style creatures.
+EYE_REGION_OVERLAYS: dict[str, dict[str, str]] = {
+    "none": {
+        "humanoid_tall": "",
+        "animal_quadruped": "",
+    },
+    "single_cyclops": {
+        "humanoid_tall": (
+            "{skin}█▓▓▓{c}{highlight}███{c}{shadow}███{c}"
+            "{highlight}███{c}{skin}▓▓▓█{c}\n"
+        ),
+    },
+    "oversized_spiral": {
+        "animal_quadruped": (
+            "{skin}█▓▓{c}{accent}◉◎◉{c}{skin}▓▓▓▓▓{c}"
+            "{accent}◉◎◉{c}{skin}▓▓█{c}\n"
+        ),
+    },
+}
+
+EYE_REGION_OPTIONS: tuple[str, ...] = tuple(EYE_REGION_OVERLAYS.keys())
+
+
+EYE_REGION_RUBRIC: dict[str, str] = {
+    "none": (
+        "standard two dot eyes (DEFAULT — almost every character)"
+    ),
+    "single_cyclops": (
+        "one huge centered eye instead of two (Leela from Futurama, "
+        "Kyubey-style single-eye creatures)"
+    ),
+    "oversized_spiral": (
+        "giant bulging spiral / hypno eyes filling most of the face "
+        "(Hypnotoad, hypno-frog characters)"
+    ),
+}
+
+
 BODY_MOTIF_RUBRIC: dict[str, str] = {
     "none": (
         "no chest/body detail (DEFAULT — most characters have plain "
@@ -184,6 +228,7 @@ _ZONE_MODES: dict[str, ZoneMode] = {
     "headwear": "prepend",
     "facial_hair": "replace",
     "body_motif": "replace",
+    "eye_region": "replace",
 }
 
 
@@ -195,6 +240,7 @@ _ZONE_MODES: dict[str, ZoneMode] = {
 _REPLACE_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
     "facial_hair": FACIAL_HAIR_OVERLAYS,
     "body_motif": BODY_MOTIF_OVERLAYS,
+    "eye_region": EYE_REGION_OVERLAYS,
 }
 
 
@@ -218,6 +264,11 @@ _REPLACE_TARGETS: dict[tuple[str, str, str], tuple[int, int]] = {
     # cleanly without fighting the ◆ rivets on row 9.
     ("body_motif", "screen_dpad", "robot_boxy"): (10, 12),
     ("body_motif", "chest_door", "robot_boxy"): (10, 12),
+    # eye_region: single-row replace of the eye row. humanoid_tall row 4
+    # and animal_quadruped row 5 both carry the two {eye} slots; the
+    # overlay rewrites that row with a single-big-eye or spiral pattern.
+    ("eye_region", "single_cyclops", "humanoid_tall"): (4, 5),
+    ("eye_region", "oversized_spiral", "animal_quadruped"): (5, 6),
 }
 
 
@@ -259,6 +310,16 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "mystical_cloaked": {"none"},
         "ghost_floating": {"none"},
         "animal_quadruped": {"none"},
+        "winged": {"none"},
+    },
+    "eye_region": {
+        "humanoid_tall": {"none", "single_cyclops"},
+        "humanoid_stocky": {"none"},
+        "robot_boxy": {"none"},
+        "creature_small": {"none"},
+        "mystical_cloaked": {"none"},
+        "ghost_floating": {"none"},
+        "animal_quadruped": {"none", "oversized_spiral"},
         "winged": {"none"},
     },
 }

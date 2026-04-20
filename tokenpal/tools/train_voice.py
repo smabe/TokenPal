@@ -44,6 +44,7 @@ from tokenpal.ui.ascii_skeletons import PALETTE_KEYS, SKELETONS
 from tokenpal.ui.ascii_skeletons import render as _render_skeleton
 from tokenpal.ui.ascii_zones import (
     BODY_MOTIF_RUBRIC,
+    EYE_REGION_RUBRIC,
     FACIAL_HAIR_RUBRIC,
     HEADWEAR_RUBRIC,
     normalize_zones,
@@ -391,7 +392,10 @@ _DEFAULT_CLASSIFICATION: dict = {
     },
     "eye": "●",
     "mouth": "▽",
-    "zones": {"headwear": "none", "facial_hair": "none", "body_motif": "none"},
+    "zones": {
+        "headwear": "none", "facial_hair": "none",
+        "body_motif": "none", "eye_region": "none",
+    },
 }
 
 
@@ -508,13 +512,17 @@ def _build_classifier_prompt(
         + 'character picks this unless they have an iconic chest '
         + 'element:\n'
         + rubric_block(BODY_MOTIF_RUBRIC)
+        + 'Pick ONE eye_region zone. "none" is fronted — almost every '
+        + 'character picks this. Only override for characters with '
+        + 'truly unusual eye treatments on screen:\n'
+        + rubric_block(EYE_REGION_RUBRIC)
         + 'Output ONLY this JSON, no prose:\n'
         + '{"skeleton":"...","palette":{"hair":"#rrggbb",'
         + '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
         + '"shadow":"#rrggbb","highlight":"#rrggbb"},'
         + '"eye":"...","mouth":"...",'
         + '"zones":{"headwear":"none","facial_hair":"none",'
-        + '"body_motif":"none"}}'
+        + '"body_motif":"none","eye_region":"none"}}'
     )
 
 
