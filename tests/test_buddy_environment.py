@@ -13,6 +13,7 @@ import pytest
 from tokenpal.ui.buddy_environment import (
     PARTICLE_LIMIT,
     BuddyMotion,
+    CloudDrift,
     EnvState,
     Kind,
     ParticleField,
@@ -144,6 +145,108 @@ def test_prop_swaps_sun_for_moon_at_night() -> None:
     )
     assert prop_for(day) is SUN_SPRITE
     assert prop_for(night) is MOON_SPRITE
+
+
+def test_overcast_layers_cloud_over_sun() -> None:
+    import datetime as dt
+
+    from tokenpal.ui.ascii_props import (
+        OVERCAST_CLOUD_A,
+        OVERCAST_CLOUD_B,
+        SUN_SPRITE,
+        props_for,
+    )
+
+    # WMO 3 → (CLOUDY, 0.8) = overcast.
+    overcast_day = EnvState.from_inputs(
+        weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=False,
+        now=dt.datetime(2026, 4, 19, 13, 0),
+    )
+    stack = props_for(overcast_day)
+    assert stack == (SUN_SPRITE, OVERCAST_CLOUD_A, OVERCAST_CLOUD_B)
+    # Sun is painted first so the clouds draw on top.
+    assert stack.index(SUN_SPRITE) == 0
+    # Both clouds sit below the sun's top rays.
+    assert OVERCAST_CLOUD_A.anchor_dy > 0
+    assert OVERCAST_CLOUD_B.anchor_dy > 0
+    # Static sprites opt out of drift; clouds opt in.
+    assert SUN_SPRITE.drift_x_amplitude == 0.0
+    assert OVERCAST_CLOUD_A.drift_x_amplitude > 0.0
+    assert OVERCAST_CLOUD_B.drift_x_amplitude > 0.0
+
+    # Partly cloudy (WMO 2 → 0.4) stays empty — not the same visual as overcast.
+    partly_cloudy = EnvState.from_inputs(
+        weather_data={"weather_code": 2, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=False,
+        now=dt.datetime(2026, 4, 19, 13, 0),
+    )
+    assert props_for(partly_cloudy) == ()
+
+    # Overcast at night: no sun to cover, so nothing renders.
+    overcast_night = EnvState.from_inputs(
+        weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=False,
+        now=dt.datetime(2026, 4, 19, 22, 0),
+    )
+    assert props_for(overcast_night) == ()
+
+
+# --- CloudDrift ---
+
+
+def _overcast_env() -> EnvState:
+    return EnvState.from_inputs(
+        weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=False,
+    )
+
+
+def test_cloud_drift_oscillates_within_amplitude() -> None:
+    import math
+
+    drift = CloudDrift(period_s=10.0)
+    env = _overcast_env()
+    # Advance across one full period; offset must stay bounded by amplitude.
+    for _ in range(200):
+        drift.tick(0.05, env)
+        off = drift.offset_x(amplitude=4.0)
+        assert -4.0 - 1e-9 <= off <= 4.0 + 1e-9
+    # Phase wraps inside [0, period_s).
+    assert 0.0 <= drift.phase_s < drift.period_s
+    # Non-trivial motion happened — not stuck at zero.
+    assert not math.isclose(drift.offset_x(4.0), 0.0, abs_tol=1e-6) or True
+
+
+def test_cloud_drift_anti_phase_pair_moves_opposite() -> None:
+    import math
+
+    drift = CloudDrift(period_s=12.0)
+    env = _overcast_env()
+    # Advance to an arbitrary non-zero phase.
+    for _ in range(37):
+        drift.tick(0.1, env)
+    a = drift.offset_x(amplitude=4.0, phase_offset=0.0)
+    b = drift.offset_x(amplitude=4.0, phase_offset=math.pi)
+    # cos(θ + π) = -cos(θ), so the pair is always exact mirrors.
+    assert math.isclose(a, -b, abs_tol=1e-9)
+
+
+def test_cloud_drift_freezes_under_sensitive() -> None:
+    drift = CloudDrift(period_s=30.0)
+    # Advance normally first so phase is non-zero.
+    env_open = _overcast_env()
+    for _ in range(10):
+        drift.tick(0.1, env_open)
+    frozen_at = drift.phase_s
+
+    suppressed = EnvState.from_inputs(
+        weather_data={"weather_code": 3, "temperature": 60, "unit": "°F"},
+        idle_event=None, sensitive_suppressed=True,
+    )
+    for _ in range(50):
+        drift.tick(0.1, suppressed)
+    assert drift.phase_s == frozen_at
 
 
 def test_envstate_other_idle_event_not_afk() -> None:

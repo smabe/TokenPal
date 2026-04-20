@@ -25,11 +25,12 @@ from textual.timer import Timer
 from textual.widget import Widget
 from textual.widgets import Input, Static
 
-from tokenpal.ui.ascii_props import prop_for, style_for
+from tokenpal.ui.ascii_props import PropSprite, props_for, style_for
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import (
     BuddyMotion,
+    CloudDrift,
     EnvironmentSnapshot,
     EnvState,
     Kind,
@@ -430,8 +431,9 @@ class ParticleSky(Widget):
         self._get_speech_region = get_speech_region
         self._motion = BuddyMotion()
         self._field = ParticleField()
+        self._cloud_drift = CloudDrift()
         self._snapshot: EnvironmentSnapshot | None = None
-        self._cached_prop_anchor: tuple[Any, int, int] | None = None
+        self._cached_prop_anchors: tuple[tuple[PropSprite, int, int], ...] = ()
         self._last_buddy_offset: tuple[int, int] = (0, 0)
         self._last_speech_offset: tuple[int, int] = (0, 0)
         # Star field signature: (panel_w, panel_h, max_x). Re-populates
@@ -467,6 +469,7 @@ class ParticleSky(Widget):
         slide_h = 0.0  # buddy stays planted; horizontal slide only
 
         self._motion.tick(_PARTICLE_TICK_S, slide_w, slide_h, env)
+        self._cloud_drift.tick(_PARTICLE_TICK_S, env)
 
         centered_offset_x = int(round(self._motion.x - slide_w / 2.0))
         centered_offset_y = 0
@@ -481,17 +484,26 @@ class ParticleSky(Widget):
             buddy_y=float(panel_h),
         )
 
-        prop = prop_for(env) if self._snapshot else None
-        if prop:
+        prop_stack = props_for(env) if self._snapshot else ()
+        anchors: list[tuple[PropSprite, int, int]] = []
+        for prop in prop_stack:
             if prop.follows_buddy:
                 anchor_x = int(round(buddy_x_center - prop.width / 2))
                 anchor_y = max(0, panel_h - prop.height)
             else:
                 anchor_x = max(0, panel_w - prop.width - 2)
                 anchor_y = 0
-            self._cached_prop_anchor = (prop, anchor_x, anchor_y)
-        else:
-            self._cached_prop_anchor = None
+            drift_dx = 0
+            if prop.drift_x_amplitude > 0.0:
+                drift_dx = int(round(self._cloud_drift.offset_x(
+                    prop.drift_x_amplitude, prop.drift_phase_offset,
+                )))
+            anchors.append((
+                prop,
+                anchor_x + prop.anchor_dx + drift_dx,
+                anchor_y + prop.anchor_dy,
+            ))
+        self._cached_prop_anchors = tuple(anchors)
 
         # Star field: pre-populate when entering clear+night; re-populate
         # when the panel resizes OR the moon's left edge changes (e.g. the
@@ -499,8 +511,8 @@ class ParticleSky(Widget):
         starry = env.kind is Kind.CLEAR and not env.is_day
         if starry:
             max_x = panel_w
-            if self._cached_prop_anchor is not None:
-                prop, ax, _ay = self._cached_prop_anchor
+            if self._cached_prop_anchors:
+                prop, ax, _ay = self._cached_prop_anchors[0]
                 # ax is panel_w - prop.width - 2; clamp to one cell left of it.
                 max_x = max(1, ax - 1)
             sig = (panel_w, panel_h, max_x)
@@ -543,20 +555,19 @@ class ParticleSky(Widget):
 
         row: list[tuple[str, Any] | None] = [None] * width
 
-        cached = self._cached_prop_anchor
-        if cached is not None:
-            prop, anchor_x, anchor_y = cached
+        for prop, anchor_x, anchor_y in self._cached_prop_anchors:
             local_py = y - anchor_y
-            if 0 <= local_py < prop.height:
-                line = prop.lines[local_py]
-                if prop.invert:
-                    prop_style = Style(color="#1a1a2e", bgcolor=prop.color)
-                else:
-                    prop_style = style_for(prop.color) + _SKY_BG
-                for i, ch in enumerate(line):
-                    cx = anchor_x + i
-                    if 0 <= cx < width and ch != " ":
-                        row[cx] = (ch, prop_style)
+            if not (0 <= local_py < prop.height):
+                continue
+            line = prop.lines[local_py]
+            if prop.invert:
+                prop_style = Style(color="#1a1a2e", bgcolor=prop.color)
+            else:
+                prop_style = style_for(prop.color) + _SKY_BG
+            for i, ch in enumerate(line):
+                cx = anchor_x + i
+                if 0 <= cx < width and ch != " ":
+                    row[cx] = (ch, prop_style)
 
         for p in self._field.particles:
             px = int(round(p.x))

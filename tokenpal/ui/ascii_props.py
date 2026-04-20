@@ -8,6 +8,7 @@ every Style we need at import time and reuse them per-tick.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from rich.style import Style
@@ -54,6 +55,14 @@ class PropSprite:
     color: str
     follows_buddy: bool  # True → cloud anchored above buddy; False → fixed sky corner
     invert: bool = False  # True → fg/bg swapped at render time
+    anchor_dx: int = 0  # cell offset from computed anchor (for layered stacks)
+    anchor_dy: int = 0
+    # Horizontal drift amplitude in cells. 0 = stationary. When >0 the overlay
+    # consults the shared CloudDrift clock and adds cos(phase + offset) * amp
+    # to anchor_x each tick, letting two sprites share a clock but move
+    # anti-phase via different drift_phase_offset values.
+    drift_x_amplitude: float = 0.0
+    drift_phase_offset: float = 0.0
 
     @property
     def height(self) -> int:
@@ -106,10 +115,59 @@ RAIN_CLOUD_SPRITE = PropSprite(
 )
 
 
-def prop_for(env: EnvState) -> PropSprite | None:
-    """Return the prop sprite for this environment. None when no prop applies."""
+# Overcast clouds layered in front of the sun. Same width as SUN_SPRITE so the
+# fixed sky-corner anchor lines up; anchor_dy pushes them down so they cover
+# the sun's dense middle rows while leaving the top rays peeking out. Two
+# sprites share one CloudDrift clock at anti-phase (π apart) so they always
+# move in opposite directions — reads as two clouds passing each other past
+# the sun.
+_OVERCAST_CLOUD_LINES = (
+    "  ░░▒▒▒▒▒▒░░  ",
+    " ░▒▒▓▓▓▓▓▓▒▒░ ",
+    "▒▓▓▓██████▓▓▓▒",
+    " ░▒▒▓▓▓▓▓▓▒▒░ ",
+)
+
+OVERCAST_CLOUD_A = PropSprite(
+    lines=_OVERCAST_CLOUD_LINES,
+    color="#aaaaaa",
+    follows_buddy=False,
+    anchor_dy=2,
+    drift_x_amplitude=4.0,
+    drift_phase_offset=0.0,
+)
+
+OVERCAST_CLOUD_B = PropSprite(
+    lines=_OVERCAST_CLOUD_LINES,
+    color="#aaaaaa",
+    follows_buddy=False,
+    anchor_dx=-6,
+    anchor_dy=3,
+    drift_x_amplitude=4.0,
+    drift_phase_offset=math.pi,
+)
+
+
+# Overcast threshold on Kind.CLOUDY intensity. WMO 3 maps to 0.8 (overcast);
+# WMO 2 maps to 0.4 (partly cloudy) — below this we leave the sky empty so
+# light-cloud days don't claim the same visual as full overcast.
+_OVERCAST_INTENSITY = 0.7
+
+
+def props_for(env: EnvState) -> tuple[PropSprite, ...]:
+    """Return 0+ sprites to stack for this environment, drawn back-to-front."""
     if env.kind is Kind.CLEAR:
-        return SUN_SPRITE if env.is_day else MOON_SPRITE
+        return (SUN_SPRITE if env.is_day else MOON_SPRITE,)
+    if env.kind is Kind.CLOUDY:
+        if env.is_day and env.intensity >= _OVERCAST_INTENSITY:
+            return (SUN_SPRITE, OVERCAST_CLOUD_A, OVERCAST_CLOUD_B)
+        return ()
     if env.kind in (Kind.RAIN, Kind.DRIZZLE, Kind.STORM, Kind.SNOW):
-        return RAIN_CLOUD_SPRITE
-    return None
+        return (RAIN_CLOUD_SPRITE,)
+    return ()
+
+
+def prop_for(env: EnvState) -> PropSprite | None:
+    """Back-compat shim — returns the first sprite from :func:`props_for`."""
+    stack = props_for(env)
+    return stack[0] if stack else None

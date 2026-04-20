@@ -122,6 +122,29 @@ class EnvState:
         )
 
 
+class CloudDrift:
+    """Shared oscillator clock for drifting sky props. One phase counter feeds
+    every sprite that opts in via ``PropSprite.drift_x_amplitude``; per-sprite
+    ``drift_phase_offset`` lets two sprites share the clock while moving
+    anti-phase (clouds passing each other in opposite directions).
+    """
+
+    def __init__(self, period_s: float = 45.0) -> None:
+        self.phase_s = 0.0
+        self.period_s = period_s
+
+    def tick(self, dt: float, env: EnvState) -> None:
+        if env.sensitive_suppressed:
+            return
+        self.phase_s = (self.phase_s + dt) % self.period_s
+
+    def offset_x(self, amplitude: float, phase_offset: float = 0.0) -> float:
+        if amplitude == 0.0 or self.period_s <= 0.0:
+            return 0.0
+        angle = (self.phase_s / self.period_s) * 2.0 * math.pi + phase_offset
+        return amplitude * math.cos(angle)
+
+
 class BuddyMotion:
     """Continuous-position slide. The buddy picks a target inside the stage,
     eases toward it at ``speed`` cells/sec, then picks a new target after a
