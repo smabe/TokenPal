@@ -30,7 +30,11 @@ from __future__ import annotations
 from rich.console import Console
 from rich.text import Text
 
-from tokenpal.ui.ascii_zones import headwear_prefix, normalize_zones
+from tokenpal.ui.ascii_zones import (
+    apply_replace_zones,
+    headwear_prefix,
+    normalize_zones,
+)
 
 # --- humanoid-tall: standard hero/adventurer build ---
 # Finn, Mordecai, Marco, generic protagonist.
@@ -348,6 +352,7 @@ def render(
     # splitlines preserves leading/trailing blanks (e.g. creature_small uses
     # blank rows as padding) where rstrip+split would drop the trailing one.
     body_rows = template.format(**slots).splitlines()
+    body_rows = apply_replace_zones(body_rows, skeleton_name, normalized, slots)
     return [_pad_line(line) for line in prefix_rows + body_rows]
 
 

@@ -42,7 +42,12 @@ from tokenpal.tools.voice_profile import (
 )
 from tokenpal.ui.ascii_skeletons import PALETTE_KEYS, SKELETONS
 from tokenpal.ui.ascii_skeletons import render as _render_skeleton
-from tokenpal.ui.ascii_zones import HEADWEAR_RUBRIC, normalize_zones
+from tokenpal.ui.ascii_zones import (
+    FACIAL_HAIR_RUBRIC,
+    HEADWEAR_RUBRIC,
+    normalize_zones,
+    rubric_block,
+)
 from tokenpal.util.text_guards import is_clean_english
 
 
@@ -385,7 +390,7 @@ _DEFAULT_CLASSIFICATION: dict = {
     },
     "eye": "●",
     "mouth": "▽",
-    "zones": {"headwear": "none"},
+    "zones": {"headwear": "none", "facial_hair": "none"},
 }
 
 
@@ -494,14 +499,16 @@ def _build_classifier_prompt(
         f'Pick one mouth glyph: ▽ ◇ ◡ ⌣ ω ᗣ\n\n'
         f'Pick ONE headwear zone. "none" is fronted — use it unless '
         f'the character truly has that accessory in canon:\n'
-        + "".join(f"- {k}: {v}\n" for k, v in HEADWEAR_RUBRIC.items())
-        + '\n'
-        f'Output ONLY this JSON, no prose:\n'
-        '{"skeleton":"...","palette":{"hair":"#rrggbb",'
-        '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
-        '"shadow":"#rrggbb","highlight":"#rrggbb"},'
-        '"eye":"...","mouth":"...",'
-        '"zones":{"headwear":"none"}}'
+        + rubric_block(HEADWEAR_RUBRIC)
+        + 'Pick ONE facial_hair zone. "none" is fronted — use it '
+        + 'unless the character has a canonical beard on screen:\n'
+        + rubric_block(FACIAL_HAIR_RUBRIC)
+        + 'Output ONLY this JSON, no prose:\n'
+        + '{"skeleton":"...","palette":{"hair":"#rrggbb",'
+        + '"skin":"#rrggbb","outfit":"#rrggbb","accent":"#rrggbb",'
+        + '"shadow":"#rrggbb","highlight":"#rrggbb"},'
+        + '"eye":"...","mouth":"...",'
+        + '"zones":{"headwear":"none","facial_hair":"none"}}'
     )
 
 

@@ -48,7 +48,8 @@ def test_parse_accepts_full_v1b_json() -> None:
     parsed = _parse_classification_json(_good_json())
     assert parsed is not None
     assert parsed["palette"]["highlight"] == "#66ccff"
-    assert parsed["zones"] == {"headwear": "none"}
+    assert parsed["zones"]["headwear"] == "none"
+    assert parsed["zones"]["facial_hair"] == "none"
 
 
 def test_parse_falls_back_highlight_to_outfit_when_missing() -> None:
@@ -63,17 +64,19 @@ def test_parse_falls_back_highlight_to_outfit_when_missing() -> None:
     parsed = _parse_classification_json(legacy)
     assert parsed is not None
     assert parsed["palette"]["highlight"] == "#3da8e8"
-    assert parsed["zones"] == {"headwear": "none"}
+    assert parsed["zones"]["headwear"] == "none"
+    assert parsed["zones"]["facial_hair"] == "none"
 
 
 def test_parse_coerces_illegal_zone_combo() -> None:
     raw = _good_json(
         skeleton="ghost_floating",
-        zones={"headwear": "wizard_hat"},
+        zones={"headwear": "wizard_hat", "facial_hair": "beard_long"},
     )
     parsed = _parse_classification_json(raw)
     assert parsed is not None
-    assert parsed["zones"] == {"headwear": "none"}
+    assert parsed["zones"]["headwear"] == "none"
+    assert parsed["zones"]["facial_hair"] == "none"
 
 
 # --- Prompt assembly ------------------------------------------------------

@@ -154,6 +154,8 @@ class TestRenderSkeletonFrames:
 class TestGenerateAsciiArt:
     def test_happy_path_returns_14_line_frames(self) -> None:
         with patch.object(
+            train_voice, "_classify_via_cloud", return_value=None,
+        ), patch.object(
             train_voice, "_classify_character_for_skeleton",
             return_value=_DEFAULT_CLASSIFICATION,
         ):
@@ -163,6 +165,8 @@ class TestGenerateAsciiArt:
     def test_falls_back_to_default_when_classification_fails(self) -> None:
         # Simulate persistent LLM failure (returned None both retries).
         with patch.object(
+            train_voice, "_classify_via_cloud", return_value=None,
+        ), patch.object(
             train_voice, "_classify_character_for_skeleton", return_value=None,
         ):
             idle, idle_alt, talking = _generate_ascii_art("Cthulhu", "unknowable")
