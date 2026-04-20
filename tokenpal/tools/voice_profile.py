@@ -23,13 +23,34 @@ def franchise_from_source(source: str) -> str:
     return FANDOM_NAMES.get(slug, slug.title())
 
 
+def _parse_persona_section(persona: str, section: str) -> str:
+    """Return the raw text after ``SECTION:`` on its line, or empty string."""
+    prefix = f"{section.upper()}:"
+    for line in persona.splitlines():
+        if line.strip().upper().startswith(prefix):
+            return line.split(":", 1)[1].strip()
+    return ""
+
+
 def parse_catchphrases(persona: str) -> list[str]:
     """Extract quoted catchphrases from a structured persona card."""
-    for line in persona.splitlines():
-        if line.strip().upper().startswith("CATCHPHRASES:"):
-            text = line.split(":", 1)[1].strip()
-            return re.findall(r'"([^"]+)"', text)
-    return []
+    return re.findall(r'"([^"]+)"', _parse_persona_section(persona, "CATCHPHRASES"))
+
+
+def parse_visual_tells(persona: str) -> str:
+    """Extract the VISUAL section from a structured persona card.
+
+    Grounds the ASCII classifier with signature shapes and canonical
+    colors. Empty string for legacy personas missing the section.
+    """
+    return _parse_persona_section(persona, "VISUAL")
+
+
+def attach_visual_tells(persona: str, visual_tells: str) -> str:
+    """Append a ``VISUAL:`` line to a persona card if one isn't present."""
+    if not visual_tells or parse_visual_tells(persona):
+        return persona
+    return persona.rstrip() + f"\nVISUAL: {visual_tells}\n"
 
 
 @dataclass

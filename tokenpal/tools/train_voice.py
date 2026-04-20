@@ -34,7 +34,9 @@ from tokenpal.tools.voice_profile import (
     list_profiles,
     load_profile,
     make_profile,
+    attach_visual_tells,
     parse_catchphrases,
+    parse_visual_tells,
     save_profile,
     slugify,
 )
@@ -216,6 +218,52 @@ def _generate_persona(
     return None
 
 
+def _generate_visual_tells(character: str, franchise: str = "") -> str:
+    """Ask the LLM to describe the character's canonical on-screen look.
+
+    Separate call from the voice persona because appearance is pure
+    recall of visual canon — not derivable from dialogue samples. Low
+    temperature and a forceful "unknown if unsure" instruction keep
+    hallucinated costumes out of the VISUAL field. Returns a one-line
+    description or empty string if the model refuses / can't produce
+    clean English.
+    """
+    origin = f" from {franchise}" if franchise else ""
+    prompt = (
+        f'Describe the on-screen appearance of "{character}"{origin}.\n\n'
+        f"Recall how this character is actually drawn in the show. "
+        f"List CANONICAL colors and the signature silhouette tells that "
+        f"make them recognizable.\n\n"
+        f"Format: ONE sentence. Include hair/hat color, skin color, "
+        f"outfit colors, and 1-3 silhouette tells (hat shape, beard, "
+        f"tail, antenna, eye count, etc.).\n\n"
+        f"Good example (Finn the Human): 'White bear-ear hood, pale "
+        f"skin, cyan tee, dark navy shorts, bone-white skin visible "
+        f"between shirt and shorts, green backpack strap.'\n\n"
+        f"Good example (Bender): 'Shiny silver-gray cylindrical metal "
+        f"body, single curved antenna on top, two small yellow eyes "
+        f"close together, slot-grill mouth, chest door rectangle.'\n\n"
+        f"STRICT RULES:\n"
+        f"- Use ONLY the real canonical colors from the actual show.\n"
+        f"- Do NOT invent or generalize. If you genuinely do not know "
+        f"what this character looks like, respond with the single word "
+        f"UNKNOWN instead of guessing.\n"
+        f"- No preamble. One sentence only.\n\n"
+        f"{_ENGLISH_ONLY_SUFFIX}"
+    )
+    # Factual recall, so cooler than the classifier's (0.5, 0.3) ladder.
+    for temp in (0.3, 0.2):
+        text = _ollama_generate(prompt, max_tokens=150, temperature=temp)
+        if not text:
+            continue
+        line = text.strip().split("\n")[0].strip()
+        if line.upper().startswith("UNKNOWN"):
+            return ""
+        if is_clean_english(line) and 20 <= len(line) <= 400:
+            return line
+    return ""
+
+
 def _parse_numbered_lines(text: str) -> list[str]:
     """Strip numbering/quotes, keep lines that are 8-60 chars and clean English."""
     result: list[str] = []
@@ -368,18 +416,16 @@ def _classify_character_for_skeleton(
     """
     franchise = franchise_from_source(source) if source else ""
     origin = f' from {franchise}' if franchise else ""
-    color_hint = (
-        f'\n{character} is from {franchise}. Use canonical colors from '
-        f'that franchise — hat/hair/skin/outfit colors the character is '
-        f'known for on screen. If unsure, err toward bright, terminal-'
-        f'readable tones (mid-luminance hex, nothing near #000000).\n'
-        if franchise else
+    visual_tells = parse_visual_tells(persona)
+    visual_block = (
+        f'\nVisual canon (USE THESE COLORS AND SHAPES):\n{visual_tells}\n'
+        if visual_tells else
         '\nPick bright, terminal-readable colors (mid-luminance hex, '
         'nothing near #000000) — dark backgrounds hide dark palettes.\n'
     )
     prompt = (
         f'Pick an ASCII buddy template for "{character}"{origin}.\n'
-        f'{color_hint}\n'
+        f'{visual_block}\n'
         f'Persona:\n{persona[:400]}\n\n'
         f'Templates (pick ONE):\n'
         f'- humanoid_tall: standard hero/adventurer (Finn, Mordecai)\n'
@@ -496,15 +542,16 @@ def _generate_voice_assets(
 
     franchise = franchise_from_source(source)
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         f_p = pool.submit(_generate_persona, character, lines, franchise)
+        f_v = pool.submit(_generate_visual_tells, character, franchise)
         f_g = pool.submit(_generate_greetings, character, lines)
         f_q = pool.submit(_generate_offline_quips, character, lines)
         f_m = pool.submit(_generate_mood_prompts, character, lines)
         f_s = pool.submit(_generate_structure_hints, character, lines)
 
     mood_prompts, mood_roles, default_mood = f_m.result()
-    persona = f_p.result() or ""
+    persona = attach_visual_tells(f_p.result() or "", f_v.result())
 
     # Extract anchor lines using catchphrases from the persona
     catchphrases = parse_catchphrases(persona)
@@ -751,16 +798,17 @@ def regenerate_voice_assets(
     franchise = franchise_from_source(profile.source)
     _progress(f"Regenerating {profile.character}...")
 
-    with ThreadPoolExecutor(max_workers=5) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         f_p = pool.submit(
             _generate_persona, profile.character, profile.lines, franchise,
         )
+        f_v = pool.submit(_generate_visual_tells, profile.character, franchise)
         f_g = pool.submit(_generate_greetings, profile.character, profile.lines)
         f_q = pool.submit(_generate_offline_quips, profile.character, profile.lines)
         f_m = pool.submit(_generate_mood_prompts, profile.character, profile.lines)
         f_s = pool.submit(_generate_structure_hints, profile.character, profile.lines)
 
-    persona = f_p.result() or ""
+    persona = attach_visual_tells(f_p.result() or "", f_v.result())
     profile.persona = persona
     profile.anchor_lines = _extract_anchor_lines(
         profile.lines, parse_catchphrases(persona),
