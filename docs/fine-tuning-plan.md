@@ -31,7 +31,7 @@ Voice lines from `~/.tokenpal/voices/*.json` converted to ShareGPT-format JSONL 
 - **AMD laptop with RTX 4070** (8GB VRAM) — primary, tested end-to-end
 - **AMD desktop with RX 9070 XT** (16GB VRAM) — install.sh detects ROCm, not yet validated
 - Mac M-series — orchestrates training via SSH, does not train locally
-- Dell XPS 16 (Intel NPU) — not supported for training, install.sh gives clear error
+- Dell XPS 16 (Intel iGPU) — not supported for training, install.sh gives clear error
 
 ## What Shipped
 

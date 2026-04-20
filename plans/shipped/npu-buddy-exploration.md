@@ -1,5 +1,13 @@
 # "Windoze" — NPU Desktop Buddy Exploration Plan
 
+> **Status: PARKED — NOT IMPLEMENTING.** Archived here for historical context only.
+>
+> The original brief targeted Intel AI Boost (Dell XPS 16) and AMD XDNA (8945HS) NPUs as inference backends. TokenPal has since shipped a dual-backend architecture (Ollama + llamacpp-direct) that comfortably runs Qwen3-14B on the RX 9070 XT and hits that same server remotely from thin clients via the client-server story. That covers the "always-on, power-efficient" use case the NPU was meant to solve, without a third inference path to maintain.
+>
+> The plan's own honest assessment already flagged XDNA 1 at 16 TOPS as too weak for LLMs. On the Dell side, Phi Silica / Phi-3-mini on the NPU would be a quality downgrade from what the personality/drift guardrails are tuned against. Revisit only if (a) the Dell becomes a primary daily host or (b) small-model quality catches up to Qwen3-14B for TokenPal's use case.
+>
+> Parked 2026-04-19.
+
 ## Context
 Build a desktop buddy: an **ASCII character** that floats on screen, **watches what you're doing** (screen capture → vision model), **comments on it** via local LLM, and optionally **speaks/listens** — all using local accelerators. Two target machines, very different hardware profiles.
 

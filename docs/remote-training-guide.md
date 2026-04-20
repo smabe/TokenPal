@@ -157,7 +157,7 @@ Your local TokenPal code is packaged into a Python wheel and bundled with both `
 **Linux** (`install.sh`) — 6 phases:
 1. **WSL relocation** — if on `/mnt/c/`, copies to native Linux filesystem
 2. **Python check** — verifies Python 3.12+
-3. **GPU detection** — CUDA, ROCm, or Intel NPU. ROCm version detected for correct PyTorch index.
+3. **GPU detection** — CUDA or ROCm. ROCm version detected for correct PyTorch index.
 4. **Venv setup** — creates/reuses `~/tokenpal-training/.venv`
 5. **PyTorch** — installs with the correct CUDA/ROCm index URL (skips if already working)
 6. **TokenPal** — installs the wheel with training dependencies

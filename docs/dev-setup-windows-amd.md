@@ -1,8 +1,8 @@
 # Dev Environment Setup — Windows + AMD Ryzen 9 8945HS + RTX 4070 (Personal Laptop)
 
-Target: AMD Ryzen 9 8945HS, RTX 4070 Laptop GPU (8GB VRAM), 32GB RAM, AMD XDNA NPU (16 TOPS).
+Target: AMD Ryzen 9 8945HS, RTX 4070 Laptop GPU (8GB VRAM), 32GB RAM.
 
-**Primary inference target: RTX 4070 via CUDA.** The XDNA NPU at 16 TOPS is below Copilot+ threshold — no Windows AI APIs. Use it for tiny background tasks at best.
+**Primary inference target: RTX 4070 via CUDA.**
 
 ---
 
@@ -53,25 +53,7 @@ nvcc --version
 
 ---
 
-## 3. AMD XDNA NPU Setup (Optional — low priority)
-
-The NPU is only 16 TOPS and can't run Copilot+ features, but you can experiment with small models.
-
-### Install AMD NPU driver
-- Should come with AMD Adrenalin driver package
-- Verify in Task Manager: Performance → NPU 0 shows "AMD Radeon NPU Compute Accelerator Device"
-- You already have this confirmed from the screenshot
-
-### Ryzen AI Software SDK (optional exploration)
-```powershell
-# Download from: https://www.amd.com/en/developer/resources/ryzen-ai-software.html
-# Includes Vitis AI Execution Provider for ONNX Runtime
-# Only worth exploring for tiny INT8 models (classifiers, keyword detection)
-```
-
----
-
-## 4. Python Environment
+## 3. Python Environment
 
 ### Create project venv
 ```powershell
@@ -144,7 +126,7 @@ python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
 
 ---
 
-## 5. Model Downloads
+## 4. Model Downloads
 
 ### For llama.cpp (GGUF format)
 ```powershell
@@ -173,7 +155,7 @@ huggingface-cli download microsoft/Phi-3-mini-4k-instruct-gguf Phi-3-mini-4k-ins
 
 ---
 
-## 6. LM Studio / Ollama (HTTP backend — easiest path)
+## 5. LM Studio / Ollama (HTTP backend — easiest path)
 
 ### LM Studio
 1. Download from https://lmstudio.ai
@@ -193,7 +175,7 @@ ollama serve
 
 ---
 
-## 7. Verification Checklist
+## 6. Verification Checklist
 
 ```powershell
 # 1. NVIDIA driver + CUDA
@@ -222,13 +204,11 @@ python -c "import psutil; print(f'CPU: {psutil.cpu_percent()}%, RAM: {psutil.vir
 # 8. Screen capture
 python -c "import mss; sct = mss.mss(); print(sct.monitors)"
 
-# 9. NPU (optional)
-# Task Manager → Performance → NPU 0 should show AMD Radeon NPU Compute Accelerator Device
 ```
 
 ---
 
-## 8. Tesseract OCR (optional)
+## 7. Tesseract OCR (optional)
 
 ```powershell
 winget install UB-Mannheim.TesseractOCR
@@ -237,7 +217,7 @@ winget install UB-Mannheim.TesseractOCR
 
 ---
 
-## 9. LibreHardwareMonitor (for deep thermals)
+## 8. LibreHardwareMonitor (for deep thermals)
 
 Same as Intel setup:
 - Download from: https://github.com/LibreHardwareMonitor/LibreHardwareMonitor/releases
@@ -246,7 +226,7 @@ Same as Intel setup:
 
 ---
 
-## 10. LoRA Fine-Tuning (Native Windows)
+## 9. LoRA Fine-Tuning (Native Windows)
 
 This machine can fine-tune voice models directly — no WSL needed. The training pipeline auto-detects Windows and uses PowerShell/cmd.exe natively. See [remote-training-guide.md](remote-training-guide.md) for full setup.
 
@@ -265,11 +245,11 @@ Training uses bf16 LoRA + gradient checkpointing + eager attention. Measured: 7.
 
 ---
 
-## 11. Known Gotchas
+## 10. Known Gotchas
 
 - **VRAM budget:** RTX 4070 Laptop has 8 GB VRAM. A Q4 7B model uses ~4.5 GB, leaving room for a small vision model OR the OS, not both. Plan model loading carefully.
 - **llama-cpp-python CUDA wheels:** Must match your CUDA toolkit version exactly. If `pip install` gives CPU-only builds, you need the `--extra-index-url` flag.
 - **Dual GPU confusion:** This machine has both Radeon 780M iGPU and RTX 4070 dGPU. Make sure frameworks target the 4070 (device index 0 in CUDA, but verify with `nvidia-smi`). The 780M is irrelevant.
-- **Power modes:** On battery, Windows may throttle the RTX 4070 or disable it entirely. Test plugged in first. For battery usage, the weak NPU or CPU fallback may actually be useful.
+- **Power modes:** On battery, Windows may throttle the RTX 4070 or disable it entirely. Test plugged in first. For battery usage, fall back to a remote server via the HTTP backend instead of local CPU inference.
 - **pynvml requires admin** for some sensor queries (power draw, thermals). Run terminal as admin for full monitoring.
 - **WMI + pynvml together:** Don't query both at high frequency — they're both slow. Cache readings.

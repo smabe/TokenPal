@@ -164,7 +164,7 @@ Cross-platform AI desktop buddy. ASCII character observes your screen via modula
 
 ## Repo
 - GitHub: github.com/smabe/TokenPal (private)
-- 4 target machines: Mac (M-series), Dell XPS 16 (Intel NPU), AMD laptop (RTX 4070), AMD desktop (RX 9070 XT)
+- 4 target machines: Mac (M-series), Dell XPS 16 (Intel iGPU), AMD laptop (RTX 4070), AMD desktop (RX 9070 XT)
 - Dev setup guides in `docs/dev-setup-*.md`
 - Plan files in `plans/` — active plans track current work, shipped plans in `plans/shipped/`
 - Open issues: `gh issue list`

@@ -25,7 +25,7 @@ python3 setup_tokenpal.py --client # client-only (remote server)
 Detailed setup with multiple LLM backend options, GPU configuration, and verification:
 
 - [macOS (Apple Silicon)](docs/dev-setup-macos.md)
-- [Windows + Intel NPU](docs/dev-setup-windows-intel.md)
+- [Windows (Intel laptop)](docs/dev-setup-windows-intel.md)
 - [Windows + NVIDIA GPU](docs/dev-setup-windows-amd.md)
 - [Windows + AMD GPU](docs/dev-setup-windows-amd-desktop.md)
 - [Linux](docs/dev-setup-linux.md)

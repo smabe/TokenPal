@@ -1,8 +1,8 @@
 # Dev Environment Setup — Windows + Ryzen 9800X3D + Radeon RX 9070 XT (Desktop)
 
-Target: AMD Ryzen 7 9800X3D (no NPU), Radeon RX 9070 XT (16 GB VRAM, RDNA 4). Desktop.
+Target: AMD Ryzen 7 9800X3D, Radeon RX 9070 XT (16 GB VRAM, RDNA 4). Desktop.
 
-**Primary inference target: RX 9070 XT via `llama-server` from lemonade-sdk/llamacpp-rocm.** No NPU on this chip. The 16 GB VRAM makes this your most capable inference machine.
+**Primary inference target: RX 9070 XT via `llama-server` from lemonade-sdk/llamacpp-rocm.** The 16 GB VRAM makes this your most capable inference machine.
 
 > **Status (April 2026):** Ollama does not work correctly on RDNA 4. Vulkan backend produces wrong numerics on dense gemma-4 models; ROCm backend fails to enumerate the card. Use the llama.cpp-direct setup in [docs/amd-dgpu-setup.md](amd-dgpu-setup.md) instead - ships its own ROCm 7 runtime with native gfx120X kernels, ~106 tok/s on gemma-4 E4B dense and ~102 tok/s on gemma-4 26B MoE (IQ3_S). The rest of this doc still applies for Windows/Python/training-side setup; only the inference-backend section is superseded.
 
@@ -290,7 +290,6 @@ winget install UB-Mannheim.TesseractOCR
 - **PyTorch ROCm on Windows:** Works but wheels are larger and less frequently updated than CUDA wheels. Check https://pytorch.org/get-started/locally/ for current availability.
 - **VRAM headroom:** 16 GB sounds generous, but Windows + Adrenalin driver + desktop compositor eat ~1-2 GB. Budget 14 GB for models. See the VRAM tier table in [docs/amd-dgpu-setup.md](amd-dgpu-setup.md).
 - **FP8 native support:** The 9070 XT has native FP8 WMMA instructions. If llama.cpp/vLLM support FP8 quantization for RDNA 4, you could run even larger models. Cutting edge -- check llama.cpp releases for RDNA 4 FP8 support.
-- **No NPU.** The 9800X3D has no neural processor. Don't waste time looking for one. The 9070 XT is your only accelerator.
 - **Desktop thermals are a non-issue** compared to laptops. No throttling to worry about.
 
 ---
@@ -304,4 +303,4 @@ This is your **power station** for TokenPal development:
 - **No battery concerns:** Can run inference flat-out without worrying about power efficiency.
 - **TokenPal inference server:** Serves the whole LAN via `scripts/install-windows.ps1 -Mode Server`. Mac clients point at `http://apollyon:8585/v1`.
 
-The laptop NPU story is about efficiency; this machine is about capability.
+Point your thin clients (laptops, Mac) at this box via the HTTP backend and let it do the heavy lifting.
