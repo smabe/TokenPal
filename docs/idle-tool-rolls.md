@@ -44,9 +44,17 @@ into a riff prompt.
 ```
 
 The roller fires **only when the comment gate chose silence**, so it
-cannot inflate the comment rate. All other posture — pacing, 8-per-5min
-cap, near-duplicate guard, sensitive-app silence, forced-silence
-windows — is preserved.
+cannot inflate the comment rate. Pacing, 8-per-5min cap, near-duplicate
+guard, and sensitive-app silence all still apply.
+
+The observation-path **forced-silence window** does NOT apply to idle
+rolls — see `Brain._idle_tools_eligible` in `orchestrator.py`. That
+window exists to stop near-dup LLM spam; idle rolls inject fresh tool
+output and are the right recovery from dead air, not something to
+suppress further. Before this decoupling landed a single overnight
+session saw zero idle rolls across 11 hours because suppressed
+observations kept the silence window re-triggering. See
+`commentary-gate.md` for the emission-gate plumbing that sits upstream.
 
 ## Rule catalog
 
@@ -81,11 +89,26 @@ frozen `IdleToolRule` dataclass.
 user hasn't granted the `web_fetches` consent category; `memory_recall`
 keeps the feature alive without network access.
 
-**Running bits:** `morning_word` registers today's word as a multi-hour
-callback (`bit_decay_s=28800`), then emits an opener line. For the next
-8 hours the word rides along every prompt as a soft *"slip it in once
-naturally, never re-define"* instruction. `todays_joke_bit` does the
-same for a joke but silent — no opener, callback-only, 4h decay.
+**Running bits.** Seven rules register multi-hour callbacks so the
+fresh detail can ride along later observations instead of being orphaned
+on a single line:
+
+- `morning_word` — 8h decay, announces on first fire ("today's word is…")
+- `long_focus_fact` — 2h decay, promoted from one-shot so a fact riffed
+  during a deep-focus stretch can weave into later observations
+- `on_this_day_opener` — 3h decay, announces one pick and keeps it rideable
+- `lunar_override` — 4h decay, keeps the full-moon vibe through the
+  late-night window
+- `todays_joke_bit` — 4h decay, SILENT (no opener), callback-only
+- `git_shipped_callback` — 2h decay, announces a real ship with a
+  celebratory random-fact aside
+- `callback_streak` — 3h decay, celebrates a 3+ daily-session streak
+- `habit_rehearsal` — 30min decay, SILENT, caches a first-app routine
+  for the LLM to riff on without announcing it
+
+`PersonalityEngine._running_bits` is a 3-slot LRU. Four of those eight
+can register in a morning; the oldest evict first, which is fine
+because their `bit_decay_s` was already short for that reason.
 
 **Chain rules:** `morning_monologue` invokes its primary tool
 (`weather_forecast_week`) plus every name in `extra_tool_names`
@@ -269,38 +292,69 @@ sense_name  = "idle_tools"
 event_type  = "idle_tool_fire"
 summary     = rule.name
 data        = {
-  "tool":         rule.tool_name,
-  "emitted":      bool,              # False if filter_response swallowed it
-  "tool_success": bool,              # tool returned non-empty output
-  "running_bit":  bool,
-  "latency_ms":   int,
+  "tool":          rule.tool_name,
+  "emitted":       bool,              # False if filter_response swallowed it
+  "tool_success":  bool,              # tool returned non-empty output
+  "running_bit":   bool,
+  "latency_ms":    int,
+  "filter_reason": str,               # present on swallows — see commentary-gate.md
 }
+```
+
+`filter_reason` is one of the `FilterReason` enum values from
+`tokenpal/brain/personality.py` (`drifted`, `anchor_regurgitation`,
+`cross_franchise`, `too_short`, `silent_marker`, `too_short_post_cleanup`),
+plus the idle-tool-specific `near_duplicate` and `empty`. It's missing
+from the `data` row on successful emits — that's the cheap signal for
+"success vs. swallow" when filtering telemetry.
+
+```sql
+-- All swallows by reason in the last 24h (tune framings with this)
+SELECT json_extract(data_json, '$.filter_reason') AS reason, COUNT(*)
+FROM observations
+WHERE sense_name = 'idle_tools'
+  AND timestamp > strftime('%s', 'now', '-1 day')
+  AND json_extract(data_json, '$.emitted') = 0
+GROUP BY 1 ORDER BY 2 DESC;
 ```
 
 These rows make the `memory_query` tool eventually able to surface
 callbacks like *"you've heard 12 jokes this week"*. Today they're
-just a paper trail for debugging framing drift.
+also the paper trail for debugging framing drift — without
+`filter_reason`, a silent roller is indistinguishable from a broken one.
 
 ## Adding a rule
 
 1. Write the predicate. Keep it cheap — it runs every tick when the
    gate is quiet. A broken predicate is swallowed and logged at DEBUG;
-   it doesn't poison the rest of the roll.
-2. Append an `IdleToolRule(...)` to `M1_RULES` with a unique `name`.
-3. Pick a cooldown. Evergreens (`moon_phase`, `word_of_the_day`,
+   it doesn't poison the rest of the roll. Signals available in
+   `IdleToolContext`: time (`now`, `hour`, `weekday`), session state
+   (`session_minutes`, `first_session_of_day`), active sense readings,
+   mood + weather summary, `time_since_last_comment_s`, consent flag,
+   and the three personalization fields (`daily_streak_days`,
+   `install_age_days`, `pattern_callbacks`).
+2. If the predicate needs a NEW signal not on `IdleToolContext`, extend
+   the dataclass + `build_context` helper + `Brain._build_idle_context`
+   together. Default the new field to a safe empty so existing tests
+   don't need boilerplate. Memory-backed signals should session-cache
+   or TTL-cache; `_build_idle_context` fires on every brain tick.
+3. Append an `IdleToolRule(...)` to `M1_RULES` with a unique `name`.
+4. Pick a cooldown. Evergreens (`moon_phase`, `word_of_the_day`,
    `joke_of_the_day`, `on_this_day`, `sunrise_sunset`) get a warm
    cache for free; everything else hits the network on each fire.
-4. If you want the rule's output to ride along multiple subsequent
+   Local tools (`memory_query`) are always fast — set
+   `needs_web_fetches=False` so the rule survives offline.
+5. If you want the rule's output to ride along multiple subsequent
    prompts, set `running_bit=True` + `bit_decay_s=<seconds>`. Write
    the framing as a soft `{output}`-templated instruction.
-5. If the rule announces itself, set `opener_framing` to the one-shot
+6. If the rule announces itself, set `opener_framing` to the one-shot
    riff instructions. Empty = silent registration.
-6. If the rule is a multi-tool chain, list the companion tools in
+7. If the rule is a multi-tool chain, list the companion tools in
    `extra_tool_names`. They'll share the evergreen cache when
    applicable.
-7. Add a toggle stub in `config.default.toml` under
+8. Add a toggle stub in `config.default.toml` under
    `[idle_tools.rules]` and a comment line.
-8. Add unit tests in `tests/test_brain/test_idle_rules_predicates.py`
+9. Add unit tests in `tests/test_brain/test_idle_rules_predicates.py`
    for edge-time correctness and
    `tests/test_brain/test_idle_tools_monologue.py` for chain / running
    behavior.
