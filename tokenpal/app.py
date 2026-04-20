@@ -54,8 +54,8 @@ from tokenpal.config.senses_writer import (
     set_ssid_label,
 )
 from tokenpal.config.tools_writer import set_enabled_tools
-from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.base import AbstractLLMBackend
+from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.registry import discover_backends, resolve_backend
 from tokenpal.nl_commands import match_nl_command
 from tokenpal.senses.base import AbstractSense
@@ -264,6 +264,11 @@ def main() -> None:
             overlay.clear_voice_frames()
 
     _load_voice_art()
+
+    # Wire the buddy environment overlay (animated weather/idle/sensitive
+    # reactions). Textual overlay uses it; other overlays no-op.
+    if hasattr(overlay, "set_environment_provider"):
+        overlay.set_environment_provider(brain.environment_snapshot)
 
     # Slash command dispatcher
     dispatcher = CommandDispatcher()

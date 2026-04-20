@@ -11,6 +11,8 @@ from typing import Any
 
 from rich.errors import MarkupError
 from rich.markup import escape as _esc_markup
+from rich.segment import Segment
+from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -18,11 +20,21 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
 from textual.screen import ModalScreen
+from textual.strip import Strip
 from textual.timer import Timer
+from textual.widget import Widget
 from textual.widgets import Input, Static
 
+from tokenpal.ui.ascii_props import prop_for, style_for
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
+from tokenpal.ui.buddy_environment import (
+    BuddyMotion,
+    EnvironmentSnapshot,
+    EnvState,
+    Kind,
+    ParticleField,
+)
 from tokenpal.ui.confirm_modal import ConfirmModal
 from tokenpal.ui.registry import register_overlay
 from tokenpal.ui.selection_modal import SelectionGroup, SelectionModal
@@ -163,6 +175,12 @@ class LoadChatHistory(Message):
         super().__init__()
 
 
+class UpdateEnvironmentState(Message):
+    def __init__(self, snapshot: EnvironmentSnapshot) -> None:
+        self.snapshot = snapshot
+        super().__init__()
+
+
 # --- Widgets ---
 
 
@@ -292,6 +310,16 @@ class SpeechBubbleWidget(VerticalScroll):
             self._hide_timer = None
 
 
+_PARTICLE_TICK_S = 0.1
+_ENV_POLL_S = 1.0
+# Explicit bg style for ParticleSky's blank cells. Custom widgets that
+# override render_line don't inherit the CSS background onto unstyled
+# segments — the compositor resolves them through a default theme tint
+# that makes the sky look one shade lighter than the rest of the panel.
+# Painting every blank cell with this explicit bg pins the color.
+_SKY_BG = Style.parse("on #1a1a2e")
+
+
 class BuddyWidget(Static):
     """ASCII buddy art with optional Rich markup and idle blink animation."""
 
@@ -304,7 +332,6 @@ class BuddyWidget(Static):
         self._cached_max_width: int = self._compute_max_frame_width()
 
     def set_custom_frames(self, frames: dict[str, BuddyFrame]) -> None:
-        """Load voice-specific frames and start idle blink if idle_alt exists."""
         self._custom_frames = frames
         self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
@@ -314,7 +341,6 @@ class BuddyWidget(Static):
             self.show_frame(self._get_frame("idle"))
 
     def clear_custom_frames(self) -> None:
-        """Revert to generic frames."""
         self._custom_frames = {}
         self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
@@ -327,13 +353,6 @@ class BuddyWidget(Static):
         self._render_frame(frame)
 
     def _render_frame(self, frame: BuddyFrame) -> None:
-        """Update the widget with a frame; fall back to plain text on MarkupError.
-
-        Repair passes in ``ascii_renderer._fix_markup`` run at load time, but a
-        profile generated before those passes landed — or a particularly
-        creative LLM output — can still smuggle malformed markup into
-        ``frame.lines``. Catching here keeps a bad frame from crashing the app.
-        """
         try:
             self.update("\n".join(frame.lines))
         except MarkupError as exc:
@@ -358,6 +377,15 @@ class BuddyWidget(Static):
     def max_frame_width(self) -> int:
         return self._cached_max_width
 
+    def frame_height(self) -> int:
+        # Number of rows in the active frame (custom voice or generic idle).
+        frame = (
+            self._custom_frames.get("idle")
+            or self._custom_frames.get("talking")
+            or BuddyFrame.get("idle")
+        )
+        return len(frame.lines)
+
     def _compute_max_frame_width(self) -> int:
         frames = self._custom_frames or {
             "idle": BuddyFrame.get("idle"),
@@ -375,6 +403,191 @@ class BuddyWidget(Static):
             self._blink_timer.stop()
             self._blink_timer = None
         self._blink_state = False
+
+
+class ParticleSky(Widget):
+    """A regular (non-layered, opaque) widget that sits between the header
+    and the buddy/bubble row. Renders the sun/moon, cloud-above-buddy, and
+    falling particles. Drives the buddy + speech-region CSS offsets so they
+    slide together.
+    """
+
+    DEFAULT_CSS = """
+    ParticleSky {
+        width: 100%;
+        height: 1fr;
+        background: #1a1a2e;
+    }
+    """
+
+    def __init__(
+        self,
+        get_buddy: Callable[[], BuddyWidget],
+        get_speech_region: Callable[[], Vertical] | None = None,
+    ) -> None:
+        super().__init__(id="particle-sky")
+        self._get_buddy = get_buddy
+        self._get_speech_region = get_speech_region
+        self._motion = BuddyMotion()
+        self._field = ParticleField()
+        self._snapshot: EnvironmentSnapshot | None = None
+        self._cached_prop_anchor: tuple[Any, int, int] | None = None
+        self._last_buddy_offset: tuple[int, int] = (0, 0)
+        self._last_speech_offset: tuple[int, int] = (0, 0)
+        # Star field signature: (panel_w, panel_h, max_x). Re-populates
+        # whenever the panel resizes OR the moon's left edge moves (e.g.
+        # the moon prop arrives after the first tick). None = not populated.
+        self._starfield_for: tuple[int, int, int] | None = None
+
+    def on_mount(self) -> None:
+        self.set_interval(_PARTICLE_TICK_S, self._sim_tick)
+
+    def update_snapshot(self, snapshot: EnvironmentSnapshot) -> None:
+        self._snapshot = snapshot
+
+    def _current_env(self) -> EnvState:
+        snap = self._snapshot
+        return EnvState.from_inputs(
+            weather_data=snap.weather_data if snap else None,
+            idle_event=snap.idle_event if snap else None,
+            sensitive_suppressed=snap.sensitive_suppressed if snap else False,
+        )
+
+    def _sim_tick(self) -> None:
+        env = self._current_env()
+        panel_w = max(1, self.size.width)
+        panel_h = max(1, self.size.height)
+        buddy = self._get_buddy()
+        buddy_w = buddy.max_frame_width()
+        # BuddyMotion.x runs in [0, slide_w]; the buddy art is centered in
+        # his widget, so the visual CSS offset must be shifted by -slide_w/2
+        # to keep him inside the panel bounds (which include the resizable
+        # chat-log divider).
+        slide_w = max(0.0, float(panel_w - buddy_w))
+        slide_h = 0.0  # buddy stays planted; horizontal slide only
+
+        self._motion.tick(_PARTICLE_TICK_S, slide_w, slide_h, env)
+
+        centered_offset_x = int(round(self._motion.x - slide_w / 2.0))
+        centered_offset_y = 0
+        buddy_x_center = panel_w / 2 + (self._motion.x - slide_w / 2.0)
+
+        self._field.tick(
+            _PARTICLE_TICK_S,
+            panel_w,
+            panel_h,
+            env,
+            buddy_x=buddy_x_center,
+            buddy_y=float(panel_h),
+        )
+
+        prop = prop_for(env) if self._snapshot else None
+        if prop:
+            if prop.follows_buddy:
+                anchor_x = int(round(buddy_x_center - prop.width / 2))
+                anchor_y = max(0, panel_h - prop.height)
+            else:
+                anchor_x = max(0, panel_w - prop.width - 2)
+                anchor_y = 0
+            self._cached_prop_anchor = (prop, anchor_x, anchor_y)
+        else:
+            self._cached_prop_anchor = None
+
+        # Star field: pre-populate when entering clear+night; re-populate
+        # when the panel resizes OR the moon's left edge changes (e.g. the
+        # snapshot arrives after the first tick).
+        starry = env.kind is Kind.CLEAR and not env.is_day
+        if starry:
+            max_x = panel_w
+            if self._cached_prop_anchor is not None:
+                prop, ax, _ay = self._cached_prop_anchor
+                # ax is panel_w - prop.width - 2; clamp to one cell left of it.
+                max_x = max(1, ax - 1)
+            sig = (panel_w, panel_h, max_x)
+            if self._starfield_for != sig:
+                target = min(70, max(12, (panel_w * panel_h) // 25))
+                self._field.populate_starfield(
+                    panel_w, panel_h,
+                    target_count=target,
+                    max_x=max_x,
+                )
+                self._starfield_for = sig
+        elif self._starfield_for is not None:
+            self._field.clear_stars()
+            self._starfield_for = None
+
+        next_buddy_offset = (centered_offset_x, centered_offset_y)
+        if next_buddy_offset != self._last_buddy_offset:
+            self._last_buddy_offset = next_buddy_offset
+            buddy.styles.offset = next_buddy_offset
+
+        # Speech-region rides along horizontally so the bubble + tail stay
+        # over the buddy as he slides.
+        if self._get_speech_region is not None:
+            try:
+                speech_region = self._get_speech_region()
+            except Exception:
+                speech_region = None
+            if speech_region is not None:
+                next_speech_offset = (centered_offset_x, 0)
+                if next_speech_offset != self._last_speech_offset:
+                    self._last_speech_offset = next_speech_offset
+                    speech_region.styles.offset = next_speech_offset
+
+        self.refresh()
+
+    def render_line(self, y: int) -> Strip:
+        width = self.size.width
+        if width <= 0:
+            return Strip.blank(0)
+
+        row: list[tuple[str, Any] | None] = [None] * width
+
+        cached = self._cached_prop_anchor
+        if cached is not None:
+            prop, anchor_x, anchor_y = cached
+            local_py = y - anchor_y
+            if 0 <= local_py < prop.height:
+                line = prop.lines[local_py]
+                if prop.invert:
+                    prop_style = Style(color="#1a1a2e", bgcolor=prop.color)
+                else:
+                    prop_style = style_for(prop.color) + _SKY_BG
+                for i, ch in enumerate(line):
+                    cx = anchor_x + i
+                    if 0 <= cx < width and ch != " ":
+                        row[cx] = (ch, prop_style)
+
+        for p in self._field.particles:
+            px = int(round(p.x))
+            py = int(round(p.y))
+            if py != y or px < 0 or px >= width:
+                continue
+            row[px] = (p.glyph, style_for(p.color) + _SKY_BG)
+
+        if all(cell is None for cell in row):
+            return Strip.blank(width, _SKY_BG)
+
+        segments: list[Segment] = []
+        run_text = ""
+        run_style: Style | None = None
+        for cell in row:
+            if cell is None:
+                if run_text:
+                    segments.append(Segment(run_text, run_style))
+                    run_text = ""
+                    run_style = None
+                segments.append(Segment(" ", _SKY_BG))
+            else:
+                ch, style = cell
+                if run_style is not None and style != run_style:
+                    segments.append(Segment(run_text, run_style))
+                    run_text = ""
+                run_text += ch
+                run_style = style
+        if run_text:
+            segments.append(Segment(run_text, run_style))
+        return Strip(segments, width)
 
 
 _MOOD_COLORS: dict[str, str] = {
@@ -486,17 +699,20 @@ class TokenPalApp(App[None]):
         self._chat_log_width: int = max(_CHAT_LOG_MIN_WIDTH, initial)
         self._drag_start_screen_x: int = 0
         self._drag_start_width: int = self._chat_log_width
+        self._last_env_snapshot: EnvironmentSnapshot | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
             yield HeaderWidget(self._overlay._buddy_name)
+            yield ParticleSky(
+                get_buddy=lambda: self.query_one(BuddyWidget),
+                get_speech_region=lambda: self.query_one("#speech-region", Vertical),
+            )
             with Vertical(id="speech-region"):
-                yield Static(id="spacer")
                 yield SpeechBubbleWidget()
-            with Vertical(id="buddy-footer"):
-                yield BuddyWidget()
-                yield Input(placeholder="Type a message or /command...", id="user-input")
-                yield StatusBarWidget()
+            yield BuddyWidget()
+            yield Input(placeholder="Type a message or /command...", id="user-input")
+            yield StatusBarWidget()
         yield DividerBar()
         with VerticalScroll(id="chat-log"):
             yield Static(id="chat-log-content", markup=True)
@@ -517,7 +733,34 @@ class TokenPalApp(App[None]):
             pending = self._overlay._pending_chat_history
             self._overlay._pending_chat_history = None
             self.post_message(LoadChatHistory(pending))
+        # Pull environment snapshot from the brain at 1 Hz; the particle
+        # overlay's own 10 Hz ticker reads the buffered snapshot.
+        if self._overlay._env_provider is not None:
+            self.set_interval(_ENV_POLL_S, self._tick_environment)
         log.info("TextualOverlay ready")
+
+    def _tick_environment(self) -> None:
+        provider = self._overlay._env_provider
+        if provider is None:
+            return
+        try:
+            snap = provider()
+        except Exception as exc:  # provider is brain code; don't crash UI
+            log.debug("environment provider failed: %s", exc)
+            return
+        # Most ticks the snapshot is identical (weather caches 30 min, idle
+        # state is sticky). Skip the cross-thread message + buffer write.
+        if snap == self._last_env_snapshot:
+            return
+        self._last_env_snapshot = snap
+        self.post_message(UpdateEnvironmentState(snap))
+
+    def on_update_environment_state(self, message: UpdateEnvironmentState) -> None:
+        try:
+            sky = self.query_one(ParticleSky)
+        except Exception:
+            return
+        sky.update_snapshot(message.snapshot)
 
     def _apply_buddy_panel_min_width(self) -> None:
         buddy = self.query_one(BuddyWidget)
@@ -966,6 +1209,10 @@ class TextualOverlay(AbstractOverlay):
         self._pending_chat_history: (
             list[tuple[float, str, str, str | None]] | None
         ) = None
+        # Environment-snapshot provider (brain.environment_snapshot or similar).
+        # The overlay polls this on a 1 Hz Textual interval; if None, the
+        # particle field still runs but only ambient dust spawns.
+        self._env_provider: Callable[[], EnvironmentSnapshot] | None = None
 
     def _persist_chat_log_width(self, width: int) -> None:
         """Write the user's chosen chat-log width to config.toml (fire-and-forget)."""
@@ -1102,6 +1349,14 @@ class TextualOverlay(AbstractOverlay):
             self._pending_chat_history = entries
             return
         self._post(LoadChatHistory(entries))
+
+    def set_environment_provider(
+        self, provider: Callable[[], EnvironmentSnapshot] | None,
+    ) -> None:
+        """Wire the brain's environment_snapshot getter. Called by app.py
+        after Brain construction; the overlay's app starts a 1 Hz poll on
+        on_mount."""
+        self._env_provider = provider
 
     def set_chat_persist_callback(
         self,

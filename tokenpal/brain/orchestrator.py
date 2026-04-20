@@ -13,8 +13,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
@@ -2275,6 +2278,23 @@ class Brain:
         parts.append(f"spoke {ago}")
         status = " | ".join(parts)
         self._status_callback(status)
+
+    def environment_snapshot(self) -> EnvironmentSnapshot:
+        """Build the current EnvironmentSnapshot for the overlay's animation
+        layer. Safe to call from another thread — it reads dict snapshots
+        only; CPython's GIL guards the individual reads, and a slightly
+        stale snapshot is fine for visual effects.
+        """
+        from tokenpal.ui.buddy_environment import EnvironmentSnapshot
+
+        active = self._context.active_readings()
+        weather = active.get("weather")
+        idle = active.get("idle")
+        return EnvironmentSnapshot(
+            weather_data=dict(weather.data) if weather else None,
+            idle_event=(idle.data.get("event") if idle else None),
+            sensitive_suppressed=self._sensitive_check(),
+        )
 
     @staticmethod
     def _abbreviate_weather(summary: str) -> str:
