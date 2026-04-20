@@ -345,6 +345,23 @@ class TestBrainConversation:
         assert len(brain._conversation.history) == 2
         assert brain._conversation.history[1]["content"] == "[no response]"
 
+    async def test_reply_near_duplicate_suppressed(self):
+        """Two identical-enough replies in a row: second one swaps in a quip."""
+        dup = "Yeah buddy, sounds totally rad to me!"
+        llm = _MockLLM([dup, dup])
+        brain = _make_brain(llm=llm)
+
+        await brain._handle_user_input("say that thing")
+        await brain._handle_user_input("say that thing")
+
+        assert brain._conversation is not None
+        # Four history turns: user, assistant(dup), user, assistant(quip).
+        assert len(brain._conversation.history) == 4
+        assert brain._conversation.history[1]["content"] == dup
+        assert brain._conversation.history[3]["content"] != dup
+        # Successful reply landed in _recent_outputs so the gate can see it.
+        assert dup in brain._recent_outputs
+
     async def test_failed_generation_removes_user_turn(self):
         class _FailLLM(_MockLLM):
             async def generate_with_tools(self, **kwargs: Any) -> LLMResponse:

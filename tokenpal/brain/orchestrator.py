@@ -2231,6 +2231,13 @@ class Brain:
             self._push_status()
 
             filtered = self._personality.filter_conversation_response(reply_text)
+            if filtered and self._is_near_duplicate(filtered):
+                log.info("TokenPal (reply suppressed near-duplicate): %s", filtered)
+                quip = self._personality.get_confused_quip()
+                self._conversation.add_assistant_turn(quip)
+                self._ui_callback(quip)
+                self._last_comment_time = time.monotonic()
+                return
             if filtered:
                 char_cap = effective_max_tokens * 4 * (self._MAX_CONTINUATIONS + 1)
                 if len(filtered) > char_cap:
@@ -2243,6 +2250,7 @@ class Brain:
                 self._conversation.add_assistant_turn(filtered)
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
+                self._recent_outputs.append(filtered)
                 self._ui_callback(filtered)
                 self._last_comment_time = time.monotonic()
             else:
