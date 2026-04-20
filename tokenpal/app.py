@@ -2094,6 +2094,15 @@ def _handle_model_command(
             asyncio.run_coroutine_threadsafe(llm.refresh_capability(), brain._loop)
         except Exception:
             log.exception("Failed to schedule capability refresh for %s", subcmd)
+    if (
+        hasattr(llm, "warmup")
+        and brain is not None
+        and brain._loop is not None
+    ):
+        try:
+            asyncio.run_coroutine_threadsafe(llm.warmup(), brain._loop)
+        except Exception:
+            log.exception("Failed to schedule warmup for %s", subcmd)
     try:
         from tokenpal.config.toml_writer import remember_server_model
 

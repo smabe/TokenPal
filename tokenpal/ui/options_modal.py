@@ -175,6 +175,7 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
     def __init__(self, state: OptionsModalState) -> None:
         super().__init__()
         self._state = state
+        self._pending_model: str | None = None
 
     def compose(self) -> ComposeResult:
         s = self._state
@@ -345,17 +346,49 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 return
             if 0 <= idx < len(self._state.available_models):
                 name = self._state.available_models[idx]
-                self.dismiss(self._switch_model(name))
+                self._select_pending_model(name)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
     def _collect(self, *, clear_history: bool) -> OptionsModalResult:
+        pending = self._pending_model
+        current = self._state.current_model
+        switch_to = pending if pending and pending != current else None
         return OptionsModalResult(
             max_persisted=self._read_max_persisted(),
             clear_history=clear_history,
             navigate_to=None,
+            switch_model_to=switch_to,
         )
+
+    def _select_pending_model(self, name: str) -> None:
+        """Mark a model row as the pending pick. Applied on Save."""
+        self._pending_model = name
+        current = self._state.current_model
+        for i, candidate in enumerate(self._state.available_models):
+            try:
+                btn = self.query_one(f"#model-row-{i}", Button)
+            except Exception:
+                continue
+            is_current = candidate == current
+            is_pending = candidate == name and not is_current
+            if is_current:
+                label = "● " + candidate
+                btn.variant = "primary"
+                btn.disabled = True
+                btn.add_class("active")
+            elif is_pending:
+                label = "○ " + candidate + "  (save to apply)"
+                btn.variant = "success"
+                btn.disabled = False
+                btn.remove_class("active")
+            else:
+                label = candidate
+                btn.variant = "default"
+                btn.disabled = False
+                btn.remove_class("active")
+            btn.label = label
 
     def _nav(self, target: NavigateTo) -> OptionsModalResult:
         # Navigate-only: carry the current (unedited) max_persisted so the
@@ -372,14 +405,6 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             clear_history=False,
             navigate_to=None,
             switch_server_to=url,
-        )
-
-    def _switch_model(self, name: str) -> OptionsModalResult:
-        return OptionsModalResult(
-            max_persisted=self._state.max_persisted,
-            clear_history=False,
-            navigate_to=None,
-            switch_model_to=name,
         )
 
     def _apply_custom_server(self) -> None:

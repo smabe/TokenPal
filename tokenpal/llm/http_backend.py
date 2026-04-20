@@ -649,6 +649,35 @@ class HttpBackend(AbstractLLMBackend):
             return
         await self._apply_auto_max_tokens()
 
+    async def warmup(self) -> None:
+        """Force the server to load the currently-selected model.
+
+        Ollama loads models lazily on the first generation request. After
+        a client-side ``set_model`` swap, the status bar updates but no
+        load happens until the next brain tick — so the user's first
+        prompt eats the cold-start latency. Fire a tiny 1-token
+        completion to pull the load forward. No-op on the llamacpp path
+        (llama-server binds one GGUF at startup). Best-effort.
+        """
+        if self._client is None:
+            return
+        if self._inference_engine == "llamacpp":
+            return
+        try:
+            await self._client.post(
+                f"{self._api_url}/chat/completions",
+                json={
+                    "model": self._model_name,
+                    "messages": [{"role": "user", "content": "."}],
+                    "max_tokens": 1,
+                    "temperature": 0,
+                },
+                timeout=180.0,
+            )
+            log.info("Warmed up model '%s' at %s", self._model_name, self._api_url)
+        except httpx.HTTPError as e:
+            log.debug("Warmup failed for %s: %s", self._model_name, e)
+
     async def teardown(self) -> None:
         if self._client:
             await self._client.aclose()
