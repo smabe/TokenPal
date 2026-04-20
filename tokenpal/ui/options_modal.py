@@ -23,7 +23,7 @@ from typing import ClassVar, Literal
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Input, Label
 
@@ -36,16 +36,17 @@ from tokenpal.config.chatlog_writer import (
 NavigateTo = Literal["cloud", "senses", "tools", "voice"]
 
 
+def _canon_url(u: str) -> str:
+    """Normalize an inference URL: strip trailing slash, append /v1 when missing."""
+    u = u.strip().rstrip("/")
+    if u and not u.endswith("/v1"):
+        u += "/v1"
+    return u
+
+
 def _same_server(a: str, b: str) -> bool:
     """Compare two api URLs with the same normalization /server switch uses."""
-
-    def _norm(u: str) -> str:
-        u = u.strip().rstrip("/")
-        if u and not u.endswith("/v1"):
-            u += "/v1"
-        return u
-
-    return bool(a) and bool(b) and _norm(a) == _norm(b)
+    return bool(a) and bool(b) and _canon_url(a) == _canon_url(b)
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,8 @@ class OptionsModalState:
     known_servers: tuple[ServerEntry, ...] = field(default_factory=tuple)
     current_model: str = ""
     available_models: tuple[str, ...] = field(default_factory=tuple)
+    weather_label: str = ""
+    current_wifi_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,8 @@ class OptionsModalResult:
     navigate_to: NavigateTo | None = None
     switch_server_to: str | None = None
     switch_model_to: str | None = None
+    set_zip: str | None = None
+    set_wifi_label: str | None = None
 
 
 class OptionsModal(ModalScreen[OptionsModalResult | None]):
@@ -154,12 +159,46 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
     OptionsModal .server-row Button.active {
         text-style: bold;
     }
+    OptionsModal #server-model-row {
+        layout: horizontal;
+        height: auto;
+        width: 100%;
+        padding-top: 0;
+    }
+    OptionsModal #server-col,
+    OptionsModal #model-col {
+        width: 1fr;
+        height: auto;
+        padding: 0 1;
+    }
+    OptionsModal #server-col Button,
+    OptionsModal #model-col Button {
+        width: 100%;
+        margin: 0 0 1 0;
+    }
+    OptionsModal .col-header {
+        text-style: bold;
+        color: $accent;
+        padding-bottom: 1;
+    }
     OptionsModal #custom-server-row {
         height: auto;
         width: 100%;
         padding-top: 1;
     }
     OptionsModal #custom-server-input {
+        width: 1fr;
+        margin-right: 1;
+        margin-bottom: 0;
+    }
+    OptionsModal #zip-row,
+    OptionsModal #wifi-row {
+        height: auto;
+        width: 100%;
+        padding-top: 1;
+    }
+    OptionsModal #zip-input,
+    OptionsModal #wifi-input {
         width: 1fr;
         margin-right: 1;
         margin-bottom: 0;
@@ -175,7 +214,22 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
     def __init__(self, state: OptionsModalState) -> None:
         super().__init__()
         self._state = state
+        # Pending picks — applied on Save, discarded on Cancel/Esc.
+        self._pending_server: str | None = None
         self._pending_model: str | None = None
+        # Which server's models are shown in the right column right now.
+        # Defaults to the active server so the initial render mirrors what
+        # the app already knows via state.available_models.
+        self._displayed_server_url: str = (
+            _canon_url(state.current_api_url) if state.current_api_url else ""
+        )
+        # Cached /v1/models probes for non-active servers. None sentinel
+        # means "probe in flight"; () means "probe failed / empty".
+        self._probed_models: dict[str, tuple[str, ...] | None] = {}
+        if state.current_api_url:
+            self._probed_models[_canon_url(state.current_api_url)] = tuple(
+                state.available_models
+            )
 
     def compose(self) -> ComposeResult:
         s = self._state
@@ -211,35 +265,38 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 )
 
             # --------------------------------------------------------------
-            # Server section — pick an inference server to connect to.
+            # Server + Model picker — servers on the left, models for the
+            # currently-selected server on the right. Clicking a server row
+            # re-populates the right column; clicking a model marks a
+            # pending pick. Both apply on Save.
             # --------------------------------------------------------------
-            yield Label("Server", classes="section-header")
-            if s.current_api_url:
-                yield Label(
-                    f"Active: {s.current_api_url}",
-                    classes="section-help",
-                )
-            else:
-                yield Label(
-                    "Pick a server below, or enter a custom URL.",
-                    classes="section-help",
-                )
-            for i, entry in enumerate(s.known_servers):
-                model_col = entry.model or "(no model)"
-                label = f"{entry.label}  —  {entry.url}  —  {model_col}"
-                is_active = _same_server(entry.url, s.current_api_url)
-                if is_active:
-                    label = "● " + label
-                btn = Button(
-                    label,
-                    id=f"server-row-{i}",
-                    variant="primary" if is_active else "default",
-                    disabled=is_active,
-                )
-                if is_active:
-                    btn.add_class("active")
-                with Horizontal(classes="server-row"):
-                    yield btn
+            yield Label("Server / Model", classes="section-header")
+            status = (
+                f"Active: {s.current_api_url}"
+                + (f"  —  {s.current_model}" if s.current_model else "")
+                if s.current_api_url
+                else "Pick a server, then a model."
+            )
+            yield Label(status, classes="section-help", id="server-model-status")
+            with Horizontal(id="server-model-row"):
+                with Vertical(id="server-col"):
+                    yield Label("Servers", classes="col-header")
+                    for i, _entry in enumerate(s.known_servers):
+                        yield Button(
+                            self._server_label_text(i),
+                            id=f"server-row-{i}",
+                            variant=self._server_variant(i),
+                            disabled=False,
+                        )
+                with Vertical(id="model-col"):
+                    yield Label(
+                        self._model_col_header_text(),
+                        classes="col-header",
+                        id="model-col-header",
+                    )
+                    # Initial model buttons mirror the active server's list
+                    # (we primed _probed_models with state.available_models).
+                    yield from self._build_model_widgets()
             with Horizontal(id="custom-server-row"):
                 yield Input(
                     placeholder="Custom URL or host (e.g. 192.168.1.50)",
@@ -248,35 +305,48 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 yield Button("Apply", id="custom-server-btn")
 
             # --------------------------------------------------------------
-            # Models section — pick a model served by the active server.
+            # Weather section — set location via US zip code.
             # --------------------------------------------------------------
-            yield Label("Models (on this server)", classes="section-header")
-            if not s.available_models:
-                hint = (
-                    f"Active: {s.current_model} (probing server…)"
-                    if s.current_model
-                    else "Connecting to server — model list unavailable."
-                )
-                yield Label(hint, classes="section-help")
-            else:
+            yield Label("Weather", classes="section-header")
+            if s.weather_label:
                 yield Label(
-                    f"Active: {s.current_model}" if s.current_model
-                    else "Pick a model.",
+                    f"Current: {s.weather_label}",
                     classes="section-help",
                 )
-                for i, name in enumerate(s.available_models):
-                    is_active = name == s.current_model
-                    label = ("● " if is_active else "") + name
-                    btn = Button(
-                        label,
-                        id=f"model-row-{i}",
-                        variant="primary" if is_active else "default",
-                        disabled=is_active,
-                    )
-                    if is_active:
-                        btn.add_class("active")
-                    with Horizontal(classes="server-row"):
-                        yield btn
+            else:
+                yield Label(
+                    "No location set. Enter a 5-digit US zip code.",
+                    classes="section-help",
+                )
+            with Horizontal(id="zip-row"):
+                yield Input(
+                    placeholder="90210",
+                    id="zip-input",
+                    restrict=r"[0-9]*",
+                    max_length=5,
+                )
+                yield Button("Apply", id="zip-btn")
+
+            # --------------------------------------------------------------
+            # Wifi label section — label the currently-connected SSID.
+            # --------------------------------------------------------------
+            yield Label("Wifi label", classes="section-header")
+            if s.current_wifi_label:
+                current_line = f"Current network labeled '{s.current_wifi_label}'. "
+            else:
+                current_line = ""
+            yield Label(
+                current_line
+                + "Give the wifi you're on a friendly name (restart to apply).",
+                classes="section-help",
+            )
+            with Horizontal(id="wifi-row"):
+                yield Input(
+                    placeholder="home / office / coffee-shop",
+                    id="wifi-input",
+                    max_length=64,
+                )
+                yield Button("Apply", id="wifi-btn")
 
             # --------------------------------------------------------------
             # Settings shortcuts — launchers for existing modals
@@ -310,7 +380,7 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             animate=False
         )
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
+    async def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id or ""
         if btn_id == "save-btn":
             self.dismiss(self._collect(clear_history=False))
@@ -330,7 +400,11 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
         elif btn_id == "launch-voice-btn":
             self.dismiss(self._nav("voice"))
         elif btn_id == "custom-server-btn":
-            self._apply_custom_server()
+            await self._apply_custom_server()
+        elif btn_id == "zip-btn":
+            self._apply_zip()
+        elif btn_id == "wifi-btn":
+            self._apply_wifi()
         elif btn_id.startswith("server-row-"):
             try:
                 idx = int(btn_id.removeprefix("server-row-"))
@@ -338,57 +412,202 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 return
             if 0 <= idx < len(self._state.known_servers):
                 entry = self._state.known_servers[idx]
-                self.dismiss(self._switch(entry.url))
+                await self._select_pending_server(entry.url)
         elif btn_id.startswith("model-row-"):
             try:
                 idx = int(btn_id.removeprefix("model-row-"))
             except ValueError:
                 return
-            if 0 <= idx < len(self._state.available_models):
-                name = self._state.available_models[idx]
-                self._select_pending_model(name)
+            displayed = self._displayed_models()
+            if displayed is not None and 0 <= idx < len(displayed):
+                await self._select_pending_model(displayed[idx])
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
     def _collect(self, *, clear_history: bool) -> OptionsModalResult:
-        pending = self._pending_model
-        current = self._state.current_model
-        switch_to = pending if pending and pending != current else None
         return OptionsModalResult(
             max_persisted=self._read_max_persisted(),
             clear_history=clear_history,
             navigate_to=None,
-            switch_model_to=switch_to,
+            switch_server_to=self._pending_server,
+            switch_model_to=self._pending_model,
         )
 
-    def _select_pending_model(self, name: str) -> None:
+    # ------------------------------------------------------------------
+    # Server / Model picker — internal state + render helpers
+    # ------------------------------------------------------------------
+
+    def _displayed_models(self) -> tuple[str, ...] | None:
+        """Return the model list for the displayed server, or None if a
+        probe is in flight (used to render a "(probing…)" placeholder)."""
+        return self._probed_models.get(self._displayed_server_url)
+
+    def _active_model_for(self, canon: str) -> str:
+        """The 'remembered active' model for *canon*. For the current
+        server that's state.current_model; for known non-current servers
+        we use whatever ServerEntry.model recorded last time."""
+        if _same_server(canon, self._state.current_api_url):
+            return self._state.current_model
+        for entry in self._state.known_servers:
+            if _same_server(entry.url, canon):
+                return entry.model or ""
+        return ""
+
+    def _server_display_label(self, url: str) -> str:
+        """Short label for a server URL — entry.label when known, else the URL."""
+        for entry in self._state.known_servers:
+            if _same_server(entry.url, url):
+                return entry.label
+        return url
+
+    def _server_label_text(self, idx: int) -> str:
+        entry = self._state.known_servers[idx]
+        canon = _canon_url(entry.url)
+        marker = ""
+        if _same_server(entry.url, self._state.current_api_url):
+            marker = "● "
+        elif self._pending_server and _same_server(entry.url, self._pending_server):
+            marker = "○ "
+        elif canon == self._displayed_server_url:
+            marker = "› "
+        model = entry.model or "(no model)"
+        return f"{marker}{entry.label}\n{model}"
+
+    def _server_variant(self, idx: int) -> str:
+        entry = self._state.known_servers[idx]
+        if _same_server(entry.url, self._state.current_api_url):
+            return "primary"
+        if self._pending_server and _same_server(entry.url, self._pending_server):
+            return "success"
+        return "default"
+
+    def _model_col_header_text(self) -> str:
+        if not self._displayed_server_url:
+            return "Models"
+        return f"Models on {self._server_display_label(self._displayed_server_url)}"
+
+    def _build_model_widgets(self) -> list[Label | Button]:
+        """Compose-time helper: yield the initial model column widgets."""
+        widgets: list[Label | Button] = []
+        models = self._displayed_models()
+        active = self._active_model_for(self._displayed_server_url)
+        if models is None:
+            widgets.append(Label("(probing…)", classes="section-help"))
+            return widgets
+        if not models:
+            widgets.append(
+                Label("(no models advertised)", classes="section-help"),
+            )
+            return widgets
+        for i, name in enumerate(models):
+            is_current = name == active
+            widgets.append(
+                Button(
+                    self._model_label_text(name, is_current, is_pending=False),
+                    id=f"model-row-{i}",
+                    variant="primary" if is_current else "default",
+                    disabled=is_current,
+                ),
+            )
+        return widgets
+
+    def _model_label_text(
+        self, name: str, is_current: bool, *, is_pending: bool,
+    ) -> str:
+        if is_current:
+            return "● " + name
+        if is_pending:
+            return "○ " + name + "  (save to apply)"
+        return name
+
+    async def _select_pending_server(self, url: str) -> None:
+        """Mark a server row as the pending pick + repopulate the model
+        column to show that server's models. Applied on Save."""
+        canon = _canon_url(url)
+        if _same_server(url, self._state.current_api_url):
+            self._pending_server = None
+        else:
+            self._pending_server = url
+        # Picking a different server invalidates any in-flight model pick —
+        # the old name probably doesn't exist on the new server.
+        self._pending_model = None
+        self._displayed_server_url = canon
+        self._refresh_server_col()
+        await self._refresh_model_col()
+        if canon not in self._probed_models:
+            self.run_worker(
+                self._probe_models_worker(canon),
+                group="probe-models",
+                exclusive=False,
+            )
+
+    async def _select_pending_model(self, name: str) -> None:
         """Mark a model row as the pending pick. Applied on Save."""
-        self._pending_model = name
-        current = self._state.current_model
-        for i, candidate in enumerate(self._state.available_models):
+        active = self._active_model_for(self._displayed_server_url)
+        self._pending_model = name if name != active else None
+        await self._refresh_model_col()
+
+    def _refresh_server_col(self) -> None:
+        """Re-style server-col buttons to reflect current/pending state."""
+        for i in range(len(self._state.known_servers)):
             try:
-                btn = self.query_one(f"#model-row-{i}", Button)
+                btn = self.query_one(f"#server-row-{i}", Button)
             except Exception:
                 continue
-            is_current = candidate == current
-            is_pending = candidate == name and not is_current
-            if is_current:
-                label = "● " + candidate
-                btn.variant = "primary"
-                btn.disabled = True
-                btn.add_class("active")
-            elif is_pending:
-                label = "○ " + candidate + "  (save to apply)"
-                btn.variant = "success"
-                btn.disabled = False
-                btn.remove_class("active")
-            else:
-                label = candidate
-                btn.variant = "default"
-                btn.disabled = False
-                btn.remove_class("active")
-            btn.label = label
+            btn.label = self._server_label_text(i)
+            btn.variant = self._server_variant(i)
+
+    async def _refresh_model_col(self) -> None:
+        """Tear down and rebuild the model column for the displayed server.
+
+        Awaited removal is load-bearing: ``widget.remove()`` is async and
+        only queues the drop. Without the await, mounting the new buttons
+        with the same ``model-row-N`` ids races against the queued
+        removal and Textual raises DuplicateIds.
+        """
+        try:
+            col = self.query_one("#model-col", Vertical)
+            header = self.query_one("#model-col-header", Label)
+        except Exception:
+            return
+        header.update(self._model_col_header_text())
+        to_remove = [c for c in col.children if c is not header]
+        if to_remove:
+            await col.remove_children(to_remove)
+        new_widgets = self._build_model_widgets()
+        if new_widgets:
+            await col.mount_all(new_widgets)
+
+    async def _probe_models_worker(self, canon: str) -> None:
+        """Background fetch of /v1/models for *canon*. Best-effort: a
+        failure caches an empty tuple so we don't re-probe in a loop."""
+        if (
+            canon in self._probed_models
+            and self._probed_models[canon] is not None
+        ):
+            return
+        self._probed_models[canon] = None  # in-flight marker
+        if self._displayed_server_url == canon:
+            await self._refresh_model_col()
+        ids: tuple[str, ...] = ()
+        try:
+            import httpx
+
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{canon}/models")
+                resp.raise_for_status()
+                data = resp.json()
+                ids = tuple(
+                    str(m.get("id", ""))
+                    for m in data.get("data", [])
+                    if m.get("id")
+                )
+        except Exception:
+            ids = ()
+        self._probed_models[canon] = ids
+        if self._displayed_server_url == canon:
+            await self._refresh_model_col()
 
     def _nav(self, target: NavigateTo) -> OptionsModalResult:
         # Navigate-only: carry the current (unedited) max_persisted so the
@@ -399,22 +618,51 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             navigate_to=target,
         )
 
-    def _switch(self, url: str) -> OptionsModalResult:
-        return OptionsModalResult(
-            max_persisted=self._state.max_persisted,
-            clear_history=False,
-            navigate_to=None,
-            switch_server_to=url,
-        )
-
-    def _apply_custom_server(self) -> None:
+    async def _apply_custom_server(self) -> None:
         try:
             raw = self.query_one("#custom-server-input", Input).value.strip()
         except Exception:
             return
         if not raw:
             return
-        self.dismiss(self._switch(raw))
+        await self._select_pending_server(raw)
+        # Surface the in-flight pick in the status line so the user knows
+        # Save is needed to actually connect (the custom URL has no row in
+        # the server-col).
+        try:
+            self.query_one(
+                "#server-model-status", Label,
+            ).update(f"Pending: {raw}  —  save to connect.")
+        except Exception:
+            pass
+
+    def _apply_zip(self) -> None:
+        try:
+            raw = self.query_one("#zip-input", Input).value.strip()
+        except Exception:
+            return
+        if not raw:
+            return
+        self.dismiss(
+            OptionsModalResult(
+                max_persisted=self._state.max_persisted,
+                set_zip=raw,
+            )
+        )
+
+    def _apply_wifi(self) -> None:
+        try:
+            raw = self.query_one("#wifi-input", Input).value.strip()
+        except Exception:
+            return
+        if not raw:
+            return
+        self.dismiss(
+            OptionsModalResult(
+                max_persisted=self._state.max_persisted,
+                set_wifi_label=raw,
+            )
+        )
 
     def _read_max_persisted(self) -> int:
         try:

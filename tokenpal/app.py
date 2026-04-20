@@ -453,7 +453,31 @@ def main() -> None:
             if remembered_tokens and hasattr(llm, "set_max_tokens"):
                 llm.set_max_tokens(int(remembered_tokens))
 
-            asyncio.run_coroutine_threadsafe(llm.setup(), brain._loop)
+            async def _setup_then_remember() -> None:
+                # Run the connect probe first so any auto-adopted model
+                # name is the one we persist. Without this, switching to
+                # a brand-new server never lands its URL in
+                # per_server_models, and the options modal hides it as
+                # soon as the user navigates away.
+                await llm.setup()
+                try:
+                    from tokenpal.config.toml_writer import (
+                        remember_server_model,
+                    )
+
+                    if llm.model_name:
+                        remember_server_model(llm.api_url, llm.model_name)
+                        config.llm.per_server_models[
+                            canon_server_url(llm.api_url)
+                        ] = llm.model_name
+                except Exception:
+                    log.exception(
+                        "Failed to persist visited server %s", llm.api_url,
+                    )
+
+            asyncio.run_coroutine_threadsafe(
+                _setup_then_remember(), brain._loop,
+            )
             try:
                 from tokenpal.config.toml_writer import update_config
 
@@ -551,10 +575,22 @@ def main() -> None:
                 model = llm.model_name or None
             seen[key] = ServerEntry(url=key, label=label, model=model)
 
+        def _label_from_url(url: str) -> str:
+            from urllib.parse import urlparse
+            host = urlparse(url).hostname or url
+            return host
+
         _add(local_url, "local")
         _add(remote_url, "remote")
         for persisted_key in config.llm.per_server_models:
-            _add(persisted_key, "saved")
+            _add(persisted_key, _label_from_url(persisted_key))
+        # Always include the currently-active server, even if the user
+        # hasn't picked a model yet (no per_server_models entry would
+        # exist) and it isn't one of the configured local/remote URLs.
+        # Without this, /server switch <custom-host> hides the active
+        # server from the picker until the user runs /model.
+        if current_key and current_key not in seen:
+            _add(llm.api_url, _label_from_url(llm.api_url))
 
         state = OptionsModalState(
             max_persisted=cl.max_persisted,
@@ -563,6 +599,8 @@ def main() -> None:
             known_servers=tuple(seen.values()),
             current_model=llm.model_name or "",
             available_models=tuple(getattr(llm, "available_models", ())),
+            weather_label=config.weather.location_label,
+            current_wifi_label="",
         )
 
         def on_save(result: OptionsModalResult | None) -> None:
@@ -592,7 +630,10 @@ def main() -> None:
                     res = _cmd_server(f"switch {target}")
                     if res.message:
                         overlay.log_buddy_message(res.message)
-                return
+                # Fall through — a combined server+model pick still needs
+                # the model swap. _cmd_server already restored the
+                # per-server remembered model; an explicit pending pick
+                # just below overrides it.
 
             if result.switch_model_to:
                 target = result.switch_model_to.strip()
@@ -600,6 +641,20 @@ def main() -> None:
                     res = _cmd_model(target)
                     if res.message:
                         overlay.log_buddy_message(res.message)
+
+            if result.switch_server_to or result.switch_model_to:
+                return
+
+            if result.set_zip:
+                res = _cmd_zip(result.set_zip.strip())
+                if res.message:
+                    overlay.log_buddy_message(res.message)
+                return
+
+            if result.set_wifi_label:
+                res = _cmd_wifi(f"label {result.set_wifi_label.strip()}")
+                if res.message:
+                    overlay.log_buddy_message(res.message)
                 return
 
             # Navigation was None — apply field edits.
