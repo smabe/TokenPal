@@ -36,6 +36,9 @@ max_per_hour = 4             # hard rate cap
 # todays_joke_bit = true     # running-bit: heard-a-joke callback for 4h
 # morning_monologue = true   # chains forecast + sunrise + on_this_day at dawn
 # memory_recall = true
+# friday_wrap = true         # chains joke + random_fact + on_this_day on Fri PM
+# coffee_break = true        # chains word_of_the_day + trivia on mid-AM lull
+# late_night_host = true     # chains trivia + random_fact + moon_phase post-23:00
 
 [llm]
 backend = "http"

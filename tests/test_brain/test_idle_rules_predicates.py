@@ -155,6 +155,125 @@ def test_memory_recall_requires_settled_session() -> None:
     assert not rule.predicate(_ctx(session_minutes=20, time_since_last_comment_s=120))
 
 
+# -- friday_wrap -------------------------------------------------------------
+
+def test_friday_wrap_fires_friday_afternoon_settled() -> None:
+    rule = rule_by_name("friday_wrap")
+    assert rule is not None
+    # Friday = weekday 4. Settled in-session, decent silence window.
+    ctx = _ctx(
+        now=datetime(2026, 4, 17, 16, 0),
+        session_minutes=25,
+        time_since_last_comment_s=480,
+    )
+    assert rule.predicate(ctx)
+
+
+def test_friday_wrap_blocks_thursday() -> None:
+    rule = rule_by_name("friday_wrap")
+    ctx = _ctx(
+        now=datetime(2026, 4, 16, 16, 0),  # Thursday
+        session_minutes=25,
+        time_since_last_comment_s=480,
+    )
+    assert not rule.predicate(ctx)
+
+
+def test_friday_wrap_blocks_too_early_or_too_late() -> None:
+    rule = rule_by_name("friday_wrap")
+    early = _ctx(
+        now=datetime(2026, 4, 17, 14, 30),
+        session_minutes=25,
+        time_since_last_comment_s=480,
+    )
+    late = _ctx(
+        now=datetime(2026, 4, 17, 18, 30),
+        session_minutes=25,
+        time_since_last_comment_s=480,
+    )
+    assert not rule.predicate(early)
+    assert not rule.predicate(late)
+
+
+# -- coffee_break ------------------------------------------------------------
+
+def test_coffee_break_requires_not_first_session() -> None:
+    """morning_monologue owns the first-session slot; coffee_break is second-plus."""
+    rule = rule_by_name("coffee_break")
+    assert rule is not None
+    first_session = _ctx(
+        now=datetime(2026, 4, 17, 11, 0),
+        first_session_of_day=True,
+        session_minutes=15,
+        time_since_last_comment_s=400,
+    )
+    second_session = _ctx(
+        now=datetime(2026, 4, 17, 11, 0),
+        first_session_of_day=False,
+        session_minutes=15,
+        time_since_last_comment_s=400,
+    )
+    assert not rule.predicate(first_session)
+    assert rule.predicate(second_session)
+
+
+def test_coffee_break_blocks_outside_window() -> None:
+    rule = rule_by_name("coffee_break")
+    early = _ctx(
+        now=datetime(2026, 4, 17, 9, 30),
+        first_session_of_day=False,
+        session_minutes=15,
+        time_since_last_comment_s=400,
+    )
+    late = _ctx(
+        now=datetime(2026, 4, 17, 12, 30),
+        first_session_of_day=False,
+        session_minutes=15,
+        time_since_last_comment_s=400,
+    )
+    assert not rule.predicate(early)
+    assert not rule.predicate(late)
+
+
+# -- late_night_host ---------------------------------------------------------
+
+def test_late_night_host_fires_late() -> None:
+    rule = rule_by_name("late_night_host")
+    assert rule is not None
+    late = _ctx(
+        now=datetime(2026, 4, 17, 23, 30),
+        time_since_last_comment_s=700,
+        mood="snarky",
+    )
+    past_midnight = _ctx(
+        now=datetime(2026, 4, 17, 0, 45),
+        time_since_last_comment_s=700,
+        mood="snarky",
+    )
+    assert rule.predicate(late)
+    assert rule.predicate(past_midnight)
+
+
+def test_late_night_host_blocks_focused_mood() -> None:
+    """User deep in work at 23:30 doesn't need a tonight-show monologue."""
+    rule = rule_by_name("late_night_host")
+    ctx = _ctx(
+        now=datetime(2026, 4, 17, 23, 30),
+        time_since_last_comment_s=700,
+        mood="focused",
+    )
+    assert not rule.predicate(ctx)
+
+
+def test_late_night_host_blocks_busy_daytime() -> None:
+    rule = rule_by_name("late_night_host")
+    ctx = _ctx(
+        now=datetime(2026, 4, 17, 14, 0),
+        time_since_last_comment_s=700,
+    )
+    assert not rule.predicate(ctx)
+
+
 # -- catalog integrity -------------------------------------------------------
 
 def test_all_rules_have_unique_names() -> None:

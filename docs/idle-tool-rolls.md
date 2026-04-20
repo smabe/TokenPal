@@ -50,7 +50,7 @@ windows — is preserved.
 
 ## Rule catalog
 
-All 11 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
+All 14 rules live in `tokenpal/brain/idle_rules.py::M1_RULES`. Each is a
 frozen `IdleToolRule` dataclass.
 
 | Rule | Tool | Window / predicate | Cooldown | Running-bit? |
@@ -66,6 +66,9 @@ frozen `IdleToolRule` dataclass.
 | `todays_joke_bit` | `joke_of_the_day` | 11–14 midday lull, settled | 12h | 4h (silent) |
 | `morning_monologue` | chain of 3 | first-session 6–9 | 24h | — |
 | `memory_recall` | `memory_query` | >15min session + >10min silence | 3h | — |
+| `friday_wrap` | chain of 3 | Fri 15–18, settled, >7min silence | 7d | — |
+| `coffee_break` | chain of 2 | 10–12, NOT first-session, settled | 12h | — |
+| `late_night_host` | chain of 3 | 23:00–01:59, not focused, >10min silence | 24h | — |
 
 **Offline floor:** `memory_recall` is the only rule with
 `needs_web_fetches=False`. Every other rule silently drops when the

@@ -133,6 +133,50 @@ def _morning_radio_window(ctx: IdleToolContext) -> bool:
     return ctx.first_session_of_day and 6 <= ctx.hour < 10
 
 
+def _friday_afternoon_lull(ctx: IdleToolContext) -> bool:
+    """Friday 15:00-18:00, settled in a session, long-ish quiet stretch.
+
+    Bar is a little higher than _midday_quiet — Friday-wrap is meant to
+    feel like the end of the workweek, not a regular afternoon chime.
+    """
+    return (
+        ctx.weekday == 4
+        and 15 <= ctx.hour < 18
+        and ctx.session_minutes > 20
+        and ctx.time_since_last_comment_s > 420.0
+    )
+
+
+def _coffee_break_window(ctx: IdleToolContext) -> bool:
+    """Mid-morning 10-12, clearly NOT the first session of the day, settled.
+
+    first_session_of_day=False means `morning_monologue` already ran (or
+    the user skipped it), so coffee_break can legitimately double up on
+    a word + trivia riff without stomping the radio-broadcast rule.
+    """
+    return (
+        10 <= ctx.hour < 12
+        and not ctx.first_session_of_day
+        and ctx.session_minutes > 10
+        and ctx.time_since_last_comment_s > 360.0
+    )
+
+
+def _late_night_host_window(ctx: IdleToolContext) -> bool:
+    """23:00-01:59, long-silence bar, mood isn't 'focused'.
+
+    Mimics the existing _long_silence_mood_ok feel, but time-windowed so
+    a 23:30 user on a Friday night with nothing else going on hears the
+    late-night host pipe up instead of yet another trivia question.
+    """
+    hour = ctx.hour
+    if not (hour >= 23 or hour < 2):
+        return False
+    if ctx.mood.lower() == "focused":
+        return False
+    return ctx.time_since_last_comment_s > 600.0
+
+
 def _is_approximately_full_moon(when: datetime) -> bool:
     """Cheap full-moon check — within ±1.5 days of a known reference.
 
@@ -300,6 +344,60 @@ M1_RULES: tuple[IdleToolRule, ...] = (
             "if there is one; otherwise skip the stat and just comment."
         ),
         needs_web_fetches=False,
+    ),
+    IdleToolRule(
+        name="friday_wrap",
+        tool_name="joke_of_the_day",
+        description=(
+            "Friday-afternoon wrap riff — chains a joke, a random fact, and "
+            "a this-day-in-history item into one end-of-week send-off."
+        ),
+        weight=1.3,
+        cooldown_s=7 * 24 * 3600,
+        predicate=_friday_afternoon_lull,
+        framing=(
+            "The workweek is winding down. Weave the joke, the fact, and one "
+            "this-day-in-history item into a single short Friday-wrap riff, "
+            "in-character. Do not tell the joke verbatim; paraphrase or react "
+            "to it. One paragraph, not a list."
+        ),
+        extra_tool_names=("random_fact", "on_this_day"),
+    ),
+    IdleToolRule(
+        name="coffee_break",
+        tool_name="word_of_the_day",
+        description=(
+            "Mid-morning second-session riff — word of the day plus a trivia "
+            "question as a coffee-break aside."
+        ),
+        weight=1.0,
+        cooldown_s=12 * 3600,
+        predicate=_coffee_break_window,
+        framing=(
+            "You're between deep-work blocks — the coffee-break moment. "
+            "Use today's word in a natural sentence (do NOT define it), then "
+            "pose the trivia question as a casual aside. One short paragraph. "
+            "Do not reveal the trivia answer."
+        ),
+        extra_tool_names=("trivia_question",),
+    ),
+    IdleToolRule(
+        name="late_night_host",
+        tool_name="trivia_question",
+        description=(
+            "Late-night riff — trivia + random fact + moon phase, delivered "
+            "in a tonight-show-monologue voice."
+        ),
+        weight=1.2,
+        cooldown_s=24 * 3600,
+        predicate=_late_night_host_window,
+        framing=(
+            "You're doing the late-night-host monologue. Lean into the hour. "
+            "Weave the trivia, the fact, and the moon phase into one short "
+            "monologue, in-character. Don't reveal the trivia answer. "
+            "One paragraph, not a list."
+        ),
+        extra_tool_names=("random_fact", "moon_phase"),
     ),
 )
 
