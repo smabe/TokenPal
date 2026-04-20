@@ -864,16 +864,23 @@ class Brain:
     def _handle_suppressed_output(self, reason: str) -> None:
         """Apply cooldown + silence pressure after a filter rejected a gen.
 
-        Without this, the three emit paths leave `_last_comment_time` intact
-        after a suppression, so the next tick's gate sees "it's been forever
-        since we spoke" and fires another LLM call immediately. That loop
-        can burn thousands of generations overnight when the model is stuck
-        on a locked phrase (seen 3k+ suppressions in one session).
+        Without the _last_comment_time reset, the three emit paths leave
+        that timestamp intact after a suppression, so the next tick's gate
+        sees "it's been forever since we spoke" and fires another LLM call
+        immediately. That loop can burn thousands of generations overnight
+        when the model is stuck on a locked phrase (seen 3k+ suppressions
+        in one session).
+
+        Also acknowledges context so the interestingness score doesn't
+        stay pinned on the same stale delta for every subsequent tick.
+        The LLM saw this state; it just had nothing new to say about it.
+        Future ticks should fire on genuine change, not this same score.
         """
         now = time.monotonic()
         self._last_comment_time = now
         self._consecutive_comments = 0
         self._suppressed_streak += 1
+        self._context.acknowledge()
         if self._suppressed_streak >= _FORCED_SILENCE_AFTER_SUPPRESSIONS:
             log.info(
                 "Gate: forced silence for %ds after %d consecutive suppressions (%s)",

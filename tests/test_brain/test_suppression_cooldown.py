@@ -19,6 +19,16 @@ from tokenpal.brain.orchestrator import (
 )
 
 
+class _StubContext:
+    """Record acknowledge() calls so tests can assert when context is marked seen."""
+
+    def __init__(self) -> None:
+        self.ack_calls = 0
+
+    def acknowledge(self) -> None:
+        self.ack_calls += 1
+
+
 def _make_harness() -> Brain:
     """Bare orchestrator with just the state the suppression path touches."""
     obj = Brain.__new__(Brain)
@@ -28,6 +38,7 @@ def _make_harness() -> Brain:
     obj._forced_silence_until = 0.0
     obj._last_comment_time = 0.0
     obj._comment_timestamps = deque()
+    obj._context = _StubContext()
     return obj
 
 
@@ -81,3 +92,14 @@ def test_emit_comment_clears_suppression_streak() -> None:
 
 def test_threshold_constant_is_sane() -> None:
     assert 3 <= _FORCED_SILENCE_AFTER_SUPPRESSIONS <= 10
+
+
+def test_suppression_acknowledges_context() -> None:
+    """Suppressing a near-dup must mark context as seen. Otherwise the
+    interestingness score stays pinned on the same stale delta and the
+    gate re-picks "comment" every tick — observed live as the overnight
+    gate-starvation failure.
+    """
+    o = _make_harness()
+    o._handle_suppressed_output("near-dup")
+    assert o._context.ack_calls == 1
