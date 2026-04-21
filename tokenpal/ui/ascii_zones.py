@@ -150,15 +150,18 @@ FACIAL_HAIR = ZoneSpec(
             "mystical_cloaked": "",
         },
         "beard_long": {
+            # Beard hangs over the chest center — shoulders + side torso
+            # still render in outfit color so the silhouette reads as
+            # "bearded wizard", not "head on a rectangle."
             "humanoid_tall": (
-                "{hair}▄█████████████{c}\n"
-                "{hair}██████████████{c}\n"
-                "{hair}████████████{c}\n"
+                "{outfit}▄██{c}{hair}▄█████████▄{c}{outfit}██▄{c}\n"
+                "{outfit}█▓▓{c}{hair}████████████{c}{outfit}▓▓█{c}\n"
+                "{outfit}█▓▓▓{c}{hair}█████████{c}{outfit}▓▓▓█{c}\n"
             ),
             "mystical_cloaked": (
-                "{hair}▄███████████████{c}\n"
-                "{hair}████████████████{c}\n"
-                "{hair}██████████████{c}\n"
+                "{outfit}▓▓{c}{hair}▄███████████▄{c}{outfit}▓▓{c}\n"
+                "{outfit}▓▓▓{c}{hair}████████████{c}{outfit}▓▓▓{c}\n"
+                "{outfit}▓▓▓▓{c}{hair}██████████{c}{outfit}▓▓▓▓{c}\n"
             ),
         },
         "beard_stubble": {
