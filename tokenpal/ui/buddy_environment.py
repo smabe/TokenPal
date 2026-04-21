@@ -695,6 +695,72 @@ class ParticleField:
         ))
 
 
+class BuddyEnvironmentController:
+    """Single home for buddy-environment state — BuddyMotion + ParticleField
+    + CloudDrift. Extracted from ParticleSky so the tick can eventually run
+    at the app level and multiple widgets can render from the same field.
+
+    Phase-1 scope: state moves here but ParticleSky still drives the tick
+    and calls ``tick(...)``. Phases 2+ hoist the tick onto the app and let
+    BuddyWidget render particles inside its own region.
+    """
+
+    def __init__(
+        self,
+        *,
+        motion: BuddyMotion | None = None,
+        field: ParticleField | None = None,
+        cloud_drift: CloudDrift | None = None,
+    ) -> None:
+        self.motion = motion or BuddyMotion()
+        self.field = field or ParticleField()
+        self.cloud_drift = cloud_drift or CloudDrift()
+        # Dizzy-swirl rate limiter — spawn 4 Hz while dizzy_ticks > 0. Lives
+        # here (not in BuddyMotion) because it's a spawn-side concern.
+        self._dizzy_swirl_accum: float = 0.0
+
+    def tick(
+        self,
+        dt: float,
+        *,
+        slide_w: float,
+        slide_h: float,
+        panel_w: int,
+        panel_h: int,
+        env: EnvState,
+        buddy_x: float,
+        buddy_y: float,
+        spawn_impact_at: tuple[float, float] | None = None,
+        spawn_swirl_at: tuple[float, float] | None = None,
+    ) -> None:
+        """Advance motion + cloud drift + particle field by ``dt``.
+
+        ``spawn_impact_at`` / ``spawn_swirl_at`` let the caller provide the
+        reaction anchor points (panel-relative in later phases; ``buddy_x``
+        + a y-anchor in phase 1). Passing ``None`` skips spawn.
+        """
+        self.motion.tick(dt, slide_w, slide_h, env)
+        self.cloud_drift.tick(dt, env)
+        self.field.tick(
+            dt, panel_w, panel_h, env, buddy_x=buddy_x, buddy_y=buddy_y,
+        )
+
+        if env.sensitive_suppressed:
+            self._dizzy_swirl_accum = 0.0
+            return
+
+        if spawn_impact_at is not None and self.motion.consume_poke_trigger():
+            self.field.spawn_impact_burst(*spawn_impact_at)
+
+        if self.motion.dizzy_ticks > 0.0 and spawn_swirl_at is not None:
+            self._dizzy_swirl_accum += dt * 4.0
+            while self._dizzy_swirl_accum >= 1.0:
+                self._dizzy_swirl_accum -= 1.0
+                self.field.spawn_dizzy_swirl(*spawn_swirl_at)
+        elif self.motion.dizzy_ticks <= 0.0:
+            self._dizzy_swirl_accum = 0.0
+
+
 def _clamp(v: float, lo: float, hi: float) -> float:
     if hi < lo:
         return lo

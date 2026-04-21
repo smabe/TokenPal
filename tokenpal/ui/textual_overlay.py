@@ -35,12 +35,10 @@ from tokenpal.ui.ascii_props import (
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import (
+    BuddyEnvironmentController,
     BuddyMotion,
-    CloudDrift,
     EnvironmentSnapshot,
     EnvState,
-    Kind,
-    ParticleField,
 )
 from tokenpal.ui.confirm_modal import ConfirmModal
 from tokenpal.ui.registry import register_overlay
@@ -464,21 +462,21 @@ class ParticleSky(Widget):
         get_buddy: Callable[[], BuddyWidget],
         get_speech_region: Callable[[], Vertical] | None = None,
         get_stage: Callable[[], BuddyStage] | None = None,
+        env_controller: BuddyEnvironmentController | None = None,
     ) -> None:
         super().__init__(id="particle-sky")
         self._get_buddy = get_buddy
         self._get_speech_region = get_speech_region
         self._get_stage = get_stage
-        self._motion = BuddyMotion()
-        self._field = ParticleField()
-        self._cloud_drift = CloudDrift()
+        # Controller owns motion + field + cloud_drift. If not provided
+        # (tests, fallback path), we make one locally so ParticleSky stays
+        # self-contained. Phase 2 hoists construction to the app.
+        self._env = env_controller or BuddyEnvironmentController()
         self._snapshot: EnvironmentSnapshot | None = None
         self._cached_prop_anchors: tuple[tuple[PropSprite, int, int], ...] = ()
         self._last_buddy_offset: tuple[int, int] = (0, 0)
         self._last_speech_offset: tuple[int, int] = (0, 0)
         self._last_stage_offset: tuple[int, int] = (0, 0)
-        # Dizzy-swirl rate limiter — spawn 4 Hz while dizzy_ticks > 0.
-        self._dizzy_swirl_accum: float = 0.0
         # Star field signature: (panel_w, panel_h, max_x, target). Re-populates
         # whenever the panel resizes OR the moon's left edge moves (e.g.
         # the snapshot arrives after the first tick). None = not populated.
@@ -486,7 +484,11 @@ class ParticleSky(Widget):
 
     @property
     def motion(self) -> BuddyMotion:
-        return self._motion
+        return self._env.motion
+
+    @property
+    def env_controller(self) -> BuddyEnvironmentController:
+        return self._env
 
     def on_mount(self) -> None:
         self.set_interval(_PARTICLE_TICK_S, self._sim_tick)
@@ -515,42 +517,27 @@ class ParticleSky(Widget):
         slide_w = max(0.0, float(panel_w - buddy_w))
         slide_h = 0.0  # buddy stays planted; horizontal slide only
 
-        self._motion.tick(_PARTICLE_TICK_S, slide_w, slide_h, env)
-        self._cloud_drift.tick(_PARTICLE_TICK_S, env)
-
-        centered_offset_x = int(round(self._motion.x - slide_w / 2.0))
+        motion = self._env.motion
         centered_offset_y = 0
-        buddy_x_center = panel_w / 2 + (self._motion.x - slide_w / 2.0)
+        buddy_x_center_pre = panel_w / 2 + (motion.x - slide_w / 2.0)
+        burst_y = max(1.0, float(panel_h) * 0.6)
+        swirl_y = max(1.0, float(panel_h - 1))
 
-        self._field.tick(
+        self._env.tick(
             _PARTICLE_TICK_S,
-            panel_w,
-            panel_h,
-            env,
-            buddy_x=buddy_x_center,
+            slide_w=slide_w,
+            slide_h=slide_h,
+            panel_w=panel_w,
+            panel_h=panel_h,
+            env=env,
+            buddy_x=buddy_x_center_pre,
             buddy_y=float(panel_h),
+            spawn_impact_at=(buddy_x_center_pre, burst_y),
+            spawn_swirl_at=(buddy_x_center_pre, swirl_y),
         )
 
-        # Reaction bursts (respect sensitive suppression via env check).
-        # Both spawn at the bottom of the sky widget so they render as close
-        # as possible to the buddy, who sits in a separate widget below.
-        if not env.sensitive_suppressed:
-            if self._motion.consume_poke_trigger():
-                # Spawn slightly higher so the burst has room to fan out
-                # before gravity pulls particles off the bottom edge.
-                burst_y = max(1.0, float(panel_h) * 0.6)
-                self._field.spawn_impact_burst(buddy_x_center, burst_y)
-            if self._motion.dizzy_ticks > 0.0:
-                self._dizzy_swirl_accum += _PARTICLE_TICK_S * 4.0
-                while self._dizzy_swirl_accum >= 1.0:
-                    self._dizzy_swirl_accum -= 1.0
-                    self._field.spawn_dizzy_swirl(
-                        buddy_x_center, max(1.0, float(panel_h - 1)),
-                    )
-            else:
-                self._dizzy_swirl_accum = 0.0
-        else:
-            self._dizzy_swirl_accum = 0.0
+        centered_offset_x = int(round(motion.x - slide_w / 2.0))
+        buddy_x_center = panel_w / 2 + (motion.x - slide_w / 2.0)
 
         prop_stack = props_for(env) if self._snapshot else ()
         anchors: list[tuple[PropSprite, int, int]] = []
@@ -563,7 +550,7 @@ class ParticleSky(Widget):
                 anchor_y = 0
             drift_dx = 0
             if prop.drift_x_amplitude > 0.0:
-                drift_dx = int(round(self._cloud_drift.offset_x(
+                drift_dx = int(round(self._env.cloud_drift.offset_x(
                     prop.drift_x_amplitude, prop.drift_phase_offset,
                 )))
             anchors.append((
@@ -589,14 +576,14 @@ class ParticleSky(Widget):
             # night re-populates at the new density.
             sig = (panel_w, panel_h, max_x, target)
             if self._starfield_for != sig:
-                self._field.populate_starfield(
+                self._env.field.populate_starfield(
                     panel_w, panel_h,
                     target_count=target,
                     max_x=max_x,
                 )
                 self._starfield_for = sig
         elif self._starfield_for is not None:
-            self._field.clear_stars()
+            self._env.field.clear_stars()
             self._starfield_for = None
 
         next_buddy_offset = (centered_offset_x, centered_offset_y)
@@ -613,8 +600,8 @@ class ParticleSky(Widget):
                 stage = None
             if stage is not None:
                 next_stage_offset = (
-                    int(round(self._motion.drag_offset_x)),
-                    int(round(self._motion.drag_offset_y)),
+                    int(round(motion.drag_offset_x)),
+                    int(round(motion.drag_offset_y)),
                 )
                 if next_stage_offset != self._last_stage_offset:
                     self._last_stage_offset = next_stage_offset
@@ -656,7 +643,7 @@ class ParticleSky(Widget):
                 if 0 <= cx < width and ch != " ":
                     row[cx] = (ch, prop_style)
 
-        for p in self._field.particles:
+        for p in self._env.field.particles:
             px = int(round(p.x))
             py = int(round(p.y))
             if py != y or px < 0 or px >= width:
