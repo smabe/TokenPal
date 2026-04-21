@@ -16,7 +16,7 @@ from rich.style import Style
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -763,7 +763,8 @@ class TokenPalApp(App[None]):
             )
             with Vertical(id="speech-region"):
                 yield SpeechBubbleWidget()
-            yield BuddyWidget()
+            with Container(id="buddy-stage"):
+                yield BuddyWidget()
             yield Input(placeholder="Type a message or /command...", id="user-input")
             yield StatusBarWidget()
         yield DividerBar()

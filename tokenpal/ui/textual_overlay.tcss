@@ -42,6 +42,12 @@ Screen {
     color: #dcdcdc;
 }
 
+#buddy-stage {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+}
+
 #buddy {
     width: 100%;
     height: auto;
