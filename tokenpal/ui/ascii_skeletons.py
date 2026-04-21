@@ -40,7 +40,7 @@ from tokenpal.ui.ascii_zones import (
 # --- humanoid-tall: standard hero/adventurer build ---
 # Finn, Mordecai, Marco, generic protagonist.
 HUMANOID_TALL = """\
-{hair}▄▄▄▄▄▄▄▄▄▄▄{c}
+{highlight}▄{c}{hair}▄▄▄▄▄▄▄▄▄▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {hair}█▓▓▓{c}{skin}▓▓▓▓▓▓▓▓▓{c}{hair}▓▓▓█{c}
@@ -60,7 +60,7 @@ HUMANOID_TALL = """\
 # --- humanoid-stocky: short/chunky build ---
 # Wider shoulders, squat legs. Dexter-ish, compact bro characters.
 HUMANOID_STOCKY = """\
-{hair}▄▄▄▄▄▄▄▄▄{c}
+{highlight}▄{c}{hair}▄▄▄▄▄▄▄▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {skin}█▓▓▓{eye}▓▓▓▓▓▓▓▓▓{eye}▓▓▓█{c}
@@ -84,7 +84,7 @@ HUMANOID_STOCKY = """\
 ROBOT_BOXY = """\
 {accent}▄   ▄{c}
 {accent}█   █{c}
-{outfit}▄███████████████▄{c}
+{highlight}▄{c}{outfit}███████████████▄{c}
 {outfit}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {outfit}█▓▓ {c}{accent}{eye}{c}{outfit}       {c}{accent}{eye}{c}{outfit} ▓▓█{c}
 {outfit}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
@@ -103,7 +103,7 @@ ROBOT_BOXY = """\
 # BMO-adjacent cubes, Nibbler, pet-sized characters.
 CREATURE_SMALL = """\
 
-{hair}▄▄▄▄▄▄▄▄▄{c}
+{highlight}▄{c}{hair}▄▄▄▄▄▄▄▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {skin}█▓▓{eye}▓▓▓▓▓▓▓▓▓{eye}▓▓█{c}
@@ -125,7 +125,7 @@ CREATURE_SMALL = """\
 MYSTICAL_CLOAKED = """\
 {accent}▄█▄{c}
 {accent}▄███▄{c}
-{hair}▄█▓▓▓▓▓▓▓█▄{c}
+{highlight}▄{c}{hair}█▓▓▓▓▓▓▓█▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {hair}█▓▓▓{c}{shadow}▓▓▓▓▓▓▓▓▓{c}{hair}▓▓▓█{c}
@@ -146,7 +146,7 @@ MYSTICAL_CLOAKED = """\
 # anything".
 GHOST_FLOATING = """\
 
-{hair}▄▄▄▄▄▄▄▄▄▄▄{c}
+{highlight}▄{c}{hair}▄▄▄▄▄▄▄▄▄▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {skin}█▓▓▓{eye}▓▓▓▓▓▓▓{eye}▓▓▓█{c}
@@ -167,7 +167,7 @@ GHOST_FLOATING = """\
 # ears up top and four stubby legs visible at the bottom.
 ANIMAL_QUADRUPED = """\
 
-{hair}▄▄▄     ▄▄▄{c}
+{highlight}▄{c}{hair}▄▄     ▄▄▄{c}
 {hair}█▓█     █▓█{c}
 {hair}▄█▓▓▓▄▄▄▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
@@ -187,7 +187,7 @@ ANIMAL_QUADRUPED = """\
 # Angels, Prismo-adjacent, fairies, Icarus-types. Wings flare outward
 # with feather/scale texture in the accent color; body stays humanoid.
 WINGED = """\
-{hair}▄▄▄▄▄▄▄▄▄▄▄{c}
+{highlight}▄{c}{hair}▄▄▄▄▄▄▄▄▄▄{c}
 {hair}▄█▓▓▓▓▓▓▓▓▓▓▓▓▓█▄{c}
 {hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
 {skin}█▓▓▓{eye}▓▓▓▓▓▓▓{eye}▓▓▓█{c}
@@ -210,7 +210,7 @@ WINGED = """\
 # eye never reads this as a regular oval or cloud. Headwear compat keeps
 # "crown" so LSP's star crown prepends above row 0.
 BLOB_AMORPHOUS = """\
-{hair}     ▄██▄▄          {c}
+{hair}     {c}{highlight}▄{c}{hair}██▄▄          {c}
 {hair}   ▄▇██████▄        {c}
 {hair}  ▇██████████▇▅     {c}
 {hair}▇████████████████   {c}
@@ -232,7 +232,7 @@ BLOB_AMORPHOUS = """\
 # orientation: five fingers rise above a wide palm whose face occupies
 # the middle band; short stubby legs carry the body at the bottom.
 HAND_CREATURE = """\
-{hair}██ ██ ██ ██ ██   {c}
+{highlight}█{c}{hair}█ ██ ██ ██ ██   {c}
 {hair}██ ██ ██ ██ ██   {c}
 {hair}██ ██ ██ ██ ██   {c}
 {hair}██ ██ ██ ██ ██   {c}
@@ -331,6 +331,7 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "outfit": "[#cccccc]",     # (unused)
         "accent": "[#7ab8ff]",     # blue spooky accents
         "shadow": "[#888888]",     # fading wisps
+        "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "◡",
     },
