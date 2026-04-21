@@ -1463,6 +1463,22 @@ class TokenPalApp(App[None]):
         self._drag_start_screen_x = 0
         self._overlay._persist_chat_log_width(self._chat_log_width)
 
+    def on_buddy_stage_buddy_poked(self, _message: BuddyStage.BuddyPoked) -> None:
+        callback = self._overlay._buddy_reaction_callback
+        if callback is not None:
+            try:
+                callback("poke")
+            except Exception:
+                log.exception("buddy reaction callback (poke) raised")
+
+    def on_buddy_stage_buddy_shaken(self, _message: BuddyStage.BuddyShaken) -> None:
+        callback = self._overlay._buddy_reaction_callback
+        if callback is not None:
+            try:
+                callback("shake")
+            except Exception:
+                log.exception("buddy reaction callback (shake) raised")
+
 
 # --- Overlay ---
 
@@ -1480,6 +1496,7 @@ class TextualOverlay(AbstractOverlay):
         self._is_running = False
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
+        self._buddy_reaction_callback: Callable[[str], None] | None = None
         self._pending_voice_frames: dict[str, BuddyFrame] | None = None
         self._pending_mood_frames: (
             dict[str, dict[str, BuddyFrame]] | None
@@ -1570,6 +1587,14 @@ class TextualOverlay(AbstractOverlay):
 
     def set_command_callback(self, callback: Callable[[str], None]) -> None:
         self._command_callback = callback
+
+    def set_buddy_reaction_callback(self, callback: Callable[[str], None]) -> None:
+        """Invoked with "poke" or "shake" when the user interacts with the
+        ASCII buddy. Callback runs on the UI thread — it should enqueue
+        into the brain (``Brain.on_buddy_poked`` / ``on_buddy_shaken``)
+        and return immediately.
+        """
+        self._buddy_reaction_callback = callback
 
     def run_loop(self) -> None:
         if self._app:

@@ -1419,6 +1419,14 @@ def main() -> None:
     overlay.set_command_callback(_on_command)
     overlay.set_input_callback(_on_user_input)
 
+    def _on_buddy_reaction(kind: str) -> None:
+        if kind == "poke":
+            brain.on_buddy_poked()
+        elif kind == "shake":
+            brain.on_buddy_shaken()
+
+    overlay.set_buddy_reaction_callback(_on_buddy_reaction)
+
     # Chat-log persistence: write-through on every buddy/user line, plus a
     # clear hook for Ctrl+L. MemoryStore holds the cap so the hot path
     # doesn't pay a config lookup or SELECT COUNT per insert.

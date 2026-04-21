@@ -225,6 +225,28 @@ _APP_EASTER_EGGS: dict[str, str] = {
     "calc.exe": "Math. Voluntarily.",
 }
 
+# Physical-reaction canned lines — keyed by "poke" / "shake". Fired through
+# the brain's high-signal bypass path (skips the comment-rate gate + LLM
+# entirely). Per-voice overrides are parking-lot; for now everyone shares
+# these generic lines.
+_BUDDY_REACTIONS: dict[str, tuple[str, ...]] = {
+    "poke": (
+        "Ow.",
+        "Hey!",
+        "Rude.",
+        "Watch it.",
+        "Do you mind.",
+        "Was that necessary.",
+    ),
+    "shake": (
+        "STOP.",
+        "OKAY OKAY I GET IT.",
+        "You're gonna make me hurl.",
+        "I am begging you to stop.",
+        "Why are you like this.",
+    ),
+}
+
 # ---------------------------------------------------------------------------
 # Sensitive apps — never comment when these are active (guardrail §4).
 # ---------------------------------------------------------------------------
@@ -740,6 +762,14 @@ class PersonalityEngine:
     def check_sensitive_app(self, context_snapshot: str) -> bool:
         """Return True if a sensitive app is detected — should go silent."""
         return contains_sensitive_term(context_snapshot)
+
+    def canned_reaction(self, kind: str) -> str | None:
+        """Pick a physical-reaction line for a poke/shake. Returns None for
+        unknown kinds so callers can no-op safely. No LLM call."""
+        pool = _BUDDY_REACTIONS.get(kind)
+        if not pool:
+            return None
+        return random.choice(pool)
 
     def check_easter_egg(self, context_snapshot: str) -> str | None:
         """Return a canned easter-egg line, or None if no egg triggers."""

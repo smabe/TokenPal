@@ -59,6 +59,11 @@ class AbstractOverlay(abc.ABC):
     def set_command_callback(self, callback: Callable[[str], None]) -> None:
         """Register handler for slash commands. Optional."""
 
+    def set_buddy_reaction_callback(self, callback: Callable[[str], None]) -> None:
+        """Register handler for buddy physical reactions ("poke"/"shake").
+        Optional — only the Textual overlay emits these today.
+        """
+
     def open_selection_modal(
         self,
         title: str,

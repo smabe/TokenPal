@@ -234,6 +234,12 @@ class Brain:
         self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
         self._research_queue: asyncio.Queue[str] = asyncio.Queue()
         self._refine_queue: asyncio.Queue[str] = asyncio.Queue()
+        # Physical-reaction events (overlay → brain). Items are "poke"/"shake".
+        self._buddy_event_queue: asyncio.Queue[str] = asyncio.Queue()
+        # Last time a buddy-reaction bubble was emitted — 5s cooldown so
+        # click-spam can't flood the bubble queue. Separate from the
+        # observation-path rate gate.
+        self._last_buddy_reaction_time: float = 0.0
         self._loop: asyncio.AbstractEventLoop | None = None
         self._senses = senses
         self._llm = llm
@@ -567,6 +573,19 @@ class Brain:
                         await self._handle_refine(follow_up)
                     except asyncio.QueueEmpty:
                         break
+
+                # Drain physical-reaction events (click/shake). Coalesce so
+                # a rapid click-burst produces at most one bubble per tick —
+                # the cooldown inside _generate_buddy_reaction enforces the
+                # 5s gap between bubbles too.
+                pending_reaction: str | None = None
+                while not self._buddy_event_queue.empty():
+                    try:
+                        pending_reaction = self._buddy_event_queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                if pending_reaction is not None:
+                    await self._generate_buddy_reaction(pending_reaction)
 
                 # Fire any due proactive nudges (stretch/water/etc).
                 # Respects conversation + sensitive-app gates via _proactive_paused.
@@ -1026,6 +1045,27 @@ class Brain:
             log.exception("Drift nudge generation failed")
             self._push_status()
             return False
+
+    async def _generate_buddy_reaction(self, kind: str) -> bool:
+        """Emit a canned reaction line for a click (``poke``) or shake.
+        Bypasses the comment-rate gate and interestingness threshold (same
+        as the git bypass), but respects sensitive-app suppression and a
+        local 5s cooldown so click-spam can't flood the bubble queue.
+        """
+        snapshot = self._context.snapshot()
+        if self._personality.check_sensitive_app(snapshot):
+            return False
+        now = time.monotonic()
+        if now - self._last_buddy_reaction_time < 5.0:
+            return False
+        line = self._personality.canned_reaction(kind)
+        if not line:
+            return False
+        self._last_buddy_reaction_time = now
+        log.info("TokenPal (buddy %s): %s", kind, line)
+        self._emit_comment(line, acknowledge=True)
+        self._recent_outputs.append(line)
+        return True
 
     async def _generate_git_nudge(self, sig: GitNudgeSignal) -> bool:
         """Emit a single in-character nudge about a stale WIP commit."""
@@ -1725,6 +1765,14 @@ class Brain:
 
     def submit_refine_question(self, follow_up: str) -> None:
         self._post_threadsafe(self._refine_queue, follow_up, "refine follow-up")
+
+    def on_buddy_poked(self) -> None:
+        """Threadsafe enqueue from the overlay — the user clicked the buddy."""
+        self._post_threadsafe(self._buddy_event_queue, "poke", "buddy poke")
+
+    def on_buddy_shaken(self) -> None:
+        """Threadsafe enqueue from the overlay — the user shook the buddy."""
+        self._post_threadsafe(self._buddy_event_queue, "shake", "buddy shake")
 
     @property
     def mode(self) -> BrainMode:
