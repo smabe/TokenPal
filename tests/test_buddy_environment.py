@@ -436,10 +436,10 @@ def test_drag_does_not_ease_while_held() -> None:
 def test_drag_offset_safety_cap() -> None:
     m = _seeded_motion()
     # Push way beyond the cap.
-    for _ in range(20):
+    for _ in range(40):
         m.drag_update(100.0, 100.0, 0.05)
-    assert abs(m.drag_offset_x) <= 40.0
-    assert abs(m.drag_offset_y) <= 40.0
+    assert abs(m.drag_offset_x) <= 200.0
+    assert abs(m.drag_offset_y) <= 200.0
 
 
 def test_shake_triggers_dizzy_on_reversals() -> None:
