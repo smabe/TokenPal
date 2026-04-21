@@ -74,6 +74,13 @@ class VoiceProfile:
     ascii_idle: list[str] = field(default_factory=list)
     ascii_idle_alt: list[str] = field(default_factory=list)
     ascii_talking: list[str] = field(default_factory=list)
+    # Per-mood frame triples. Outer key is mood name ("grumpy", "cocky",
+    # etc. — whatever the persona uses); inner dict has keys "idle",
+    # "idle_alt", "talking" each holding a pre-rendered list of markup
+    # lines. Empty for profiles trained before mood-aware frames shipped;
+    # the runtime falls back to ``ascii_idle`` / ``ascii_idle_alt`` /
+    # ``ascii_talking`` when the active mood isn't a key in this dict.
+    mood_frames: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     version: int = 1
 
     @property
@@ -121,6 +128,7 @@ def load_profile(name: str, voices_dir: Path) -> VoiceProfile:
         ascii_idle=data.get("ascii_idle", []),
         ascii_idle_alt=data.get("ascii_idle_alt", []),
         ascii_talking=data.get("ascii_talking", []),
+        mood_frames=data.get("mood_frames", {}),
         version=data.get("version", 1),
     )
 

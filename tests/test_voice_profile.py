@@ -9,6 +9,7 @@ from tokenpal.tools.voice_profile import (
     ProfileSummary,
     VoiceProfile,
     list_profile_summaries,
+    load_profile,
     save_profile,
 )
 
@@ -66,6 +67,38 @@ def test_list_profile_summaries_skips_malformed_json(
 
     results = list_profile_summaries(voices)
     assert [r.slug for r in results] == ["finn"]
+
+
+def test_profile_defaults_to_empty_mood_frames() -> None:
+    p = _make("Finn", 1)
+    assert p.mood_frames == {}
+
+
+def test_mood_frames_roundtrip_through_save_load(tmp_path: Path) -> None:
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    profile = _make("Finn", 1)
+    profile.mood_frames = {
+        "grumpy": {"idle": ["a"], "idle_alt": ["b"], "talking": ["c"]},
+        "cocky": {"idle": ["x"], "idle_alt": ["y"], "talking": ["z"]},
+    }
+    save_profile(profile, voices)
+
+    loaded = load_profile("finn", voices)
+    assert loaded.mood_frames == profile.mood_frames
+
+
+def test_legacy_profile_without_mood_frames_loads_cleanly(
+    tmp_path: Path,
+) -> None:
+    voices = tmp_path / "voices"
+    voices.mkdir()
+    (voices / "legacy.json").write_text(
+        '{"character": "Finn", "source": "", "created": "2026-01-01",'
+        ' "lines": ["x"]}',
+    )
+    loaded = load_profile("legacy", voices)
+    assert loaded.mood_frames == {}
 
 
 def test_profile_summary_is_frozen() -> None:
