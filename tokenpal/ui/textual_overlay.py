@@ -532,14 +532,21 @@ class ParticleSky(Widget):
         )
 
         # Reaction bursts (respect sensitive suppression via env check).
+        # Both spawn at the bottom of the sky widget so they render as close
+        # as possible to the buddy, who sits in a separate widget below.
         if not env.sensitive_suppressed:
             if self._motion.consume_poke_trigger():
-                self._field.spawn_impact_burst(buddy_x_center, float(panel_h - 2))
+                # Spawn slightly higher so the burst has room to fan out
+                # before gravity pulls particles off the bottom edge.
+                burst_y = max(1.0, float(panel_h) * 0.6)
+                self._field.spawn_impact_burst(buddy_x_center, burst_y)
             if self._motion.dizzy_ticks > 0.0:
                 self._dizzy_swirl_accum += _PARTICLE_TICK_S * 4.0
                 while self._dizzy_swirl_accum >= 1.0:
                     self._dizzy_swirl_accum -= 1.0
-                    self._field.spawn_dizzy_swirl(buddy_x_center, float(panel_h - 4))
+                    self._field.spawn_dizzy_swirl(
+                        buddy_x_center, max(1.0, float(panel_h - 1)),
+                    )
             else:
                 self._dizzy_swirl_accum = 0.0
         else:

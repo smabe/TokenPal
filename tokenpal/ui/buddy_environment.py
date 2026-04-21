@@ -659,20 +659,25 @@ class ParticleField:
             ))
 
     def spawn_dizzy_swirl(self, x: float, y: float, count: int = 4) -> None:
-        """Orbiting glyphs above buddy's head during dizzy state. Call at a
-        rate-limited cadence (e.g. 4 Hz) so the 50-particle cap isn't
-        overrun.
+        """Short-lived orbiting glyphs at the bottom of the sky widget.
+
+        The sky widget clips to the top of the panel, so ``y`` should be
+        ``panel_h - 1`` (very bottom of sky) — that's the closest the sky
+        can render to the buddy underneath. Particles have tight radius,
+        short life, and near-zero vertical drift so they form a compact
+        puff above the speech region rather than floating up into the
+        weather.
         """
         for _ in range(count):
             angle = self.rng.uniform(0.0, 2.0 * math.pi)
-            radius = self.rng.uniform(1.5, 3.5)
+            radius = self.rng.uniform(1.0, 2.5)
             self._try_append(Particle(
                 x=x + math.cos(angle) * radius,
-                y=y - self.rng.uniform(0.5, 2.0),
-                vx=math.cos(angle + math.pi / 2.0) * 3.0,
-                vy=-0.5,
+                y=y,
+                vx=math.cos(angle + math.pi / 2.0) * 2.0,
+                vy=0.0,
                 ax=0.0, ay=0.0,
-                life=self.rng.uniform(0.8, 1.2),
+                life=self.rng.uniform(0.5, 0.8),
                 glyph=self.rng.choice(_SWIRL_GLYPHS),
                 color=self.rng.choice(_SWIRL_PALETTE),
             ))

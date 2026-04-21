@@ -540,12 +540,15 @@ def test_spawn_impact_burst_short_lived() -> None:
     assert all(0.3 <= p.life <= 0.8 for p in field.particles)
 
 
-def test_spawn_dizzy_swirl_adds_particles_above_anchor() -> None:
+def test_spawn_dizzy_swirl_adds_particles_at_anchor() -> None:
     field = _field()
     field.spawn_dizzy_swirl(x=20.0, y=10.0, count=4)
     assert len(field.particles) == 4
-    # All swirl glyphs spawn above the anchor (y < 10.0).
-    assert all(p.y < 10.0 for p in field.particles)
+    # Particles anchor at the spawn y (no vertical offset) — the sky widget
+    # is clipped so the caller passes panel_h - 1 to keep them visible.
+    assert all(p.y == 10.0 for p in field.particles)
+    # Orbital velocity only; no vertical drift.
+    assert all(p.vy == 0.0 for p in field.particles)
 
 
 def test_spawn_calls_respect_particle_cap() -> None:
