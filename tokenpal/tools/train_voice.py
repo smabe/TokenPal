@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import random
 import re
 import sys
@@ -52,6 +53,8 @@ from tokenpal.ui.ascii_zones import (
     rubric_block,
 )
 from tokenpal.util.text_guards import is_clean_english
+
+log = logging.getLogger(__name__)
 
 
 def _get_model() -> str:
@@ -428,12 +431,23 @@ def _generate_ascii_art(
     with per-mood overrides without re-running the classifier.
     """
     classification = _classify_via_cloud(character, persona, source)
+    source_label = "cloud"
     if classification is None:
         classification = _classify_character_for_skeleton(
             character, persona, source,
         )
+        source_label = "local"
     if classification is None:
         classification = _DEFAULT_CLASSIFICATION
+        source_label = "default_fallback"
+    log.info(
+        "ascii classify (%s): character=%s skeleton=%s hair=%s zones=%s",
+        source_label,
+        character,
+        classification["skeleton"],
+        classification["palette"]["hair"],
+        classification.get("zones", {}),
+    )
     idle, idle_alt, talking = _render_skeleton_frames(classification)
     return idle, idle_alt, talking, classification
 
@@ -1055,6 +1069,16 @@ def regenerate_ascii_art(
     )
     profile.mood_frames = _render_mood_frames(
         classification, profile.mood_roles,
+    )
+
+    # Surface what the classifier picked so the user can see the JSON
+    # behind the render — makes miss-picks (empty zones, wrong palette)
+    # diagnosable without grepping logs.
+    zones = classification.get("zones", {})
+    zone_str = ", ".join(f"{k}={v}" for k, v in zones.items())
+    _progress(
+        f"Classified: skeleton={classification['skeleton']} "
+        f"hair={classification['palette']['hair']} zones={{{zone_str}}}"
     )
 
     out_dir = voices_dir or _get_voices_dir()
