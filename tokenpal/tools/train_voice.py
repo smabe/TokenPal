@@ -526,8 +526,15 @@ def _build_classifier_prompt(
         f'Pick ONE headwear zone. "none" is fronted — use it unless '
         f'the character truly has that accessory in canon:\n'
         + rubric_block(HEADWEAR_RUBRIC)
-        + 'Pick ONE facial_hair zone. "none" is fronted — use it '
-        + 'unless the character has a canonical beard on screen:\n'
+        + 'Pick ONE facial_hair zone. If the character has canonical '
+        + 'facial hair on screen (beard, mustache, goatee), you MUST '
+        + 'pick the matching option — "none" is for clean-shaven '
+        + 'characters only. When unsure between two beard styles, pick '
+        + 'the fuller one. Example: Ice King has a huge white beard '
+        + 'reaching his chest → beard_long (or beard_wide if it flares '
+        + 'past the jaw), NEVER none. Santa → beard_wide. Mario → '
+        + 'mustache_thick. Hank Hill → beard_stubble. Fred from '
+        + 'Scooby-Doo → beard_goatee.\n'
         + rubric_block(FACIAL_HAIR_RUBRIC)
         + 'Pick ONE body_motif zone. "none" is fronted — almost every '
         + 'character picks this unless they have an iconic chest '

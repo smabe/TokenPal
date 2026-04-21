@@ -210,8 +210,11 @@ FACIAL_HAIR = ZoneSpec(
             "visible on screen)"
         ),
         "beard_long": (
-            "long rectangular beard reaching down past the chest (Ice King, "
-            "Gandalf, wizards, Hermes)"
+            "long full beard reaching from chin down past the chest, "
+            "often covering the neck and upper torso (Ice King's huge "
+            "white beard, Gandalf, wizards, Dumbledore). If the "
+            "character is a bearded wizard or old-wizard archetype, "
+            "this is almost always the right pick."
         ),
         "beard_stubble": (
             "short stubble or short beard just under the mouth (Hank Hill, "
