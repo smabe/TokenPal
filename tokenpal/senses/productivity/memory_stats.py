@@ -15,6 +15,11 @@ log = logging.getLogger(__name__)
 # Minimum session age before reporting anything meaningful
 _MIN_SESSION_MINUTES = 5
 
+# Rolling window for switches_per_hour. Session-lifetime averages linger long
+# after the user goes AFK (early churn keeps the rate "restless" for an hour),
+# so the rate is computed over recent activity only.
+_SWITCH_WINDOW_S = 15 * 60
+
 # App categories for natural-language summaries
 _APP_CATEGORIES: dict[str, list[str]] = {
     "code": ["vscode", "code", "xcode", "intellij", "pycharm", "vim", "nvim", "cursor", "zed"],
@@ -136,12 +141,16 @@ class ProductivityStats(AbstractSense):
             return {}
 
         total_switches = len(rows)
-        switches_per_hour = total_switches / max(session_minutes / 60, 1 / 60)
+        now = time.time()
+        window_start = now - _SWITCH_WINDOW_S
+        window_switches = sum(1 for _, ts in rows if ts >= window_start)
+        window_minutes = min(session_minutes, _SWITCH_WINDOW_S / 60)
+        switches_per_hour = window_switches / max(window_minutes / 60, 1 / 60)
 
         # Current app and time-in-current
         current_app = rows[-1][0]
         current_start = rows[-1][1]
-        time_in_current_min = int((time.time() - current_start) / 60)
+        time_in_current_min = int((now - current_start) / 60)
 
         # Longest streak (max gap between consecutive switches for same app)
         longest_streak_min = 0

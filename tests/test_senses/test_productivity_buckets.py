@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
+
+from tokenpal.brain.memory import MemoryStore
 from tokenpal.senses.productivity.memory_stats import ProductivityStats
 
 
@@ -51,3 +55,38 @@ def test_summary_changes_across_buckets() -> None:
     calm = sense._build_summary(_stats(switches_per_hour=3))
     restless = sense._build_summary(_stats(switches_per_hour=20))
     assert calm != restless
+
+
+def test_switch_rate_uses_rolling_window_not_session_average(tmp_path: Path) -> None:
+    """Early churn must not keep the rate 'restless' after the user goes AFK.
+
+    Scenario: 20 app switches in the first 10 min of a 90-min session, then
+    AFK for 80 min. Session-lifetime average would still read ~13/hr (near
+    the restless threshold). The rolling window (last 15 min) must see zero
+    recent switches and fall into the 'calm' bucket.
+    """
+    store = MemoryStore(tmp_path / "prod.db")
+    store.setup()
+    session_id = store.session_id
+
+    now = time.time()
+    # 20 switches spread across minutes -90 through -80 (start of session)
+    assert store._conn is not None
+    for i in range(20):
+        ts = now - (90 * 60) + (i * 30)
+        store._conn.execute(
+            "INSERT INTO observations "
+            "(timestamp, sense_name, event_type, summary, data_json, session_id) "
+            "VALUES (?, 'app_awareness', 'app_switch', ?, NULL, ?)",
+            (ts, "Ghostty", session_id),
+        )
+    store._conn.commit()
+
+    sense = ProductivityStats({})
+    sense._memory = store
+    stats = sense._query_stats(session_minutes=90)
+
+    assert stats["switches_per_hour"] < 8, (
+        f"rolling window should see 0 recent switches, got {stats['switches_per_hour']}/hr"
+    )
+    assert ProductivityStats._bucket_key(stats)[1] == "calm"

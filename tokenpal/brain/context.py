@@ -179,7 +179,7 @@ class ContextWindowBuilder:
             composites.append((
                 f"User is parked on \"{app.summary}\" — no input for "
                 f"{int(idle_min)} minutes",
-                {"idle"},
+                {"idle", "productivity"},
             ))
 
         # High CPU + frequent app switching = something is grinding
