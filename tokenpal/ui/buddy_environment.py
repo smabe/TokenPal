@@ -404,6 +404,12 @@ class Particle:
     spin: float = 0.0  # phase for sine-wave horizontal drift (snowflakes)
     pulse_palette: tuple[str, ...] = ()  # if set, color cycles through this
     pulse_period_s: float = 0.0  # one full cycle through pulse_palette
+    # When True, the particle overrides BuddyWidget's "only render on
+    # space cells" rule so it paints over the buddy's art too. Used for
+    # short-lived hit/impact effects where covering the art briefly IS
+    # the visual intent. Long-lived particles (weather, dizzy swirl)
+    # should leave this False so they don't deface the buddy.
+    always_render: bool = False
 
 
 class ParticleField:
@@ -681,7 +687,8 @@ class ParticleField:
 
     def spawn_impact_burst(self, x: float, y: float, count: int = 5) -> None:
         """Radial star burst on click — short life, outward velocity, light
-        gravity. Called once per poke trigger consumption.
+        gravity. Paints over the buddy's art (always_render=True) since
+        the click IS meant to visibly light him up.
         """
         for i in range(count):
             angle = (i / max(1, count)) * 2.0 * math.pi + self.rng.uniform(-0.3, 0.3)
@@ -694,6 +701,7 @@ class ParticleField:
                 life=self.rng.uniform(0.4, 0.7),
                 glyph=self.rng.choice(_IMPACT_GLYPHS),
                 color=self.rng.choice(_IMPACT_PALETTE),
+                always_render=True,
             ))
 
     def spawn_dizzy_swirl(self, x: float, y: float, count: int = 4) -> None:

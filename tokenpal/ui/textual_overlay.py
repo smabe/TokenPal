@@ -465,7 +465,8 @@ class BuddyWidget(Static):
         panel_y = y + buddy_y_offset
 
         width = self.size.width
-        overlays: dict[int, tuple[str, str]] = {}
+        # overlays: px_local -> (glyph, color, always_render)
+        overlays: dict[int, tuple[str, str, bool]] = {}
         for p in env_controller.field.particles:
             px_panel = int(round(p.x))
             py = int(round(p.y))
@@ -476,7 +477,12 @@ class BuddyWidget(Static):
             px_local = px_panel - buddy_x_offset
             if px_local < 0 or px_local >= width:
                 continue
-            overlays[px_local] = (p.glyph, p.color)
+            # always_render particles (impact burst) win over others at the
+            # same cell so a hit still paints even if a swirl is there too.
+            existing = overlays.get(px_local)
+            if existing is not None and existing[2] and not p.always_render:
+                continue
+            overlays[px_local] = (p.glyph, p.color, p.always_render)
         if not overlays:
             return strip
 
@@ -484,12 +490,14 @@ class BuddyWidget(Static):
         for seg in strip:
             for ch in seg.text:
                 cells.append((ch, seg.style))
-        # Only overwrite blank cells so the buddy's face stays intact.
+        # Space-only rule preserves the buddy's face; always_render
+        # particles (impact burst) paint over any cell for the duration
+        # of their short life.
         changed = False
-        for px, (glyph, color) in overlays.items():
+        for px, (glyph, color, always) in overlays.items():
             if 0 <= px < len(cells):
                 ch, existing_style = cells[px]
-                if ch == " ":
+                if ch == " " or always:
                     bg = existing_style.bgcolor if existing_style else None
                     cells[px] = (glyph, Style(color=color, bgcolor=bg))
                     changed = True
