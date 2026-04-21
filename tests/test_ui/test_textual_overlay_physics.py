@@ -171,12 +171,13 @@ async def test_buddy_widget_renders_particles_in_its_region(
         # Panel-Y origin is #buddy-panel (BuddyWidget.parent is BuddyStage).
         panel = app.query_one("#buddy-panel")
         buddy_y_offset = buddy.region.y - panel.region.y
-        # Spawn a particle at the buddy's first row. Glyph is a distinctive
-        # character unlikely to appear in the ASCII art.
+        buddy_x_offset = buddy.region.x - panel.region.x
+        # Spawn a particle at the buddy's first row, targeting widget-local
+        # column 0 (which falls in the padding spaces of the ASCII art).
         field = app.env_controller.field
         from tokenpal.ui.buddy_environment import Particle
         field.particles.append(Particle(
-            x=0.5, y=float(buddy_y_offset) + 0.0,
+            x=float(buddy_x_offset) + 0.0, y=float(buddy_y_offset) + 0.0,
             vx=0.0, vy=0.0, ax=0.0, ay=0.0,
             life=99.0, glyph="§", color="#ff00ff",
         ))

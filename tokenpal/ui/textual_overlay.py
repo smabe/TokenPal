@@ -452,13 +452,14 @@ class BuddyWidget(Static):
         if env_controller is None:
             return strip
         # self.parent is BuddyStage, not #buddy-panel — walk to the panel
-        # explicitly so panel-Y math uses the right origin.
+        # explicitly so panel-local math uses the right origin.
         try:
             panel = self.app.query_one("#buddy-panel")
         except Exception:
             return strip
         try:
             buddy_y_offset = int(self.region.y - panel.region.y)
+            buddy_x_offset = int(self.region.x - panel.region.x)
         except Exception:
             return strip
         panel_y = y + buddy_y_offset
@@ -466,11 +467,16 @@ class BuddyWidget(Static):
         width = self.size.width
         overlays: dict[int, tuple[str, str]] = {}
         for p in env_controller.field.particles:
-            px = int(round(p.x))
+            px_panel = int(round(p.x))
             py = int(round(p.y))
-            if py != panel_y or px < 0 or px >= width:
+            if py != panel_y:
                 continue
-            overlays[px] = (p.glyph, p.color)
+            # Convert panel-x to widget-local-x. The buddy widget slides
+            # (region.x shifts), so particles must shift with it.
+            px_local = px_panel - buddy_x_offset
+            if px_local < 0 or px_local >= width:
+                continue
+            overlays[px_local] = (p.glyph, p.color)
         if not overlays:
             return strip
 
