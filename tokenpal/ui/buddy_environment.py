@@ -425,22 +425,25 @@ class ParticleField:
         *,
         weather_y_top: float | None = None,
         weather_y_bound: float | None = None,
+        cull_y_bound: float | None = None,
     ) -> None:
         """Advance and spawn particles.
 
         ``weather_y_top`` / ``weather_y_bound`` define the panel-relative Y
         range where sky-only particles (rain, snow, dust, lightning, stars)
-        should spawn and be culled. If omitted, both fall back to the
-        widget-local range (y=-1 spawn top, panel_h cull bound) — the
-        pre-phase-3 behavior — so existing tests and direct callers stay
-        valid. The buddy steam anchor (``buddy_y``) is always interpreted
-        in the same coordinate space as the particles it spawns.
+        spawn. ``cull_y_bound`` is the max-Y for particle culling — it can
+        extend past ``weather_y_bound`` so reactions spawned in buddy rows
+        survive, while weather spawn range stays within the sky region.
+
+        If ``cull_y_bound`` is None, it falls back to ``weather_y_bound``
+        (or ``panel_h``). Same for ``weather_y_bound``/``weather_y_top``.
         """
         if env.sensitive_suppressed:
             return
         y_top = -1.0 if weather_y_top is None else weather_y_top
         y_bound = float(panel_h) if weather_y_bound is None else weather_y_bound
-        self._advance(dt, panel_w, y_bound)
+        cull = y_bound if cull_y_bound is None else cull_y_bound
+        self._advance(dt, panel_w, cull)
         self._spawn(
             dt, panel_w, panel_h, env, buddy_x, buddy_y,
             weather_y_top=y_top, weather_y_bound=y_bound,
@@ -762,15 +765,16 @@ class BuddyEnvironmentController:
         spawn_swirl_at: tuple[float, float] | None = None,
         weather_y_top: float | None = None,
         weather_y_bound: float | None = None,
+        cull_y_bound: float | None = None,
     ) -> None:
         """Advance motion + cloud drift + particle field by ``dt``.
 
         ``spawn_impact_at`` / ``spawn_swirl_at`` let the caller provide the
-        reaction anchor points (panel-relative in later phases; ``buddy_x``
-        + a y-anchor in phase 1). Passing ``None`` skips spawn.
+        reaction anchor points (panel-relative). Passing ``None`` skips
+        spawn.
 
-        ``weather_y_top`` / ``weather_y_bound`` forward to ParticleField.tick
-        for panel-relative weather spawn + culling.
+        ``weather_y_top`` / ``weather_y_bound`` / ``cull_y_bound`` forward
+        to ParticleField.tick.
         """
         self.motion.tick(dt, slide_w, slide_h, env)
         self.cloud_drift.tick(dt, env)
@@ -779,6 +783,7 @@ class BuddyEnvironmentController:
             buddy_x=buddy_x, buddy_y=buddy_y,
             weather_y_top=weather_y_top,
             weather_y_bound=weather_y_bound,
+            cull_y_bound=cull_y_bound,
         )
 
         if env.sensitive_suppressed:

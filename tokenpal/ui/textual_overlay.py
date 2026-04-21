@@ -451,8 +451,11 @@ class BuddyWidget(Static):
         env_controller = getattr(self.app, "env_controller", None)
         if env_controller is None:
             return strip
-        panel = self.parent
-        if panel is None:
+        # self.parent is BuddyStage, not #buddy-panel — walk to the panel
+        # explicitly so panel-Y math uses the right origin.
+        try:
+            panel = self.app.query_one("#buddy-panel")
+        except Exception:
             return strip
         try:
             buddy_y_offset = int(self.region.y - panel.region.y)
@@ -607,12 +610,24 @@ class ParticleSky(Widget):
         sky_y_offset = self._sky_panel_y_offset()
         weather_y_top = float(sky_y_offset) - 1.0
         weather_y_bound = float(sky_y_offset + sky_h)
+        # Cull bound extends past weather range so reactions spawned in the
+        # buddy's rows survive. Weather rain/snow have short life; if any
+        # reach buddy rows, BuddyWidget's render_line overlay catches them.
+        _buddy_top_pre, buddy_bottom_pre = self._buddy_panel_y()
+        cull_y_bound = max(weather_y_bound, buddy_bottom_pre + 1.0)
 
-        # Reaction anchors move to panel-relative coords — impact at 60% of
-        # sky, swirl at sky bottom (unchanged visual until phase 4 where
-        # BuddyWidget starts rendering particles in its own rows).
-        burst_y = float(sky_y_offset) + max(1.0, float(sky_h) * 0.6)
-        swirl_y = float(sky_y_offset) + max(1.0, float(sky_h - 1))
+        # Reaction anchors — panel-relative Y derived from the buddy
+        # widget's actual region. Swirl lands on the buddy's top row (his
+        # head); impact burst at his vertical center. Steam rises from the
+        # buddy's top. Pre-mount the buddy region is (0,0,0,0), so
+        # anchors collapse to the panel top — harmless no-op, spawn skips
+        # via the usual cull + rate-limit.
+        buddy_top_panel_y, buddy_bottom_panel_y = self._buddy_panel_y()
+        buddy_center_panel_y = (buddy_top_panel_y + buddy_bottom_panel_y) / 2.0
+        # Anchor swirl one row INTO the buddy so glyphs sit on his head,
+        # not floating above it.
+        swirl_y = buddy_top_panel_y + 1.0
+        burst_y = buddy_center_panel_y
 
         self._env.tick(
             _PARTICLE_TICK_S,
@@ -622,11 +637,12 @@ class ParticleSky(Widget):
             panel_h=sky_h,  # field uses panel_h for dust/steam spawn span
             env=env,
             buddy_x=buddy_x_center_pre,
-            buddy_y=weather_y_bound,  # steam rises from sky bottom (today's behavior)
+            buddy_y=buddy_top_panel_y,  # steam rises from the buddy's head
             spawn_impact_at=(buddy_x_center_pre, burst_y),
             spawn_swirl_at=(buddy_x_center_pre, swirl_y),
             weather_y_top=weather_y_top,
             weather_y_bound=weather_y_bound,
+            cull_y_bound=cull_y_bound,
         )
 
         centered_offset_x = int(round(motion.x - slide_w / 2.0))

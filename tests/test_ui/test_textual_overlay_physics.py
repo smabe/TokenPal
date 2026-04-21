@@ -168,8 +168,8 @@ async def test_buddy_widget_renders_particles_in_its_region(
     async with app.run_test(size=(80, 30)) as pilot:
         await pilot.pause()
         buddy = app.query_one(BuddyWidget)
-        panel = buddy.parent
-        assert panel is not None
+        # Panel-Y origin is #buddy-panel (BuddyWidget.parent is BuddyStage).
+        panel = app.query_one("#buddy-panel")
         buddy_y_offset = buddy.region.y - panel.region.y
         # Spawn a particle at the buddy's first row. Glyph is a distinctive
         # character unlikely to appear in the ASCII art.
