@@ -20,8 +20,8 @@ filesystem_pulse = false     # activity bursts in watched folders (default: Down
 # Network-backed rules silently drop when web_fetches consent is absent;
 # memory_recall is the consent-free floor so the feature still has a pulse.
 enabled = true
-global_cooldown_s = 600      # min seconds between any two rolls
-max_per_hour = 4             # hard rate cap
+global_cooldown_s = 180      # min seconds between any two rolls
+max_per_hour = 6             # hard rate cap
 
 [idle_tools.rules]
 # Per-rule toggles. Omit a key = use the rule's default (true for all rules).

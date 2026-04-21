@@ -39,8 +39,8 @@ class IdleToolsConfig:
     # weighted die across these contextual rules to produce tool-flavored
     # observations (word of the day, moon phase, trivia, etc).
     enabled: bool = True
-    global_cooldown_s: float = 600.0    # min gap between any two rolls
-    max_per_hour: int = 4               # hard rate cap
+    global_cooldown_s: float = 180.0    # min gap between any two rolls
+    max_per_hour: int = 6               # hard rate cap
     # Per-rule toggles. Unknown keys are ignored, missing keys default True
     # via rule metadata — keeps the schema forward-compatible as new rules
     # land without forcing a config migration.
