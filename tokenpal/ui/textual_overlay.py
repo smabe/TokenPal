@@ -627,6 +627,33 @@ class ParticleSky(Widget):
         # Anchor swirl one row INTO the buddy so glyphs sit on his head,
         # not floating above it.
         swirl_y = buddy_top_panel_y + 1.0
+
+        # --- reactplus-ii diagnostic ---
+        # Log anchor values when a reaction is about to spawn. Shows at INFO
+        # so it's visible without --verbose; goes quiet when nothing fires.
+        will_swirl = motion.dizzy_ticks > 0.0
+        will_impact = motion._poke_trigger  # peek without consuming
+        if will_swirl or will_impact:
+            try:
+                panel_widget = self.parent
+                panel_region = panel_widget.region if panel_widget else None
+            except Exception:
+                panel_region = None
+            log.info(
+                "reactplus spawn: panel=%s sky=%s buddy=%s motion.x=%.1f "
+                "slide_w=%.1f buddy_x=%.1f swirl_y=%.1f burst_y=%.1f "
+                "swirl=%s impact=%s",
+                panel_region,
+                self.region,
+                self._get_buddy().region,
+                motion.x,
+                slide_w,
+                buddy_x_center_pre,
+                swirl_y,
+                buddy_center_panel_y,
+                will_swirl,
+                will_impact,
+            )
         burst_y = buddy_center_panel_y
 
         self._env.tick(
