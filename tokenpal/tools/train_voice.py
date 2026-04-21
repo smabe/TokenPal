@@ -542,6 +542,16 @@ def _build_classifier_prompt(
         f'- shadow: a darker variant for shading (darker than outfit).\n'
         f'- highlight: a brighter variant of outfit/accent (for sheen, '
         f'crown gleam, wing tip). One shade up from outfit.\n\n'
+        f'Worked example (Ice King) — do not swap these slots:\n'
+        f'  hair=#e8e8e8 (his white hair+beard)\n'
+        f'  skin=#87ceeb (his blue skin)\n'
+        f'  outfit=#3a4a8c (his BLUE-PURPLE robe, NOT gold)\n'
+        f'  accent=#ffd700 (his GOLD CROWN, NOT red)\n'
+        f'  shadow=#1a2040 (dark blue-purple robe shadow, NOT brown)\n'
+        f'  highlight=#a3a7cc (one shade up from outfit)\n'
+        f'Slot assignment rule: the MAIN clothing goes in outfit, '
+        f'separate trim/accessories go in accent. Shadow is always a '
+        f'DARKER version of outfit, never a contrasting hue.\n\n'
         f'Pick one eye glyph: ● ○ ◉ ◎ ⊙ ◐ ◑\n'
         f'Pick one mouth glyph: ▽ ◇ ◡ ⌣ ω ᗣ\n\n'
         f'Pick ONE headwear zone. "none" is fronted — use it unless '
@@ -1088,9 +1098,11 @@ def regenerate_ascii_art(
         f"{k}={pal[k]}" for k in
         ("hair", "skin", "outfit", "accent", "shadow", "highlight")
     )
+    # Parens not brackets — Rich treats '[...]' as markup and crashes on
+    # hex colors that don't parse as tags.
     _progress(
         f"Classified: skeleton={classification['skeleton']} "
-        f"[{pal_str}] zones={{{zone_str}}}"
+        f"({pal_str}) zones={{{zone_str}}}"
     )
 
     out_dir = voices_dir or _get_voices_dir()
