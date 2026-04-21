@@ -477,6 +477,8 @@ class ParticleSky(Widget):
         self._last_buddy_offset: tuple[int, int] = (0, 0)
         self._last_speech_offset: tuple[int, int] = (0, 0)
         self._last_stage_offset: tuple[int, int] = (0, 0)
+        # Dizzy-swirl rate limiter — spawn 4 Hz while dizzy_ticks > 0.
+        self._dizzy_swirl_accum: float = 0.0
         # Star field signature: (panel_w, panel_h, max_x, target). Re-populates
         # whenever the panel resizes OR the moon's left edge moves (e.g.
         # the snapshot arrives after the first tick). None = not populated.
@@ -528,6 +530,20 @@ class ParticleSky(Widget):
             buddy_x=buddy_x_center,
             buddy_y=float(panel_h),
         )
+
+        # Reaction bursts (respect sensitive suppression via env check).
+        if not env.sensitive_suppressed:
+            if self._motion.consume_poke_trigger():
+                self._field.spawn_impact_burst(buddy_x_center, float(panel_h - 2))
+            if self._motion.dizzy_ticks > 0.0:
+                self._dizzy_swirl_accum += _PARTICLE_TICK_S * 4.0
+                while self._dizzy_swirl_accum >= 1.0:
+                    self._dizzy_swirl_accum -= 1.0
+                    self._field.spawn_dizzy_swirl(buddy_x_center, float(panel_h - 4))
+            else:
+                self._dizzy_swirl_accum = 0.0
+        else:
+            self._dizzy_swirl_accum = 0.0
 
         prop_stack = props_for(env) if self._snapshot else ()
         anchors: list[tuple[PropSprite, int, int]] = []

@@ -523,6 +523,39 @@ def _field() -> ParticleField:
     return ParticleField(rng=random.Random(7))
 
 
+def test_spawn_impact_burst_adds_particles() -> None:
+    field = _field()
+    field.spawn_impact_burst(x=20.0, y=10.0, count=5)
+    assert len(field.particles) == 5
+    # Impact glyphs are in the warm palette.
+    glyphs = {p.glyph for p in field.particles}
+    assert glyphs.issubset({"*", "✦", "✶", "+"})
+    # All have non-zero outward velocity (radial burst).
+    assert all(abs(p.vx) + abs(p.vy) > 0.0 for p in field.particles)
+
+
+def test_spawn_impact_burst_short_lived() -> None:
+    field = _field()
+    field.spawn_impact_burst(x=10.0, y=5.0, count=5)
+    assert all(0.3 <= p.life <= 0.8 for p in field.particles)
+
+
+def test_spawn_dizzy_swirl_adds_particles_above_anchor() -> None:
+    field = _field()
+    field.spawn_dizzy_swirl(x=20.0, y=10.0, count=4)
+    assert len(field.particles) == 4
+    # All swirl glyphs spawn above the anchor (y < 10.0).
+    assert all(p.y < 10.0 for p in field.particles)
+
+
+def test_spawn_calls_respect_particle_cap() -> None:
+    field = _field()
+    # Fire many bursts — they should stop accepting once PARTICLE_LIMIT hit.
+    for _ in range(30):
+        field.spawn_impact_burst(x=10.0, y=5.0, count=5)
+    assert len(field.particles) <= PARTICLE_LIMIT
+
+
 def test_particles_clear_day_spawns_dust() -> None:
     import datetime as dt
 

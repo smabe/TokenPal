@@ -341,6 +341,14 @@ _STAR_PALETTE: tuple[str, ...] = (
 )
 _STAR_GLYPHS: tuple[str, ...] = ("*", "·", "✦", "+", "⋆", "✶", "°", ".")
 
+# Click-reaction palette — bright warm hits, contrast against the #1a1a2e bg.
+_IMPACT_PALETTE: tuple[str, ...] = ("#ffeb3b", "#ffffee", "#ffc107", "#ff9800")
+_IMPACT_GLYPHS: tuple[str, ...] = ("*", "✦", "✶", "+")
+
+# Dizzy palette — purple/magenta for the "ugh, stop it" aesthetic.
+_SWIRL_PALETTE: tuple[str, ...] = ("#bb66ff", "#8844cc", "#cc88ff", "#dd99ee")
+_SWIRL_GLYPHS: tuple[str, ...] = ("✦", "°", "·", "*", "~")
+
 
 def _value_noise2(x: float, y: float, seed: int) -> float:
     """Smooth 2D value noise in [0, 1]. Hash-based, no tables."""
@@ -631,6 +639,42 @@ class ParticleField:
                 life=0.25,
                 glyph="╲" if i % 2 else "╱",
                 color="#ffff66",
+            ))
+
+    def spawn_impact_burst(self, x: float, y: float, count: int = 5) -> None:
+        """Radial star burst on click — short life, outward velocity, light
+        gravity. Called once per poke trigger consumption.
+        """
+        for i in range(count):
+            angle = (i / max(1, count)) * 2.0 * math.pi + self.rng.uniform(-0.3, 0.3)
+            speed = self.rng.uniform(6.0, 10.0)
+            self._try_append(Particle(
+                x=x, y=y,
+                vx=math.cos(angle) * speed,
+                vy=math.sin(angle) * speed * 0.6,
+                ax=0.0, ay=8.0,
+                life=self.rng.uniform(0.4, 0.7),
+                glyph=self.rng.choice(_IMPACT_GLYPHS),
+                color=self.rng.choice(_IMPACT_PALETTE),
+            ))
+
+    def spawn_dizzy_swirl(self, x: float, y: float, count: int = 4) -> None:
+        """Orbiting glyphs above buddy's head during dizzy state. Call at a
+        rate-limited cadence (e.g. 4 Hz) so the 50-particle cap isn't
+        overrun.
+        """
+        for _ in range(count):
+            angle = self.rng.uniform(0.0, 2.0 * math.pi)
+            radius = self.rng.uniform(1.5, 3.5)
+            self._try_append(Particle(
+                x=x + math.cos(angle) * radius,
+                y=y - self.rng.uniform(0.5, 2.0),
+                vx=math.cos(angle + math.pi / 2.0) * 3.0,
+                vy=-0.5,
+                ax=0.0, ay=0.0,
+                life=self.rng.uniform(0.8, 1.2),
+                glyph=self.rng.choice(_SWIRL_GLYPHS),
+                color=self.rng.choice(_SWIRL_PALETTE),
             ))
 
     def _spawn_steam(self, buddy_x: float, buddy_y: float) -> None:
