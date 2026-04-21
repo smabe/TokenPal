@@ -618,6 +618,11 @@ class PersonalityEngine:
             self._voice_ascii_talking,
         )
 
+    @property
+    def voice_mood_frames(self) -> dict[str, dict[str, list[str]]]:
+        """Per-mood frame triples keyed by role name (sleepy/bored/etc)."""
+        return self._voice_mood_frames
+
     def set_voice(self, voice: VoiceProfile | None) -> None:
         """Hot-swap the active voice at runtime."""
         self._apply_voice(voice)
@@ -654,6 +659,9 @@ class PersonalityEngine:
         )
         self._voice_ascii_talking: list[str] = (
             (voice.ascii_talking or []) if voice else []
+        )
+        self._voice_mood_frames: dict[str, dict[str, list[str]]] = (
+            (voice.mood_frames or {}) if voice else {}
         )
 
     def get_startup_greeting(self) -> str:

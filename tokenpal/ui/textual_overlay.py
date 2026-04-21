@@ -113,13 +113,24 @@ class RunCallback(Message):
 
 
 class LoadVoiceFrames(Message):
-    def __init__(self, frames: dict[str, BuddyFrame]) -> None:
+    def __init__(
+        self,
+        frames: dict[str, BuddyFrame],
+        mood_frames: dict[str, dict[str, BuddyFrame]] | None = None,
+    ) -> None:
         self.frames = frames
+        self.mood_frames = mood_frames or {}
         super().__init__()
 
 
 class ClearVoiceFrames(Message):
     pass
+
+
+class SetMood(Message):
+    def __init__(self, mood: str) -> None:
+        self.mood = mood
+        super().__init__()
 
 
 class RequestExit(Message):
@@ -332,13 +343,20 @@ class BuddyWidget(Static):
     def __init__(self) -> None:
         super().__init__(id="buddy", markup=True)
         self._custom_frames: dict[str, BuddyFrame] = {}
+        self._mood_frames: dict[str, dict[str, BuddyFrame]] = {}
+        self._current_mood: str = "default"
         self._blink_timer: Timer | None = None
         self._blink_state: bool = False
         self._is_talking: bool = False
         self._cached_max_width: int = self._compute_max_frame_width()
 
-    def set_custom_frames(self, frames: dict[str, BuddyFrame]) -> None:
+    def set_custom_frames(
+        self,
+        frames: dict[str, BuddyFrame],
+        mood_frames: dict[str, dict[str, BuddyFrame]] | None = None,
+    ) -> None:
         self._custom_frames = frames
+        self._mood_frames = mood_frames or {}
         self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
         if "idle_alt" in frames and "idle" in frames:
@@ -346,8 +364,19 @@ class BuddyWidget(Static):
         if not self._is_talking:
             self.show_frame(self._get_frame("idle"))
 
+    def set_mood(self, mood: str) -> None:
+        """Switch the active mood key. Re-renders if a different frame set applies."""
+        if mood == self._current_mood:
+            return
+        self._current_mood = mood
+        self._cached_max_width = self._compute_max_frame_width()
+        if not self._is_talking:
+            self.show_frame(self._get_frame("idle"))
+
     def clear_custom_frames(self) -> None:
         self._custom_frames = {}
+        self._mood_frames = {}
+        self._current_mood = "default"
         self._cached_max_width = self._compute_max_frame_width()
         self._stop_blink()
         self.show_frame(BuddyFrame.get("idle"))
@@ -369,6 +398,9 @@ class BuddyWidget(Static):
             self.update("\n".join(_esc_markup(line) for line in frame.lines))
 
     def _get_frame(self, name: str) -> BuddyFrame:
+        mood_set = self._mood_frames.get(self._current_mood)
+        if mood_set and name in mood_set:
+            return mood_set[name]
         if name in self._custom_frames:
             return self._custom_frames[name]
         return BuddyFrame.get(name)
@@ -744,8 +776,12 @@ class TokenPalApp(App[None]):
         self._chat_log_scroll = self.query_one("#chat-log", VerticalScroll)
         buddy = self.query_one(BuddyWidget)
         if self._overlay._pending_voice_frames:
-            buddy.set_custom_frames(self._overlay._pending_voice_frames)
+            buddy.set_custom_frames(
+                self._overlay._pending_voice_frames,
+                self._overlay._pending_mood_frames or None,
+            )
             self._overlay._pending_voice_frames = None
+            self._overlay._pending_mood_frames = None
         else:
             buddy.show_frame(BuddyFrame.get("idle"))
         self._apply_buddy_panel_min_width()
@@ -1101,12 +1137,17 @@ class TokenPalApp(App[None]):
         self.query_one(BuddyWidget).show_frame(message.frame)
 
     def on_load_voice_frames(self, message: LoadVoiceFrames) -> None:
-        self.query_one(BuddyWidget).set_custom_frames(message.frames)
+        self.query_one(BuddyWidget).set_custom_frames(
+            message.frames, message.mood_frames or None,
+        )
         self._apply_buddy_panel_min_width()
 
     def on_clear_voice_frames(self, _message: ClearVoiceFrames) -> None:
         self.query_one(BuddyWidget).clear_custom_frames()
         self._apply_buddy_panel_min_width()
+
+    def on_set_mood(self, message: SetMood) -> None:
+        self.query_one(BuddyWidget).set_mood(message.mood)
 
     def on_update_status(self, message: UpdateStatus) -> None:
         self.query_one(StatusBarWidget).set_text(message.text)
@@ -1252,6 +1293,9 @@ class TextualOverlay(AbstractOverlay):
         self._input_callback: Callable[[str], None] | None = None
         self._command_callback: Callable[[str], None] | None = None
         self._pending_voice_frames: dict[str, BuddyFrame] | None = None
+        self._pending_mood_frames: (
+            dict[str, dict[str, BuddyFrame]] | None
+        ) = None
         self._chat_log_width: int = int(
             config.get("chat_log_width") or _CHAT_LOG_DEFAULT_WIDTH
         )
@@ -1299,14 +1343,25 @@ class TextualOverlay(AbstractOverlay):
     def update_status(self, text: str) -> None:
         self._post(UpdateStatus(text))
 
-    def load_voice_frames(self, frames: dict[str, BuddyFrame]) -> None:
+    def load_voice_frames(
+        self,
+        frames: dict[str, BuddyFrame],
+        mood_frames: dict[str, dict[str, BuddyFrame]] | None = None,
+    ) -> None:
         if not self._is_running:
             self._pending_voice_frames = frames
+            self._pending_mood_frames = mood_frames or None
             return
-        self._post(LoadVoiceFrames(frames))
+        self._post(LoadVoiceFrames(frames, mood_frames))
 
     def clear_voice_frames(self) -> None:
         self._post(ClearVoiceFrames())
+
+    def set_mood(self, mood: str) -> None:
+        """Post a mood swap to the overlay. No-op if not running."""
+        if not self._is_running:
+            return
+        self._post(SetMood(mood))
 
     def log_buddy_message(
         self, text: str, *, markup: bool = False, url: str | None = None,

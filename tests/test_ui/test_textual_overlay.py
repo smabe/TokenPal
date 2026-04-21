@@ -14,8 +14,10 @@ from tokenpal.ui.textual_overlay import (
     ClearLog,
     HeaderWidget,
     HideSpeech,
+    LoadVoiceFrames,
     LogBuddyMessage,
     LogUserMessage,
+    SetMood,
     ShowBuddy,
     ShowSpeech,
     SpeechBubbleWidget,
@@ -244,3 +246,92 @@ async def test_input_submit_logs_user_message(
         await pilot.pause()
         chat = app.query_one("#chat-log-content", Static)
         assert chat.render().plain.strip() != ""
+
+
+# ---------------------------------------------------------------
+# Mood-aware frame plumbing
+# ---------------------------------------------------------------
+
+
+def test_mood_frame_sets_builds_per_mood_dict() -> None:
+    raw = {
+        "sleepy": {
+            "idle": ["[#aaa]z[/]"],
+            "idle_alt": ["[#aaa]─[/]"],
+            "talking": ["[#aaa]zz[/]"],
+        },
+        "bored": {
+            "idle": ["[#bbb]-[/]"],
+            "idle_alt": ["[#bbb]─[/]"],
+            "talking": ["[#bbb]-_[/]"],
+        },
+    }
+    out = BuddyFrame.mood_frame_sets(raw)
+    assert set(out.keys()) == {"sleepy", "bored"}
+    assert all(
+        set(triple.keys()) == {"idle", "idle_alt", "talking"}
+        for triple in out.values()
+    )
+    assert all(f.markup for triple in out.values() for f in triple.values())
+
+
+def test_mood_frame_sets_skips_empty_line_lists() -> None:
+    raw = {
+        "sleepy": {
+            "idle": ["something"],
+            "idle_alt": [],
+            "talking": ["x"],
+        },
+    }
+    out = BuddyFrame.mood_frame_sets(raw)
+    assert "sleepy" in out
+    assert set(out["sleepy"].keys()) == {"idle", "talking"}
+
+
+def test_mood_frame_sets_drops_moods_with_no_frames() -> None:
+    raw = {"sleepy": {"idle": [], "idle_alt": [], "talking": []}}
+    assert BuddyFrame.mood_frame_sets(raw) == {}
+
+
+async def test_load_voice_frames_with_mood_swaps_buddy_on_set_mood(
+    app: TokenPalApp,
+) -> None:
+    """After mood frames load, posting SetMood swaps the visible frame."""
+    default_frames = {
+        "idle": BuddyFrame(lines=["DEFAULT_IDLE"], name="idle", markup=False),
+        "idle_alt": BuddyFrame(lines=["DEFAULT_BLINK"], name="idle_alt", markup=False),
+        "talking": BuddyFrame(lines=["DEFAULT_TALK"], name="talking", markup=False),
+    }
+    mood_frames = {
+        "sleepy": {
+            "idle": BuddyFrame(lines=["SLEEPY_IDLE"], name="idle", markup=False),
+            "idle_alt": BuddyFrame(lines=["SLEEPY_BLINK"], name="idle_alt", markup=False),
+            "talking": BuddyFrame(lines=["SLEEPY_TALK"], name="talking", markup=False),
+        },
+    }
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(LoadVoiceFrames(default_frames, mood_frames))
+        await pilot.pause()
+        buddy = app.query_one(BuddyWidget)
+        assert "DEFAULT_IDLE" in buddy.render().plain
+
+        app.post_message(SetMood("sleepy"))
+        await pilot.pause()
+        assert "SLEEPY_IDLE" in buddy.render().plain
+
+
+async def test_unknown_mood_falls_back_to_default_frames(
+    app: TokenPalApp,
+) -> None:
+    default_frames = {
+        "idle": BuddyFrame(lines=["DEFAULT_IDLE"], name="idle", markup=False),
+        "idle_alt": BuddyFrame(lines=["DEFAULT_BLINK"], name="idle_alt", markup=False),
+        "talking": BuddyFrame(lines=["DEFAULT_TALK"], name="talking", markup=False),
+    }
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.post_message(LoadVoiceFrames(default_frames, {}))
+        await pilot.pause()
+        app.post_message(SetMood("hyper"))
+        await pilot.pause()
+        buddy = app.query_one(BuddyWidget)
+        assert "DEFAULT_IDLE" in buddy.render().plain

@@ -258,8 +258,11 @@ def main() -> None:
             overlay._voice_name = personality.voice_name
         if idle:
             frames = BuddyFrame.from_voice("custom", idle, idle_alt, talking)
+            mood_frame_sets = BuddyFrame.mood_frame_sets(
+                personality.voice_mood_frames,
+            )
             if hasattr(overlay, "load_voice_frames"):
-                overlay.load_voice_frames(frames)
+                overlay.load_voice_frames(frames, mood_frame_sets or None)
         elif hasattr(overlay, "clear_voice_frames"):
             overlay.clear_voice_frames()
 

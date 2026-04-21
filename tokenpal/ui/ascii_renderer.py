@@ -184,6 +184,32 @@ class BuddyFrame:
             )
         return frames
 
+    @staticmethod
+    def mood_frame_sets(
+        mood_frames: dict[str, dict[str, list[str]]],
+    ) -> dict[str, dict[str, BuddyFrame]]:
+        """Build mood_name → frame_name → BuddyFrame from raw mood_frames.
+
+        Input mirrors the shape stored on ``VoiceProfile.mood_frames``:
+        a dict keyed by mood role (lowercased: ``sleepy`` / ``bored`` /
+        etc.), each value a dict with ``idle`` / ``idle_alt`` /
+        ``talking`` → markup-line lists. Missing frame keys within a
+        mood are silently skipped so the widget can fall back to the
+        default frame when a specific variant isn't present.
+        """
+        result: dict[str, dict[str, BuddyFrame]] = {}
+        for mood, triple in mood_frames.items():
+            frames: dict[str, BuddyFrame] = {}
+            for frame_name in ("idle", "idle_alt", "talking"):
+                lines = triple.get(frame_name)
+                if lines:
+                    frames[frame_name] = BuddyFrame(
+                        lines=_fix_markup(lines), name=frame_name, markup=True,
+                    )
+            if frames:
+                result[mood] = frames
+        return result
+
 
 @dataclass
 class SpeechBubble:
