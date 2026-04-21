@@ -169,6 +169,40 @@ FACIAL_HAIR = ZoneSpec(
                 "{hair}▀▄{c}{shadow}▄▄▄▄▄▄▄▄▄{c}{hair}▄▀{c}\n"
             ),
         },
+        "beard_goatee": {
+            "humanoid_tall": (
+                "{skin}▀▄▄▄▄▄{c}{hair}▄███▄{c}{skin}▄▄▄▄▀{c}\n"
+                "{outfit}▄████{c}{hair}█████{c}{outfit}██████▄{c}\n"
+            ),
+            "mystical_cloaked": (
+                "{hair}▀▄▄▄▄▄{c}{hair}▄███▄{c}{hair}▄▄▄▄▄▀{c}\n"
+                "{outfit}▄▓▓▓▓{c}{hair}█████{c}{outfit}▓▓▓▓▓▓▓▄{c}\n"
+            ),
+        },
+        "mustache_thick": {
+            "humanoid_tall": (
+                "{skin}█▓▓▓{c}{hair}▄▄▄▄▄▄▄▄▄{c}{skin}▓▓▓█{c}\n"
+            ),
+            "mystical_cloaked": (
+                "{skin}█▓▓▓{c}{hair}▄▄▄▄▄▄▄▄▄{c}{skin}▓▓▓█{c}\n"
+            ),
+        },
+        "beard_wide": {
+            "humanoid_tall": (
+                "{hair}▄████████████████▄{c}\n"
+                "{hair}██████████████████{c}\n"
+                "{hair}█████████████████{c}\n"
+                "{hair}███████████████{c}\n"
+                "{hair}  ▀█████████▀  {c}\n"
+            ),
+            "mystical_cloaked": (
+                "{hair}▄██████████████████▄{c}\n"
+                "{hair}████████████████████{c}\n"
+                "{hair}██████████████████{c}\n"
+                "{hair}████████████████{c}\n"
+                "{hair}  ▀███████████▀  {c}\n"
+            ),
+        },
     },
     rubric={
         "none": (
@@ -183,13 +217,32 @@ FACIAL_HAIR = ZoneSpec(
             "short stubble or short beard just under the mouth (Hank Hill, "
             "Pops, 5-o-clock shadow)"
         ),
+        "beard_goatee": (
+            "pointy chin beard that doesn't connect to the cheeks — a tuft "
+            "just under the lower lip (Fred from Scooby-Doo, Dr. Strange, "
+            "hipster goatees)"
+        ),
+        "mustache_thick": (
+            "thick horizontal mustache under the nose, chin clean below "
+            "(Mario, Richard Watterson / Gumball's dad, Gru, Ned Flanders)"
+        ),
+        "beard_wide": (
+            "wide rounded full beard that flares out past the jaw (Santa, "
+            "Hagrid, Gimli, dwarf kings, Hermes-style when bushy)"
+        ),
     },
     compat={
-        "humanoid_tall": {"none", "beard_long", "beard_stubble"},
+        "humanoid_tall": {
+            "none", "beard_long", "beard_stubble",
+            "beard_goatee", "mustache_thick", "beard_wide",
+        },
         "humanoid_stocky": {"none"},
         "robot_boxy": {"none"},
         "creature_small": {"none"},
-        "mystical_cloaked": {"none", "beard_long", "beard_stubble"},
+        "mystical_cloaked": {
+            "none", "beard_long", "beard_stubble",
+            "beard_goatee", "mustache_thick", "beard_wide",
+        },
         "ghost_floating": {"none"},
         "animal_quadruped": {"none"},
         "winged": {"none"},
@@ -203,6 +256,19 @@ FACIAL_HAIR = ZoneSpec(
         # beard_stubble: just the chin row, body below untouched.
         ("beard_stubble", "humanoid_tall"): (7, 8),
         ("beard_stubble", "mystical_cloaked"): (8, 9),
+        # beard_goatee: chin fade + first shoulder row. 2-row compact tuft
+        # leaves torso details (◆ buttons, rivets) visible below.
+        ("beard_goatee", "humanoid_tall"): (7, 9),
+        ("beard_goatee", "mystical_cloaked"): (8, 10),
+        # mustache_thick: single-row replace of the mouth row so the chin
+        # stays visible below and the face reads clean-jawed with hair
+        # only under the nose.
+        ("mustache_thick", "humanoid_tall"): (6, 7),
+        ("mustache_thick", "mystical_cloaked"): (7, 8),
+        # beard_wide: 5-row full beard that eats chin-fade through upper
+        # torso. Leaves legs intact on both skeletons.
+        ("beard_wide", "humanoid_tall"): (7, 12),
+        ("beard_wide", "mystical_cloaked"): (8, 13),
     },
 )
 

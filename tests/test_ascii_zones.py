@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from tokenpal.ui.ascii_skeletons import SKELETONS, _SAMPLE_PALETTES, render
+from tokenpal.ui.ascii_skeletons import _SAMPLE_PALETTES, SKELETONS, render
 from tokenpal.ui.ascii_zones import (
+    _REPLACE_TARGETS,
+    _ZONE_COMPAT,
+    _ZONE_MODES,
     BODY_MOTIF_OPTIONS,
     BODY_MOTIF_OVERLAYS,
     BODY_MOTIF_RUBRIC,
@@ -19,9 +22,6 @@ from tokenpal.ui.ascii_zones import (
     TRAILING_OPTIONS,
     TRAILING_OVERLAYS,
     TRAILING_RUBRIC,
-    _REPLACE_TARGETS,
-    _ZONE_COMPAT,
-    _ZONE_MODES,
     apply_replace_zones,
     headwear_prefix,
     normalize_zones,
@@ -164,6 +164,59 @@ def test_beard_stubble_replaces_one_row_only() -> None:
     assert plain[7] != with_stubble[7]
     # Body below chin must survive — stubble only touches row 7.
     assert plain[8:] == with_stubble[8:]
+
+
+def test_beard_goatee_replaces_two_rows_and_preserves_torso() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_goatee = render(
+        "humanoid_tall", palette,
+        {"headwear": "none", "facial_hair": "beard_goatee"},
+    )
+    assert len(with_goatee) == len(plain)
+    # Face (rows 0-6) and legs (rows 9+) survive; goatee lives on 7-8.
+    assert plain[:7] == with_goatee[:7]
+    assert plain[9:] == with_goatee[9:]
+    assert plain[7:9] != with_goatee[7:9]
+
+
+def test_mustache_thick_replaces_mouth_row_only() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_stache = render(
+        "humanoid_tall", palette,
+        {"headwear": "none", "facial_hair": "mustache_thick"},
+    )
+    assert len(with_stache) == len(plain)
+    assert plain[6] != with_stache[6]
+    # Chin + torso untouched: mustache only replaces the mouth row.
+    assert plain[:6] == with_stache[:6]
+    assert plain[7:] == with_stache[7:]
+
+
+def test_beard_wide_covers_chin_to_upper_torso_leaves_legs() -> None:
+    palette = _SAMPLE_PALETTES["humanoid_tall"]
+    plain = render("humanoid_tall", palette)
+    with_wide = render(
+        "humanoid_tall", palette,
+        {"headwear": "none", "facial_hair": "beard_wide"},
+    )
+    assert len(with_wide) == len(plain)
+    # Legs + feet (rows 12-13) survive; wide beard owns rows 7-11.
+    assert plain[12:] == with_wide[12:]
+    assert plain[:7] == with_wide[:7]
+    assert plain[7:12] != with_wide[7:12]
+
+
+def test_new_beard_options_coerce_to_none_on_unsupported_skeleton() -> None:
+    palette = _SAMPLE_PALETTES["robot_boxy"]
+    plain = render("robot_boxy", palette)
+    for opt in ("beard_goatee", "mustache_thick", "beard_wide"):
+        illegal = render(
+            "robot_boxy", palette,
+            {"headwear": "none", "facial_hair": opt},
+        )
+        assert illegal == plain, f"{opt} leaked into robot_boxy"
 
 
 def test_facial_hair_coerces_to_none_on_unsupported_skeleton() -> None:
