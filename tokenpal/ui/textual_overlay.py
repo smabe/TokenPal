@@ -637,12 +637,11 @@ class ParticleSky(Widget):
         # anchors collapse to the panel top — harmless no-op, spawn skips
         # via the usual cull + rate-limit.
         buddy_top_panel_y, buddy_bottom_panel_y = self._buddy_panel_y()
-        buddy_center_panel_y = (buddy_top_panel_y + buddy_bottom_panel_y) / 2.0
-        # Anchor swirl a few rows into the buddy widget so glyphs sit on his
-        # face/crown area rather than at the very top edge (which is often
-        # crown-tip or blank padding depending on the voice frame).
+        # Both swirl and impact spawn at the same head/face anchor so
+        # reactions are consistently centered around his head rather than
+        # flashing on his body.
         swirl_y = buddy_top_panel_y + 3.0
-        burst_y = buddy_center_panel_y
+        burst_y = swirl_y
 
         self._env.tick(
             _PARTICLE_TICK_S,
