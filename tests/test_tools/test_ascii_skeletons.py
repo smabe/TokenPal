@@ -159,7 +159,9 @@ class TestGenerateAsciiArt:
             train_voice, "_classify_character_for_skeleton",
             return_value=_DEFAULT_CLASSIFICATION,
         ):
-            idle, idle_alt, talking = _generate_ascii_art("Finn", "persona text")
+            idle, idle_alt, talking, _cls = _generate_ascii_art(
+                "Finn", "persona text",
+            )
         assert len(idle) == 14 and len(idle_alt) == 14 and len(talking) == 14
 
     def test_falls_back_to_default_when_classification_fails(self) -> None:
@@ -169,7 +171,9 @@ class TestGenerateAsciiArt:
         ), patch.object(
             train_voice, "_classify_character_for_skeleton", return_value=None,
         ):
-            idle, idle_alt, talking = _generate_ascii_art("Cthulhu", "unknowable")
+            idle, idle_alt, talking, _cls = _generate_ascii_art(
+                "Cthulhu", "unknowable",
+            )
         # Frames still render — they use the default classification.
         assert len(idle) == 14
         # Default skeleton is humanoid_tall with default mouth ▽.

@@ -247,7 +247,7 @@ def test_regenerate_refreshes_all_llm_fields(tmp_path):
         "[#ffffff]legs[/]",
         "[#111111]feet[/]",
     ]
-    fake_frames = (good_frame, good_frame, good_frame)
+    fake_frames = (good_frame, good_frame, good_frame, {})
 
     with patch.object(
         train_voice, "_generate_persona", return_value=fake_persona,

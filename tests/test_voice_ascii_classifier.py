@@ -222,3 +222,40 @@ def test_render_with_headwear_prefixes_rows() -> None:
     frames = _render_skeleton_frames(cls)
     baseline = _render_skeleton_frames(_DEFAULT_CLASSIFICATION)
     assert len(frames[0]) > len(baseline[0])
+
+
+# --- Mood-aware frame generation ------------------------------------------
+
+
+def test_render_mood_frames_returns_empty_when_no_roles() -> None:
+    from tokenpal.tools.train_voice import _render_mood_frames
+
+    out = _render_mood_frames(_DEFAULT_CLASSIFICATION, {})
+    assert out == {}
+
+
+def test_render_mood_frames_emits_triple_per_known_role() -> None:
+    from tokenpal.tools.train_voice import _render_mood_frames
+
+    mood_roles = {
+        "sleepy": "DROWSY",
+        "bored": "MEH",
+        "hyper": "AMPED",
+        "default": "CHILL",
+    }
+    out = _render_mood_frames(_DEFAULT_CLASSIFICATION, mood_roles)
+    assert set(out.keys()) == {"sleepy", "bored", "hyper"}
+    for triple in out.values():
+        assert set(triple.keys()) == {"idle", "idle_alt", "talking"}
+        assert len(triple["idle"]) == len(triple["idle_alt"]) == len(
+            triple["talking"]
+        )
+
+
+def test_render_mood_frames_sleepy_differs_from_default_idle() -> None:
+    from tokenpal.tools.train_voice import _render_mood_frames
+
+    mood_roles = {"sleepy": "DROWSY"}
+    mood = _render_mood_frames(_DEFAULT_CLASSIFICATION, mood_roles)
+    default_idle, _, _ = _render_skeleton_frames(_DEFAULT_CLASSIFICATION)
+    assert mood["sleepy"]["idle"] != default_idle

@@ -414,7 +414,7 @@ _DEFAULT_CLASSIFICATION: dict = {
 
 def _generate_ascii_art(
     character: str, persona: str, source: str = "",
-) -> tuple[list[str], list[str], list[str]]:
+) -> tuple[list[str], list[str], list[str], dict]:
     """Classify the character + pick a palette, then render 3 frames.
 
     Tries the cloud classifier first when ``cfg.cloud_llm.enabled`` and a
@@ -422,8 +422,10 @@ def _generate_ascii_art(
     better than Qwen3-14B's), falling back silently to the local path on
     any error.
 
-    Returns (idle, idle_alt, talking). Falls back to a neutral placeholder
-    if neither path can produce valid classification JSON.
+    Returns (idle, idle_alt, talking, classification). Falls back to a
+    neutral placeholder if neither path can produce valid classification
+    JSON. The classification is returned so callers can re-render frames
+    with per-mood overrides without re-running the classifier.
     """
     classification = _classify_via_cloud(character, persona, source)
     if classification is None:
@@ -432,7 +434,8 @@ def _generate_ascii_art(
         )
     if classification is None:
         classification = _DEFAULT_CLASSIFICATION
-    return _render_skeleton_frames(classification)
+    idle, idle_alt, talking = _render_skeleton_frames(classification)
+    return idle, idle_alt, talking, classification
 
 
 def _classify_via_cloud(
@@ -647,6 +650,45 @@ def _render_skeleton_frames(
     return frame(), frame(eye="─"), frame(mouth=talking_mouth)
 
 
+# Heuristic per-role eye glyph overrides. Keyed by canonical role name
+# (matches the six slots _generate_mood_prompts uses: sleepy / bored /
+# hyper / impressed / concerned / default). Mouth is left to the normal
+# base → talking pipeline so the talking frame keeps its animation.
+# default is absent on purpose — the default mood reuses ``ascii_idle``.
+_MOOD_EYE_OVERRIDES: dict[str, str] = {
+    "sleepy": "─",
+    "bored": "○",
+    "hyper": "◉",
+    "impressed": "◉",
+    "concerned": "◎",
+}
+
+
+def _render_mood_frames(
+    classification: dict,
+    mood_roles: dict[str, str],
+) -> dict[str, dict[str, list[str]]]:
+    """Render idle/idle_alt/talking triples per non-default mood role.
+
+    Uses a fixed heuristic eye-glyph override per role so the buddy's
+    idle shape carries the mood without a second LLM call. Talking
+    frame keeps the base talking-mouth pipeline so animation remains
+    continuous. Default mood is omitted — the runtime falls back to
+    ``ascii_idle`` when the active role isn't in this dict.
+    """
+    result: dict[str, dict[str, list[str]]] = {}
+    for role in mood_roles:
+        override = _MOOD_EYE_OVERRIDES.get(role.lower())
+        if not override:
+            continue
+        patched = {**classification, "eye": override}
+        idle, idle_alt, talking = _render_skeleton_frames(patched)
+        result[role.lower()] = {
+            "idle": idle, "idle_alt": idle_alt, "talking": talking,
+        }
+    return result
+
+
 def _generate_voice_assets(
     character: str,
     lines: list[str],
@@ -655,12 +697,13 @@ def _generate_voice_assets(
     str, list[str], list[str], dict[str, str], dict[str, str],
     str, list[str], list[str], list[str],
     list[str], list[str], list[str],
+    dict[str, dict[str, list[str]]],
 ]:
     """Run all voice generation tasks in parallel.
 
     Returns (persona, greetings, offline_quips, mood_prompts, mood_roles,
              default_mood, structure_hints, anchor_lines, banned_names,
-             ascii_idle, ascii_idle_alt, ascii_talking).
+             ascii_idle, ascii_idle_alt, ascii_talking, mood_frames).
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -684,9 +727,10 @@ def _generate_voice_assets(
 
     # Generate ASCII art (needs persona for character description; source
     # gives the classifier franchise context for canonical colors).
-    ascii_idle, ascii_idle_alt, ascii_talking = _generate_ascii_art(
-        character, persona, source,
+    ascii_idle, ascii_idle_alt, ascii_talking, classification = (
+        _generate_ascii_art(character, persona, source)
     )
+    mood_frames = _render_mood_frames(classification, mood_roles)
 
     return (
         persona,
@@ -701,6 +745,7 @@ def _generate_voice_assets(
         ascii_idle,
         ascii_idle_alt,
         ascii_talking,
+        mood_frames,
     )
 
 
@@ -878,6 +923,7 @@ def train_from_wiki(
         mood_roles, default_mood, structure_hints,
         anchor_lines, banned_names,
         ascii_idle, ascii_idle_alt, ascii_talking,
+        mood_frames,
     ) = _generate_voice_assets(character, lines, source)
 
     _progress("Saving profile...")
@@ -898,6 +944,7 @@ def train_from_wiki(
     profile.ascii_idle = ascii_idle
     profile.ascii_idle_alt = ascii_idle_alt
     profile.ascii_talking = ascii_talking
+    profile.mood_frames = mood_frames
 
     out_dir = voices_dir or _get_voices_dir()
     save_profile(profile, out_dir)
@@ -954,7 +1001,9 @@ def regenerate_voice_assets(
         profile.ascii_idle,
         profile.ascii_idle_alt,
         profile.ascii_talking,
+        _classification,
     ) = _generate_ascii_art(profile.character, persona, profile.source)
+    profile.mood_frames = _render_mood_frames(_classification, mood_roles)
 
     profile.version = 2
 
@@ -993,8 +1042,12 @@ def regenerate_ascii_art(
         profile.ascii_idle,
         profile.ascii_idle_alt,
         profile.ascii_talking,
+        classification,
     ) = _generate_ascii_art(
         profile.character, profile.persona, profile.source,
+    )
+    profile.mood_frames = _render_mood_frames(
+        classification, profile.mood_roles,
     )
 
     out_dir = voices_dir or _get_voices_dir()
@@ -1232,6 +1285,8 @@ def _cmd_extract(args: argparse.Namespace) -> None:
             persona, greetings, offline_quips, mood_prompts,
             mood_roles, default_mood, structure_hints,
             anchor_lines, banned_names,
+            _ascii_idle, _ascii_idle_alt, _ascii_talking,
+            _mood_frames,
         ) = _generate_voice_assets(name, lines, source)
 
         if persona:
