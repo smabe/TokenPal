@@ -621,7 +621,7 @@ def test_clear_stars_drops_stars_only() -> None:
     field = _field()
     field.populate_starfield(30, 15, target_count=5)
     # Add a non-star particle (dust)
-    field._spawn_dust(30, 15)
+    field._spawn_dust(30, y_top=0.0, sky_h=15.0)
     assert any(p.pulse_palette for p in field.particles)
     assert any(not p.pulse_palette for p in field.particles)
     field.clear_stars()

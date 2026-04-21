@@ -504,10 +504,35 @@ class ParticleSky(Widget):
             sensitive_suppressed=snap.sensitive_suppressed if snap else False,
         )
 
+    def _sky_panel_y_offset(self) -> int:
+        """How many rows the sky widget sits below the panel's top. Used to
+        convert widget-local Y (render_line) to panel-relative Y (field).
+        """
+        try:
+            panel = self.parent
+            if panel is None:
+                return 0
+            return int(self.region.y - panel.region.y)
+        except Exception:
+            return 0
+
+    def _buddy_panel_y(self) -> tuple[float, float]:
+        """Panel-relative Y range of the buddy widget: (top, bottom).
+        Returns (0, 0) before mount / if lookup fails."""
+        try:
+            buddy = self._get_buddy()
+            panel = self.parent
+            if panel is None:
+                return 0.0, 0.0
+            top = float(buddy.region.y - panel.region.y)
+            return top, top + float(buddy.region.height)
+        except Exception:
+            return 0.0, 0.0
+
     def _sim_tick(self) -> None:
         env = self._current_env()
         panel_w = max(1, self.size.width)
-        panel_h = max(1, self.size.height)
+        sky_h = max(1, self.size.height)
         buddy = self._get_buddy()
         buddy_w = buddy.max_frame_width()
         # BuddyMotion.x runs in [0, slide_w]; the buddy art is centered in
@@ -520,31 +545,43 @@ class ParticleSky(Widget):
         motion = self._env.motion
         centered_offset_y = 0
         buddy_x_center_pre = panel_w / 2 + (motion.x - slide_w / 2.0)
-        burst_y = max(1.0, float(panel_h) * 0.6)
-        swirl_y = max(1.0, float(panel_h - 1))
+        sky_y_offset = self._sky_panel_y_offset()
+        weather_y_top = float(sky_y_offset) - 1.0
+        weather_y_bound = float(sky_y_offset + sky_h)
+
+        # Reaction anchors move to panel-relative coords — impact at 60% of
+        # sky, swirl at sky bottom (unchanged visual until phase 4 where
+        # BuddyWidget starts rendering particles in its own rows).
+        burst_y = float(sky_y_offset) + max(1.0, float(sky_h) * 0.6)
+        swirl_y = float(sky_y_offset) + max(1.0, float(sky_h - 1))
 
         self._env.tick(
             _PARTICLE_TICK_S,
             slide_w=slide_w,
             slide_h=slide_h,
             panel_w=panel_w,
-            panel_h=panel_h,
+            panel_h=sky_h,  # field uses panel_h for dust/steam spawn span
             env=env,
             buddy_x=buddy_x_center_pre,
-            buddy_y=float(panel_h),
+            buddy_y=weather_y_bound,  # steam rises from sky bottom (today's behavior)
             spawn_impact_at=(buddy_x_center_pre, burst_y),
             spawn_swirl_at=(buddy_x_center_pre, swirl_y),
+            weather_y_top=weather_y_top,
+            weather_y_bound=weather_y_bound,
         )
 
         centered_offset_x = int(round(motion.x - slide_w / 2.0))
         buddy_x_center = panel_w / 2 + (motion.x - slide_w / 2.0)
 
+        # Prop anchors kept in widget-local Y (render_line already works
+        # in widget-local Y). No conversion needed since they aren't stored
+        # in the particle field.
         prop_stack = props_for(env) if self._snapshot else ()
         anchors: list[tuple[PropSprite, int, int]] = []
         for prop in prop_stack:
             if prop.follows_buddy:
                 anchor_x = int(round(buddy_x_center - prop.width / 2))
-                anchor_y = max(0, panel_h - prop.height)
+                anchor_y = max(0, sky_h - prop.height)
             else:
                 anchor_x = max(0, panel_w - prop.width - 2)
                 anchor_y = 0
@@ -562,7 +599,8 @@ class ParticleSky(Widget):
 
         # Star field: pre-populate when entering clear+night; re-populate
         # when the panel resizes OR the moon's left edge changes (e.g. the
-        # snapshot arrives after the first tick).
+        # snapshot arrives after the first tick). Stars live in panel-y
+        # coords anchored to the sky's top.
         scale = night_star_scale(env)
         if scale > 0.0:
             max_x = panel_w
@@ -570,16 +608,17 @@ class ParticleSky(Widget):
                 prop, ax, _ay = self._cached_prop_anchors[0]
                 # ax is panel_w - prop.width - 2; clamp to one cell left of it.
                 max_x = max(1, ax - 1)
-            base_target = min(70, max(12, (panel_w * panel_h) // 25))
+            base_target = min(70, max(12, (panel_w * sky_h) // 25))
             target = max(1, int(round(base_target * scale)))
             # sig includes target so switching between clear/partly-cloudy
             # night re-populates at the new density.
-            sig = (panel_w, panel_h, max_x, target)
+            sig = (panel_w, sky_h, max_x, target)
             if self._starfield_for != sig:
                 self._env.field.populate_starfield(
-                    panel_w, panel_h,
+                    panel_w, sky_h,
                     target_count=target,
                     max_x=max_x,
+                    y_top=float(sky_y_offset),
                 )
                 self._starfield_for = sig
         elif self._starfield_for is not None:
@@ -643,10 +682,13 @@ class ParticleSky(Widget):
                 if 0 <= cx < width and ch != " ":
                     row[cx] = (ch, prop_style)
 
+        # Particle Y is panel-relative; convert to widget-local before match.
+        sky_y_offset = self._sky_panel_y_offset()
+        panel_y = y + sky_y_offset
         for p in self._env.field.particles:
             px = int(round(p.x))
             py = int(round(p.y))
-            if py != y or px < 0 or px >= width:
+            if py != panel_y or px < 0 or px >= width:
                 continue
             row[px] = (p.glyph, style_for(p.color) + _SKY_BG)
 

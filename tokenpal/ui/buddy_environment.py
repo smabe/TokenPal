@@ -422,17 +422,35 @@ class ParticleField:
         env: EnvState,
         buddy_x: float,
         buddy_y: float,
+        *,
+        weather_y_top: float | None = None,
+        weather_y_bound: float | None = None,
     ) -> None:
+        """Advance and spawn particles.
+
+        ``weather_y_top`` / ``weather_y_bound`` define the panel-relative Y
+        range where sky-only particles (rain, snow, dust, lightning, stars)
+        should spawn and be culled. If omitted, both fall back to the
+        widget-local range (y=-1 spawn top, panel_h cull bound) — the
+        pre-phase-3 behavior — so existing tests and direct callers stay
+        valid. The buddy steam anchor (``buddy_y``) is always interpreted
+        in the same coordinate space as the particles it spawns.
+        """
         if env.sensitive_suppressed:
             return
-        self._advance(dt, panel_w, panel_h)
-        self._spawn(dt, panel_w, panel_h, env, buddy_x, buddy_y)
+        y_top = -1.0 if weather_y_top is None else weather_y_top
+        y_bound = float(panel_h) if weather_y_bound is None else weather_y_bound
+        self._advance(dt, panel_w, y_bound)
+        self._spawn(
+            dt, panel_w, panel_h, env, buddy_x, buddy_y,
+            weather_y_top=y_top, weather_y_bound=y_bound,
+        )
 
     def _try_append(self, p: Particle) -> None:
         if len(self.particles) < PARTICLE_LIMIT:
             self.particles.append(p)
 
-    def _advance(self, dt: float, panel_w: int, panel_h: int) -> None:
+    def _advance(self, dt: float, panel_w: int, y_bound: float) -> None:
         survivors: list[Particle] = []
         for p in self.particles:
             p.life -= dt
@@ -456,7 +474,7 @@ class ParticleField:
             p.y += p.vy * dt
             if p.x < -1.0 or p.x > panel_w + 1.0:
                 continue
-            if p.y < -1.0 or p.y > panel_h + 1.0:
+            if p.y < -1.0 or p.y > y_bound + 1.0:
                 continue
             survivors.append(p)
         self.particles = survivors
@@ -468,6 +486,7 @@ class ParticleField:
         *,
         target_count: int,
         max_x: int | None = None,
+        y_top: float = 0.0,
     ) -> None:
         """Place a one-shot static star field via Perlin/value noise.
 
@@ -477,6 +496,10 @@ class ParticleField:
 
         ``max_x`` clamps the rightmost spawn column (inclusive). Pass the
         moon's left edge here to keep the moon's column starless.
+
+        ``y_top`` is the panel-relative Y where the star field begins
+        (phase-3 coord switch). Defaults to 0 so existing callers that
+        haven't been updated still render at the top of the sky widget.
         """
         self.particles = [p for p in self.particles if not p.pulse_palette]
 
@@ -497,7 +520,7 @@ class ParticleField:
             if len(placed) >= target_count:
                 break
             x = self.rng.uniform(0.0, upper_x)
-            y = self.rng.uniform(0.0, upper_y)
+            y = y_top + self.rng.uniform(0.0, upper_y)
             # Rejection: noise value must beat a random threshold. Bright
             # noise regions accept frequently → clusters; dim regions
             # rarely → voids.
@@ -531,12 +554,16 @@ class ParticleField:
         env: EnvState,
         buddy_x: float,
         buddy_y: float,
+        *,
+        weather_y_top: float = -1.0,
+        weather_y_bound: float | None = None,
     ) -> None:
         if len(self.particles) >= PARTICLE_LIMIT:
             return
 
         afk_scale = 0.3 if env.afk_active else 1.0
         starry = env.kind is Kind.CLEAR and not env.is_day
+        sky_h = (weather_y_bound - weather_y_top) if weather_y_bound is not None else float(panel_h)
 
         # Ambient dust only when NOT starry — stars are pre-populated by the
         # overlay via populate_starfield(), not spawned per-tick.
@@ -544,27 +571,27 @@ class ParticleField:
             self._ambient_dust_accum += dt * 0.6 * afk_scale
             while self._ambient_dust_accum >= 1.0:
                 self._ambient_dust_accum -= 1.0
-                self._spawn_dust(panel_w, panel_h)
+                self._spawn_dust(panel_w, weather_y_top, sky_h)
 
         if env.kind in (Kind.RAIN, Kind.DRIZZLE):
             self._weather_accum += dt * 12.0 * env.intensity * afk_scale
             while self._weather_accum >= 1.0:
                 self._weather_accum -= 1.0
-                self._spawn_rain(panel_w, intensity=env.intensity)
+                self._spawn_rain(panel_w, intensity=env.intensity, y_top=weather_y_top)
         elif env.kind == Kind.SNOW:
             self._weather_accum += dt * 6.0 * env.intensity * afk_scale
             while self._weather_accum >= 1.0:
                 self._weather_accum -= 1.0
-                self._spawn_snow(panel_w)
+                self._spawn_snow(panel_w, y_top=weather_y_top)
         elif env.kind == Kind.STORM:
             self._weather_accum += dt * 14.0 * env.intensity * afk_scale
             while self._weather_accum >= 1.0:
                 self._weather_accum -= 1.0
-                self._spawn_rain(panel_w, intensity=env.intensity)
+                self._spawn_rain(panel_w, intensity=env.intensity, y_top=weather_y_top)
             self._lightning_accum += dt * 0.4 * env.intensity * afk_scale
             while self._lightning_accum >= 1.0:
                 self._lightning_accum -= 1.0
-                self._spawn_lightning(panel_w, panel_h)
+                self._spawn_lightning(panel_w, weather_y_top, sky_h)
         else:
             self._weather_accum = 0.0
 
@@ -576,10 +603,10 @@ class ParticleField:
         else:
             self._hot_accum = 0.0
 
-    def _spawn_dust(self, panel_w: int, panel_h: int) -> None:
+    def _spawn_dust(self, panel_w: int, y_top: float, sky_h: float) -> None:
         self._try_append(Particle(
             x=self.rng.uniform(0.0, max(1.0, float(panel_w))),
-            y=self.rng.uniform(0.0, max(1.0, float(panel_h))),
+            y=y_top + self.rng.uniform(0.0, max(1.0, sky_h)),
             vx=self.rng.uniform(-0.4, 0.4),
             vy=self.rng.uniform(-0.2, 0.2),
             ax=0.0, ay=0.0,
@@ -604,10 +631,10 @@ class ParticleField:
             pulse_period_s=self.rng.uniform(3.0, 6.0),
         ))
 
-    def _spawn_rain(self, panel_w: int, intensity: float) -> None:
+    def _spawn_rain(self, panel_w: int, intensity: float, y_top: float = -1.0) -> None:
         self._try_append(Particle(
             x=self.rng.uniform(0.0, max(1.0, float(panel_w))),
-            y=-1.0,
+            y=y_top,
             vx=self.rng.uniform(-0.3, 0.3),
             vy=self.rng.uniform(8.0 + 4.0 * intensity, 14.0 + 6.0 * intensity),
             ax=0.0, ay=0.0,
@@ -616,10 +643,10 @@ class ParticleField:
             color="#5599ff",
         ))
 
-    def _spawn_snow(self, panel_w: int) -> None:
+    def _spawn_snow(self, panel_w: int, y_top: float = -1.0) -> None:
         self._try_append(Particle(
             x=self.rng.uniform(0.0, max(1.0, float(panel_w))),
-            y=-1.0,
+            y=y_top,
             vx=0.0,
             vy=self.rng.uniform(1.5, 3.5),
             ax=0.0, ay=0.0,
@@ -629,12 +656,13 @@ class ParticleField:
             spin=self.rng.uniform(0.0, 6.28),
         ))
 
-    def _spawn_lightning(self, panel_w: int, panel_h: int) -> None:
+    def _spawn_lightning(self, panel_w: int, y_top: float, sky_h: float) -> None:
         x = self.rng.uniform(2.0, max(2.0, float(panel_w - 2)))
-        for i in range(min(panel_h, 4)):
+        height_rows = int(min(sky_h, 4))
+        for i in range(height_rows):
             self._try_append(Particle(
                 x=x + (i % 2) * 0.5,
-                y=float(i),
+                y=y_top + float(i),
                 vx=0.0, vy=0.0, ax=0.0, ay=0.0,
                 life=0.25,
                 glyph="╲" if i % 2 else "╱",
@@ -732,17 +760,25 @@ class BuddyEnvironmentController:
         buddy_y: float,
         spawn_impact_at: tuple[float, float] | None = None,
         spawn_swirl_at: tuple[float, float] | None = None,
+        weather_y_top: float | None = None,
+        weather_y_bound: float | None = None,
     ) -> None:
         """Advance motion + cloud drift + particle field by ``dt``.
 
         ``spawn_impact_at`` / ``spawn_swirl_at`` let the caller provide the
         reaction anchor points (panel-relative in later phases; ``buddy_x``
         + a y-anchor in phase 1). Passing ``None`` skips spawn.
+
+        ``weather_y_top`` / ``weather_y_bound`` forward to ParticleField.tick
+        for panel-relative weather spawn + culling.
         """
         self.motion.tick(dt, slide_w, slide_h, env)
         self.cloud_drift.tick(dt, env)
         self.field.tick(
-            dt, panel_w, panel_h, env, buddy_x=buddy_x, buddy_y=buddy_y,
+            dt, panel_w, panel_h, env,
+            buddy_x=buddy_x, buddy_y=buddy_y,
+            weather_y_top=weather_y_top,
+            weather_y_bound=weather_y_bound,
         )
 
         if env.sensitive_suppressed:
