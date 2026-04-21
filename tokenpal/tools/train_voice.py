@@ -1083,9 +1083,14 @@ def regenerate_ascii_art(
     # diagnosable without grepping logs.
     zones = classification.get("zones", {})
     zone_str = ", ".join(f"{k}={v}" for k, v in zones.items())
+    pal = classification["palette"]
+    pal_str = " ".join(
+        f"{k}={pal[k]}" for k in
+        ("hair", "skin", "outfit", "accent", "shadow", "highlight")
+    )
     _progress(
         f"Classified: skeleton={classification['skeleton']} "
-        f"hair={classification['palette']['hair']} zones={{{zone_str}}}"
+        f"[{pal_str}] zones={{{zone_str}}}"
     )
 
     out_dir = voices_dir or _get_voices_dir()
