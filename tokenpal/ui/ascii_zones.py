@@ -1,330 +1,120 @@
 """Addressable zones layered on top of skeleton templates.
 
 A zone is a named region a classifier can fill with curated content to
-make a character read. Zones come in two modes:
+make a character read. Zones come in three modes:
 
 - ``prepend``: overlay rows added above the skeleton template
   (headwear sits here — crown, hood_with_ears, antenna).
 - ``replace``: overlay rows overwrite specific row ranges of the
   rendered skeleton body (facial_hair sits here — an Ice King beard
   eats the top of the outfit rows).
+- ``append``: overlay rows are added below the body (tails, trailing
+  hair wisps).
 
-Every zone option is a hand-drawn micro-template referencing the same
-palette slots the main skeletons use ({hair}, {outfit}, etc.). A
-per-skeleton compat set coerces illegal picks to ``"none"``; a per-
-(zone, skeleton) target-row table tells the replace-mode renderer which
-rows each zone owns so no two zones collide.
+Each zone is declared as a single ``ZoneSpec`` instance bundling its
+overlays, rubric, compat, and replace targets. Module-level constants
+like ``HEADWEAR_OVERLAYS`` / ``FACIAL_HAIR_RUBRIC`` remain as aliases
+pointing into the spec so existing imports in tests and train_voice
+keep working. Registries (``_ZONE_MODES``, ``_REPLACE_OVERLAYS``,
+``_APPEND_OVERLAYS``, ``_REPLACE_TARGETS``, ``_ZONE_COMPAT``) are
+auto-derived from ``_ZONES`` so adding a sixth zone is a single
+``ZoneSpec(...)`` definition + one ``_ZONES`` append.
 
 Overlay shapes are asymmetric by design: prepend overlays are keyed by
-option only (``HEADWEAR_OVERLAYS[option] -> template``) because a
-headwear prefix floats above every skeleton without shoulder math.
-Replace overlays are keyed by option AND skeleton
-(``FACIAL_HAIR_OVERLAYS[option][skeleton] -> template``) because an
-Ice King beard has to fit a wider robe than a humanoid-tall torso.
+option only (``overlays[option] -> template``) because a headwear
+prefix floats above every skeleton without shoulder math. Replace and
+append overlays are keyed by option AND skeleton
+(``overlays[option][skeleton] -> template``) because the overlay has
+to fit the skeleton's footprint.
 """
 
 from __future__ import annotations
 
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 ZoneMode = Literal["prepend", "replace", "append"]
 
-# Headwear overlays — multi-line Rich-markup strings prepended above a
-# skeleton's first row. Each uses the palette slots the renderer
-# substitutes ({hair}, {accent}, etc.). ``none`` is the empty string;
-# never ``None`` so the format() call stays uniform.
-HEADWEAR_OVERLAYS: dict[str, str] = {
-    "none": "",
-    "crown": (
-        "{accent}▃▅█▅▃{c}\n"
-        "{accent}▀▀▀▀▀{c}\n"
-    ),
-    "hood_with_ears": (
-        "{hair}▄▄        ▄▄{c}\n"
-        "{hair}██        ██{c}\n"
-    ),
-    "antenna": (
-        "{shadow}│{c}\n"
-        "{accent}◉{c}\n"
-    ),
-    "halo": (
-        "{accent}◯{c}\n"
-    ),
-    "wizard_hat": (
-        "{accent}▲{c}\n"
-        "{accent}▞▚{c}\n"
-        "{accent}▓▓▓{c}\n"
-    ),
-    "spikes": (
-        "{hair}▲ ▲ ▲ ▲ ▲{c}\n"
-        "{hair}█ █ █ █ █{c}\n"
-    ),
-}
 
-HEADWEAR_OPTIONS: tuple[str, ...] = tuple(HEADWEAR_OVERLAYS.keys())
+@dataclass(frozen=True)
+class ZoneSpec:
+    """Single-object description of a zone's overlays, rubric, compat.
+
+    ``overlays`` shape depends on ``mode``:
+      - ``prepend``: ``dict[option, template]``
+      - ``replace`` / ``append``: ``dict[option, dict[skeleton, template]]``
+
+    ``targets`` is replace-mode only: ``(option, skeleton) -> (start, end)``
+    row range (half-open). Empty for prepend/append.
+    """
+
+    name: str
+    mode: ZoneMode
+    # Prepend: dict[str, str]. Replace/append: dict[str, dict[str, str]].
+    # Can't type-narrow without splitting the class; rely on mode at call sites.
+    overlays: dict[str, Any]
+    rubric: dict[str, str]
+    compat: dict[str, set[str]]
+    targets: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
+
+    @property
+    def options(self) -> tuple[str, ...]:
+        return tuple(self.overlays.keys())
+
+    def rubric_block_for_prompt(self) -> str:
+        """Format this zone's rubric for splicing into the classifier prompt."""
+        return rubric_block(self.rubric)
 
 
-# Classifier-prompt rubric for each headwear option. Kept next to
-# HEADWEAR_OVERLAYS so adding a new option is a single-file edit: append
-# to both dicts, extend the per-skeleton compat set, done.
-HEADWEAR_RUBRIC: dict[str, str] = {
-    "none": (
-        "no hat, no crown, no antenna (DEFAULT — Mordecai, Muscle Man, "
-        "most ordinary characters)"
-    ),
-    "crown": "gold/jeweled crown (Ice King, Princess Bubblegum)",
-    "hood_with_ears": (
-        "rounded hood with two ear stubs on top (Finn the Human, "
-        "bear-ear hoods)"
-    ),
-    "antenna": "thin wire + ball on top of a robot head (Bender)",
-    "halo": "floating ring above the head (angels, Prismo-ish)",
-    "wizard_hat": "tall pointed peak (wizards, witch hats)",
-    "spikes": "3-5 sharp hair spikes (Rick Sanchez-style)",
-}
-
-
-# Facial-hair overlays — replace-mode content that overwrites the rows
-# named in ``_REPLACE_TARGETS``. Beard designs use hair color with a
-# rectangular silhouette; the body base + legs render below untouched so
-# shoulders and legs still read as body. Start minimal: beard_long for
-# Ice King / wizards, beard_stubble for Hank Hill / Pops. Expand once
-# real characters expose gaps.
-FACIAL_HAIR_OVERLAYS: dict[str, dict[str, str]] = {
-    "none": {
-        "humanoid_tall": "",
-        "mystical_cloaked": "",
-    },
-    "beard_long": {
-        "humanoid_tall": (
-            "{hair}▄█████████████{c}\n"
-            "{hair}██████████████{c}\n"
-            "{hair}████████████{c}\n"
+# ---------------------------------------------------------------
+# Zone: headwear (prepend)
+# ---------------------------------------------------------------
+HEADWEAR = ZoneSpec(
+    name="headwear",
+    mode="prepend",
+    overlays={
+        "none": "",
+        "crown": (
+            "{accent}▃▅█▅▃{c}\n"
+            "{accent}▀▀▀▀▀{c}\n"
         ),
-        "mystical_cloaked": (
-            "{hair}▄███████████████{c}\n"
-            "{hair}████████████████{c}\n"
-            "{hair}██████████████{c}\n"
+        "hood_with_ears": (
+            "{hair}▄▄        ▄▄{c}\n"
+            "{hair}██        ██{c}\n"
+        ),
+        "antenna": (
+            "{shadow}│{c}\n"
+            "{accent}◉{c}\n"
+        ),
+        "halo": (
+            "{accent}◯{c}\n"
+        ),
+        "wizard_hat": (
+            "{accent}▲{c}\n"
+            "{accent}▞▚{c}\n"
+            "{accent}▓▓▓{c}\n"
+        ),
+        "spikes": (
+            "{hair}▲ ▲ ▲ ▲ ▲{c}\n"
+            "{hair}█ █ █ █ █{c}\n"
         ),
     },
-    "beard_stubble": {
-        "humanoid_tall": (
-            "{skin}▀▄{c}{shadow}▄▄▄▄▄▄▄▄▄{c}{skin}▄▀{c}\n"
+    rubric={
+        "none": (
+            "no hat, no crown, no antenna (DEFAULT — Mordecai, Muscle Man, "
+            "most ordinary characters)"
         ),
-        "mystical_cloaked": (
-            "{hair}▀▄{c}{shadow}▄▄▄▄▄▄▄▄▄{c}{hair}▄▀{c}\n"
+        "crown": "gold/jeweled crown (Ice King, Princess Bubblegum)",
+        "hood_with_ears": (
+            "rounded hood with two ear stubs on top (Finn the Human, "
+            "bear-ear hoods)"
         ),
+        "antenna": "thin wire + ball on top of a robot head (Bender)",
+        "halo": "floating ring above the head (angels, Prismo-ish)",
+        "wizard_hat": "tall pointed peak (wizards, witch hats)",
+        "spikes": "3-5 sharp hair spikes (Rick Sanchez-style)",
     },
-}
-
-FACIAL_HAIR_OPTIONS: tuple[str, ...] = tuple(FACIAL_HAIR_OVERLAYS.keys())
-
-
-# Body-motif overlays — replace-mode content that rewrites a 2-row
-# torso block with a recessed rectangle reading as screen / chest door
-# / etc. Ships on robot_boxy only to start (BMO + Bender differ here
-# despite sharing the same silhouette). Extend to humanoid_tall when a
-# strap / belt / belly-stripe variant is actually needed.
-BODY_MOTIF_OVERLAYS: dict[str, dict[str, str]] = {
-    "none": {
-        "robot_boxy": "",
-    },
-    "screen_dpad": {
-        "robot_boxy": (
-            "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
-            "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
-        ),
-    },
-    "chest_door": {
-        "robot_boxy": (
-            "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
-            "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
-        ),
-    },
-}
-
-BODY_MOTIF_OPTIONS: tuple[str, ...] = tuple(BODY_MOTIF_OVERLAYS.keys())
-
-
-# Eye-region overlays — replace-mode content that rewrites the eye row
-# with a non-standard eye treatment. When active, the blink/talking
-# frame pipeline's ``{eye}`` substitution has nothing to substitute, so
-# these overlays render identically across all 3 frames (spirals pulse
-# in the buddy's mood-based frame cycle instead of blinking). Start
-# minimal: ``single_cyclops`` for Leela-style characters and
-# ``oversized_spiral`` for Hypnotoad-style creatures.
-EYE_REGION_OVERLAYS: dict[str, dict[str, str]] = {
-    "none": {
-        "humanoid_tall": "",
-        "animal_quadruped": "",
-    },
-    "single_cyclops": {
-        "humanoid_tall": (
-            "{skin}█▓▓▓{c}{highlight}███{c}{shadow}███{c}"
-            "{highlight}███{c}{skin}▓▓▓█{c}\n"
-        ),
-    },
-    "oversized_spiral": {
-        "animal_quadruped": (
-            "{skin}█▓▓{c}{accent}◉◎◉{c}{skin}▓▓▓▓▓{c}"
-            "{accent}◉◎◉{c}{skin}▓▓█{c}\n"
-        ),
-    },
-}
-
-EYE_REGION_OPTIONS: tuple[str, ...] = tuple(EYE_REGION_OVERLAYS.keys())
-
-
-EYE_REGION_RUBRIC: dict[str, str] = {
-    "none": (
-        "standard two dot eyes (DEFAULT — almost every character)"
-    ),
-    "single_cyclops": (
-        "one huge centered eye instead of two (Leela from Futurama, "
-        "Kyubey-style single-eye creatures)"
-    ),
-    "oversized_spiral": (
-        "giant bulging spiral / hypno eyes filling most of the face "
-        "(Hypnotoad, hypno-frog characters)"
-    ),
-}
-
-
-# Trailing overlays — append-mode content that adds rows BELOW the
-# skeleton. Mirror of headwear_prefix but on the bottom edge. Start
-# minimal: tail_curly (Rigby-style ringed tail) on animal_quadruped,
-# hair_drift (Marceline-style floating wisps) on ghost_floating.
-TRAILING_OVERLAYS: dict[str, dict[str, str]] = {
-    "none": {
-        "animal_quadruped": "",
-        "ghost_floating": "",
-    },
-    "tail_curly": {
-        "animal_quadruped": (
-            "{hair}   ∿∿∿∿{c}\n"
-        ),
-    },
-    "hair_drift": {
-        "ghost_floating": (
-            "{hair}  ░  ░  ░  ░  {c}\n"
-        ),
-    },
-}
-
-TRAILING_OPTIONS: tuple[str, ...] = tuple(TRAILING_OVERLAYS.keys())
-
-
-TRAILING_RUBRIC: dict[str, str] = {
-    "none": (
-        "no trailing element (DEFAULT — almost every character)"
-    ),
-    "tail_curly": (
-        "ringed/striped tail curling behind the body (Rigby, raccoon "
-        "and squirrel characters)"
-    ),
-    "hair_drift": (
-        "floating hair/wisps drifting down from a hovering body "
-        "(Marceline's hair, floating spirits)"
-    ),
-}
-
-
-BODY_MOTIF_RUBRIC: dict[str, str] = {
-    "none": (
-        "no chest/body detail (DEFAULT — most characters have plain "
-        "torsos at this resolution)"
-    ),
-    "screen_dpad": (
-        "wide recessed display panel taking up most of the chest, "
-        "face-like (BMO's screen, living-gameboy characters)"
-    ),
-    "chest_door": (
-        "small dark rectangular door/panel in the center of the chest "
-        "(Bender's chest compartment)"
-    ),
-}
-
-
-FACIAL_HAIR_RUBRIC: dict[str, str] = {
-    "none": (
-        "clean-shaven (DEFAULT — most characters, anyone whose chin is "
-        "visible on screen)"
-    ),
-    "beard_long": (
-        "long rectangular beard reaching down past the chest (Ice King, "
-        "Gandalf, wizards, Hermes)"
-    ),
-    "beard_stubble": (
-        "short stubble or short beard just under the mouth (Hank Hill, "
-        "Pops, 5-o-clock shadow)"
-    ),
-}
-
-
-# Zone-mode registry. Prepend zones add rows above the body; replace
-# zones overwrite rows of the rendered body at fixed target-row ranges.
-_ZONE_MODES: dict[str, ZoneMode] = {
-    "headwear": "prepend",
-    "facial_hair": "replace",
-    "body_motif": "replace",
-    "eye_region": "replace",
-    "trailing": "append",
-}
-
-
-# Append-mode overlays — zone name → option → skeleton → template.
-# Mirror of _REPLACE_OVERLAYS for append mode. Kept parallel so adding
-# a second append zone is a single-line registration.
-_APPEND_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
-    "trailing": TRAILING_OVERLAYS,
-}
-
-
-# Module-level replace-mode overlay dispatch — maps each replace-mode
-# zone to its nested option→skeleton→template registry. Keep targets +
-# overlays co-authored: if `_REPLACE_TARGETS[(zone, opt, skel)]` exists,
-# `_REPLACE_OVERLAYS[zone][opt][skel]` MUST exist too, so the silent-
-# skip in `apply_replace_zones` is defense-in-depth, not normal flow.
-_REPLACE_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
-    "facial_hair": FACIAL_HAIR_OVERLAYS,
-    "body_motif": BODY_MOTIF_OVERLAYS,
-    "eye_region": EYE_REGION_OVERLAYS,
-}
-
-
-# Per-(zone, option, skeleton) target-row range for replace-mode zones.
-# ``(start, end)`` is a Python-slice half-open interval into the rendered
-# body rows. Keyed by option, not just zone, because a 3-row long beard
-# and a 1-row stubble chin occupy different ranges. Ranges for a given
-# skeleton stay disjoint across zones by construction — facial_hair
-# can't reach the eye row, eye_region (future) can't reach the chin.
-_REPLACE_TARGETS: dict[tuple[str, str, str], tuple[int, int]] = {
-    # beard_long: 3-row rectangle covering the chin fade + upper torso.
-    # Legs + base (row 11+) still render so the standing silhouette
-    # survives.
-    ("facial_hair", "beard_long", "humanoid_tall"): (8, 11),
-    ("facial_hair", "beard_long", "mystical_cloaked"): (8, 11),
-    # beard_stubble: just the chin row, body below untouched.
-    ("facial_hair", "beard_stubble", "humanoid_tall"): (7, 8),
-    ("facial_hair", "beard_stubble", "mystical_cloaked"): (8, 9),
-    # body_motif: center-torso 2-row rectangle. Rows 10-11 on robot_boxy
-    # are plain {outfit} fill with no accent markers, so the motif lands
-    # cleanly without fighting the ◆ rivets on row 9.
-    ("body_motif", "screen_dpad", "robot_boxy"): (10, 12),
-    ("body_motif", "chest_door", "robot_boxy"): (10, 12),
-    # eye_region: single-row replace of the eye row. humanoid_tall row 4
-    # and animal_quadruped row 5 both carry the two {eye} slots; the
-    # overlay rewrites that row with a single-big-eye or spiral pattern.
-    ("eye_region", "single_cyclops", "humanoid_tall"): (4, 5),
-    ("eye_region", "oversized_spiral", "animal_quadruped"): (5, 6),
-}
-
-
-# Per-skeleton compatibility — values not listed for a skeleton get
-# coerced to ``"none"``. Permissive by default; only physical hats on
-# floating/amorphous bodies are blocked.
-_ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
-    "headwear": {
+    compat={
         "humanoid_tall": {
             "none", "crown", "hood_with_ears", "halo", "wizard_hat", "spikes",
         },
@@ -340,7 +130,56 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none", "hood_with_ears", "halo", "crown"},
         "winged": {"none", "halo", "crown", "hood_with_ears"},
     },
-    "facial_hair": {
+)
+
+
+# ---------------------------------------------------------------
+# Zone: facial_hair (replace)
+# ---------------------------------------------------------------
+FACIAL_HAIR = ZoneSpec(
+    name="facial_hair",
+    mode="replace",
+    overlays={
+        "none": {
+            "humanoid_tall": "",
+            "mystical_cloaked": "",
+        },
+        "beard_long": {
+            "humanoid_tall": (
+                "{hair}▄█████████████{c}\n"
+                "{hair}██████████████{c}\n"
+                "{hair}████████████{c}\n"
+            ),
+            "mystical_cloaked": (
+                "{hair}▄███████████████{c}\n"
+                "{hair}████████████████{c}\n"
+                "{hair}██████████████{c}\n"
+            ),
+        },
+        "beard_stubble": {
+            "humanoid_tall": (
+                "{skin}▀▄{c}{shadow}▄▄▄▄▄▄▄▄▄{c}{skin}▄▀{c}\n"
+            ),
+            "mystical_cloaked": (
+                "{hair}▀▄{c}{shadow}▄▄▄▄▄▄▄▄▄{c}{hair}▄▀{c}\n"
+            ),
+        },
+    },
+    rubric={
+        "none": (
+            "clean-shaven (DEFAULT — most characters, anyone whose chin is "
+            "visible on screen)"
+        ),
+        "beard_long": (
+            "long rectangular beard reaching down past the chest (Ice King, "
+            "Gandalf, wizards, Hermes)"
+        ),
+        "beard_stubble": (
+            "short stubble or short beard just under the mouth (Hank Hill, "
+            "Pops, 5-o-clock shadow)"
+        ),
+    },
+    compat={
         "humanoid_tall": {"none", "beard_long", "beard_stubble"},
         "humanoid_stocky": {"none"},
         "robot_boxy": {"none"},
@@ -350,7 +189,55 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none"},
         "winged": {"none"},
     },
-    "body_motif": {
+    targets={
+        # beard_long: 3-row rectangle covering the chin fade + upper torso.
+        ("beard_long", "humanoid_tall"): (8, 11),
+        ("beard_long", "mystical_cloaked"): (8, 11),
+        # beard_stubble: just the chin row, body below untouched.
+        ("beard_stubble", "humanoid_tall"): (7, 8),
+        ("beard_stubble", "mystical_cloaked"): (8, 9),
+    },
+)
+
+
+# ---------------------------------------------------------------
+# Zone: body_motif (replace)
+# ---------------------------------------------------------------
+BODY_MOTIF = ZoneSpec(
+    name="body_motif",
+    mode="replace",
+    overlays={
+        "none": {
+            "robot_boxy": "",
+        },
+        "screen_dpad": {
+            "robot_boxy": (
+                "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
+                "{outfit}█▓▓{c}{shadow}███████████████{c}{outfit}▓▓█{c}\n"
+            ),
+        },
+        "chest_door": {
+            "robot_boxy": (
+                "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
+                "{outfit}█▓▓▓▓▓▓▓{c}{shadow}█████{c}{outfit}▓▓▓▓▓▓▓█{c}\n"
+            ),
+        },
+    },
+    rubric={
+        "none": (
+            "no chest/body detail (DEFAULT — most characters have plain "
+            "torsos at this resolution)"
+        ),
+        "screen_dpad": (
+            "wide recessed display panel taking up most of the chest, "
+            "face-like (BMO's screen, living-gameboy characters)"
+        ),
+        "chest_door": (
+            "small dark rectangular door/panel in the center of the chest "
+            "(Bender's chest compartment)"
+        ),
+    },
+    compat={
         "humanoid_tall": {"none"},
         "humanoid_stocky": {"none"},
         "robot_boxy": {"none", "screen_dpad", "chest_door"},
@@ -360,7 +247,53 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none"},
         "winged": {"none"},
     },
-    "eye_region": {
+    targets={
+        # center-torso 2-row rectangle. Rows 10-11 on robot_boxy are plain
+        # {outfit} fill with no accent markers, so the motif lands cleanly.
+        ("screen_dpad", "robot_boxy"): (10, 12),
+        ("chest_door", "robot_boxy"): (10, 12),
+    },
+)
+
+
+# ---------------------------------------------------------------
+# Zone: eye_region (replace)
+# ---------------------------------------------------------------
+EYE_REGION = ZoneSpec(
+    name="eye_region",
+    mode="replace",
+    overlays={
+        "none": {
+            "humanoid_tall": "",
+            "animal_quadruped": "",
+        },
+        "single_cyclops": {
+            "humanoid_tall": (
+                "{skin}█▓▓▓{c}{highlight}███{c}{shadow}███{c}"
+                "{highlight}███{c}{skin}▓▓▓█{c}\n"
+            ),
+        },
+        "oversized_spiral": {
+            "animal_quadruped": (
+                "{skin}█▓▓{c}{accent}◉◎◉{c}{skin}▓▓▓▓▓{c}"
+                "{accent}◉◎◉{c}{skin}▓▓█{c}\n"
+            ),
+        },
+    },
+    rubric={
+        "none": (
+            "standard two dot eyes (DEFAULT — almost every character)"
+        ),
+        "single_cyclops": (
+            "one huge centered eye instead of two (Leela from Futurama, "
+            "Kyubey-style single-eye creatures)"
+        ),
+        "oversized_spiral": (
+            "giant bulging spiral / hypno eyes filling most of the face "
+            "(Hypnotoad, hypno-frog characters)"
+        ),
+    },
+    compat={
         "humanoid_tall": {"none", "single_cyclops"},
         "humanoid_stocky": {"none"},
         "robot_boxy": {"none"},
@@ -370,7 +303,51 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none", "oversized_spiral"},
         "winged": {"none"},
     },
-    "trailing": {
+    targets={
+        # single-row replace of the eye row. humanoid_tall row 4 and
+        # animal_quadruped row 5 both carry the two {eye} slots.
+        ("single_cyclops", "humanoid_tall"): (4, 5),
+        ("oversized_spiral", "animal_quadruped"): (5, 6),
+    },
+)
+
+
+# ---------------------------------------------------------------
+# Zone: trailing (append)
+# ---------------------------------------------------------------
+TRAILING = ZoneSpec(
+    name="trailing",
+    mode="append",
+    overlays={
+        "none": {
+            "animal_quadruped": "",
+            "ghost_floating": "",
+        },
+        "tail_curly": {
+            "animal_quadruped": (
+                "{hair}   ∿∿∿∿{c}\n"
+            ),
+        },
+        "hair_drift": {
+            "ghost_floating": (
+                "{hair}  ░  ░  ░  ░  {c}\n"
+            ),
+        },
+    },
+    rubric={
+        "none": (
+            "no trailing element (DEFAULT — almost every character)"
+        ),
+        "tail_curly": (
+            "ringed/striped tail curling behind the body (Rigby, raccoon "
+            "and squirrel characters)"
+        ),
+        "hair_drift": (
+            "floating hair/wisps drifting down from a hovering body "
+            "(Marceline's hair, floating spirits)"
+        ),
+    },
+    compat={
         "humanoid_tall": {"none"},
         "humanoid_stocky": {"none"},
         "robot_boxy": {"none"},
@@ -380,7 +357,62 @@ _ZONE_COMPAT: dict[str, dict[str, set[str]]] = {
         "animal_quadruped": {"none", "tail_curly"},
         "winged": {"none"},
     },
+)
+
+
+# Master list: order is prompt order for the classifier. Appending a new
+# ZoneSpec here is all it takes to register a zone — the derived
+# registries below pick it up automatically.
+_ZONES: list[ZoneSpec] = [HEADWEAR, FACIAL_HAIR, BODY_MOTIF, EYE_REGION, TRAILING]
+
+
+# ---------------------------------------------------------------
+# Backward-compat aliases
+# Many tests and train_voice import the legacy module-level constants
+# by name. Keep them as aliases so existing call sites don't break.
+# ---------------------------------------------------------------
+HEADWEAR_OVERLAYS: dict[str, str] = HEADWEAR.overlays
+HEADWEAR_OPTIONS: tuple[str, ...] = HEADWEAR.options
+HEADWEAR_RUBRIC: dict[str, str] = HEADWEAR.rubric
+
+FACIAL_HAIR_OVERLAYS: dict[str, dict[str, str]] = FACIAL_HAIR.overlays
+FACIAL_HAIR_OPTIONS: tuple[str, ...] = FACIAL_HAIR.options
+FACIAL_HAIR_RUBRIC: dict[str, str] = FACIAL_HAIR.rubric
+
+BODY_MOTIF_OVERLAYS: dict[str, dict[str, str]] = BODY_MOTIF.overlays
+BODY_MOTIF_OPTIONS: tuple[str, ...] = BODY_MOTIF.options
+BODY_MOTIF_RUBRIC: dict[str, str] = BODY_MOTIF.rubric
+
+EYE_REGION_OVERLAYS: dict[str, dict[str, str]] = EYE_REGION.overlays
+EYE_REGION_OPTIONS: tuple[str, ...] = EYE_REGION.options
+EYE_REGION_RUBRIC: dict[str, str] = EYE_REGION.rubric
+
+TRAILING_OVERLAYS: dict[str, dict[str, str]] = TRAILING.overlays
+TRAILING_OPTIONS: tuple[str, ...] = TRAILING.options
+TRAILING_RUBRIC: dict[str, str] = TRAILING.rubric
+
+
+# ---------------------------------------------------------------
+# Derived registries
+# Auto-built from _ZONES so adding a zone is a single dataclass edit.
+# ---------------------------------------------------------------
+_ZONE_MODES: dict[str, ZoneMode] = {z.name: z.mode for z in _ZONES}
+
+_REPLACE_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
+    z.name: z.overlays for z in _ZONES if z.mode == "replace"
 }
+
+_APPEND_OVERLAYS: dict[str, dict[str, dict[str, str]]] = {
+    z.name: z.overlays for z in _ZONES if z.mode == "append"
+}
+
+_REPLACE_TARGETS: dict[tuple[str, str, str], tuple[int, int]] = {
+    (z.name, opt, skel): rng
+    for z in _ZONES if z.mode == "replace"
+    for (opt, skel), rng in z.targets.items()
+}
+
+_ZONE_COMPAT: dict[str, dict[str, set[str]]] = {z.name: z.compat for z in _ZONES}
 
 
 def rubric_block(rubric: dict[str, str]) -> str:
