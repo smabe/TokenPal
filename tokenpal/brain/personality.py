@@ -987,6 +987,17 @@ class PersonalityEngine:
             return custom.lower()
         return self._mood.value
 
+    @property
+    def mood_role(self) -> str:
+        """Canonical mood role key (``default`` / ``sleepy`` / ``bored`` / ...).
+
+        Stable across voice swaps — mood_frames in voice profiles are
+        keyed by this role, not the custom display name, so the overlay
+        can always find the right frame set regardless of the voice's
+        per-character mood labels.
+        """
+        return _ENUM_TO_ROLE.get(self._mood, "default")
+
     @staticmethod
     def _build_example_pool(voice_lines: list[str] | None) -> list[str]:
         """Build the few-shot example pool, padding with defaults if needed."""

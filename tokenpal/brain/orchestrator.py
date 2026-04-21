@@ -209,6 +209,7 @@ class Brain:
         ui_callback: Callable[[str], None],
         personality: PersonalityEngine,
         status_callback: Callable[[str], None] | None = None,
+        mood_callback: Callable[[str], None] | None = None,
         memory: MemoryStore | None = None,
         actions: list[AbstractAction] | None = None,
         poll_interval_s: float = 2.0,
@@ -240,6 +241,8 @@ class Brain:
         self._log_callback = log_callback
         self._personality = personality
         self._status_callback = status_callback
+        self._mood_callback = mood_callback
+        self._last_mood_role: str = self._personality.mood_role
         self._memory = memory
         self._last_recorded_app: str = ""
         self._poll_interval = poll_interval_s
@@ -531,6 +534,7 @@ class Brain:
                 self._personality.update_mood(snapshot)
                 self._personality.update_gags(snapshot)
                 self._record_memory_events(snapshot, readings)
+                self._push_mood_if_changed()
                 self._push_status()
 
                 # Process any pending user input
@@ -2377,6 +2381,25 @@ class Brain:
                 self._memory.record_observation(
                     "idle", "idle_return", r.summary
                 )
+
+    def _push_mood_if_changed(self) -> None:
+        """Fire mood_callback whenever personality.mood_role transitions.
+
+        The callback drives the overlay's mood-aware frame swap. We
+        compare roles (not the display strings returned by
+        ``personality.mood``) so voice profiles with custom mood names
+        still route to the right frame set.
+        """
+        if not self._mood_callback:
+            return
+        role = self._personality.mood_role
+        if role == self._last_mood_role:
+            return
+        self._last_mood_role = role
+        try:
+            self._mood_callback(role)
+        except Exception as exc:
+            log.debug("mood_callback raised: %s", exc)
 
     def _push_status(self) -> None:
         """Push a status bar update to the UI."""

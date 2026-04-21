@@ -274,3 +274,26 @@ def test_conversation_prompt_contains_custom_mood():
     engine.set_voice(_make_custom_mood_profile())
     prompt = engine.build_conversation_prompt("hello", "App: Terminal")
     assert "PLAYFUL" in prompt
+
+
+def test_mood_role_returns_canonical_key() -> None:
+    eng = _make_engine()
+    # Default enum is SNARKY which maps to "default" role.
+    assert eng.mood_role == "default"
+
+    eng._mood = Mood.SLEEPY
+    assert eng.mood_role == "sleepy"
+
+    eng._mood = Mood.HYPER
+    assert eng.mood_role == "hyper"
+
+
+def test_mood_role_ignores_voice_custom_names() -> None:
+    """Custom display names change .mood but never .mood_role."""
+    eng = _make_engine()
+    eng._apply_voice(_make_custom_mood_profile())
+    eng._mood = Mood.SLEEPY
+    # Custom display shows the voice's label.
+    assert eng.mood == "drowsy"
+    # Role stays canonical so overlay mood_frames lookup stays stable.
+    assert eng.mood_role == "sleepy"

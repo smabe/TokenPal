@@ -223,6 +223,12 @@ def main() -> None:
         status_callback=lambda text: overlay.schedule_callback(
             lambda t=text: overlay.update_status(t)
         ),
+        mood_callback=(
+            (lambda role: overlay.schedule_callback(
+                lambda r=role: overlay.set_mood(r)
+            ))
+            if hasattr(overlay, "set_mood") else None
+        ),
         memory=memory,
         actions=actions,
         poll_interval_s=config.brain.poll_interval_s,
