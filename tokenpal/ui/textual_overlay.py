@@ -441,6 +441,65 @@ class BuddyWidget(Static):
             self._blink_timer = None
         self._blink_state = False
 
+    def render_line(self, y: int) -> Strip:
+        """Delegate to Static for the ASCII art, then overlay any reaction
+        particles whose panel-Y falls within the buddy's own region. Only
+        overwrites cells that are currently blank spaces — preserves the
+        buddy's face glyphs (eyes, mouth, body outline).
+        """
+        strip = super().render_line(y)
+        env_controller = getattr(self.app, "env_controller", None)
+        if env_controller is None:
+            return strip
+        panel = self.parent
+        if panel is None:
+            return strip
+        try:
+            buddy_y_offset = int(self.region.y - panel.region.y)
+        except Exception:
+            return strip
+        panel_y = y + buddy_y_offset
+
+        width = self.size.width
+        overlays: dict[int, tuple[str, str]] = {}
+        for p in env_controller.field.particles:
+            px = int(round(p.x))
+            py = int(round(p.y))
+            if py != panel_y or px < 0 or px >= width:
+                continue
+            overlays[px] = (p.glyph, p.color)
+        if not overlays:
+            return strip
+
+        cells: list[tuple[str, Style | None]] = []
+        for seg in strip:
+            for ch in seg.text:
+                cells.append((ch, seg.style))
+        # Only overwrite blank cells so the buddy's face stays intact.
+        changed = False
+        for px, (glyph, color) in overlays.items():
+            if 0 <= px < len(cells):
+                ch, existing_style = cells[px]
+                if ch == " ":
+                    bg = existing_style.bgcolor if existing_style else None
+                    cells[px] = (glyph, Style(color=color, bgcolor=bg))
+                    changed = True
+        if not changed:
+            return strip
+
+        segments: list[Segment] = []
+        run_text = ""
+        run_style: Style | None = None
+        for ch, st in cells:
+            if run_style is not None and st != run_style:
+                segments.append(Segment(run_text, run_style))
+                run_text = ""
+            run_text += ch
+            run_style = st
+        if run_text:
+            segments.append(Segment(run_text, run_style))
+        return Strip(segments)
+
 
 class ParticleSky(Widget):
     """A regular (non-layered, opaque) widget that sits between the header

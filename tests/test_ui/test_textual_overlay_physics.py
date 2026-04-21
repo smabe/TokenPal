@@ -156,3 +156,33 @@ async def test_shake_posts_buddy_shaken(
     # Shake already fired before the mouse sequence; mouse_move consumed the
     # trigger and posted BuddyShaken.
     assert any(call.args == ("shake",) for call in cb.call_args_list)
+
+
+async def test_buddy_widget_renders_particles_in_its_region(
+    app: TokenPalApp,
+) -> None:
+    """Drop a particle at the buddy's panel-y and verify its glyph lands in
+    BuddyWidget.render_line output (overlay on a blank cell)."""
+    from tokenpal.ui.textual_overlay import BuddyWidget
+
+    async with app.run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        buddy = app.query_one(BuddyWidget)
+        panel = buddy.parent
+        assert panel is not None
+        buddy_y_offset = buddy.region.y - panel.region.y
+        # Spawn a particle at the buddy's first row. Glyph is a distinctive
+        # character unlikely to appear in the ASCII art.
+        field = app.env_controller.field
+        from tokenpal.ui.buddy_environment import Particle
+        field.particles.append(Particle(
+            x=0.5, y=float(buddy_y_offset) + 0.0,
+            vx=0.0, vy=0.0, ax=0.0, ay=0.0,
+            life=99.0, glyph="§", color="#ff00ff",
+        ))
+        # Force a re-render and inspect row 0 of the buddy widget.
+        buddy.refresh()
+        await pilot.pause()
+        strip = buddy.render_line(0)
+        text = "".join(seg.text for seg in strip)
+        assert "§" in text
