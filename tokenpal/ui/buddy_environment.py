@@ -271,7 +271,14 @@ class BuddyMotion:
         if self.recoil_ticks > 0.0:
             self.recoil_ticks = max(0.0, self.recoil_ticks - dt)
         if self.dizzy_ticks > 0.0:
+            prev_dizzy = self.dizzy_ticks
             self.dizzy_ticks = max(0.0, self.dizzy_ticks - dt)
+            # On natural dizzy end, clear the shake window so continued
+            # dragging can't immediately re-fire another dizzy cycle using
+            # the last few in-dizzy drag deltas. User must do a fresh
+            # multi-reversal shake to re-trigger.
+            if prev_dizzy > 0.0 and self.dizzy_ticks == 0.0:
+                self._shake_window.clear()
         self._shake_window = [
             (dx, dy, age + dt)
             for (dx, dy, age) in self._shake_window
