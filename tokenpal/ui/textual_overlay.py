@@ -905,6 +905,10 @@ class TokenPalApp(App[None]):
         self._drag_start_screen_x: int = 0
         self._drag_start_width: int = self._chat_log_width
         self._last_env_snapshot: EnvironmentSnapshot | None = None
+        # Shared buddy-environment controller. Owned by the app so multiple
+        # widgets (ParticleSky for weather, BuddyWidget for reactions in
+        # phase 4) can read particles from the same field.
+        self.env_controller = BuddyEnvironmentController()
 
     def compose(self) -> ComposeResult:
         with Vertical(id="buddy-panel"):
@@ -913,6 +917,7 @@ class TokenPalApp(App[None]):
                 get_buddy=lambda: self.query_one(BuddyWidget),
                 get_speech_region=lambda: self.query_one("#speech-region", Vertical),
                 get_stage=lambda: self.query_one(BuddyStage),
+                env_controller=self.env_controller,
             )
             with Vertical(id="speech-region"):
                 yield SpeechBubbleWidget()
@@ -940,12 +945,12 @@ class TokenPalApp(App[None]):
             buddy.show_frame(BuddyFrame.get("idle"))
         self._apply_buddy_panel_min_width()
         self._apply_chat_log_width()
-        # Late-bind BuddyStage to ParticleSky's BuddyMotion so click/drag
-        # events can update physics state.
+        # Late-bind BuddyStage to the shared controller's BuddyMotion so
+        # click/drag events can update physics state. Going through the
+        # controller (not ParticleSky) keeps ownership unambiguous.
         try:
             stage = self.query_one(BuddyStage)
-            sky = self.query_one(ParticleSky)
-            stage.bind_motion(lambda: sky.motion)
+            stage.bind_motion(lambda: self.env_controller.motion)
         except Exception as exc:
             log.debug("BuddyStage motion binding failed: %s", exc)
         if self._overlay._pending_chat_history is not None:
