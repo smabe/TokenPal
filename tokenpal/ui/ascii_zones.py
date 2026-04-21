@@ -129,6 +129,11 @@ HEADWEAR = ZoneSpec(
         "ghost_floating": {"none", "halo", "crown"},
         "animal_quadruped": {"none", "hood_with_ears", "halo", "crown"},
         "winged": {"none", "halo", "crown", "hood_with_ears"},
+        # LSP wears a star crown; keep it wearable. Blob has no cap band so
+        # helmets with ear stubs (hood_with_ears) don't conform.
+        "blob_amorphous": {"none", "crown", "halo"},
+        # Disembodied hand has no head to adorn — keep it to none for now.
+        "hand_creature": {"none"},
     },
 )
 
@@ -188,6 +193,8 @@ FACIAL_HAIR = ZoneSpec(
         "ghost_floating": {"none"},
         "animal_quadruped": {"none"},
         "winged": {"none"},
+        "blob_amorphous": {"none"},
+        "hand_creature": {"none"},
     },
     targets={
         # beard_long: 3-row rectangle covering the chin fade + upper torso.
@@ -246,6 +253,8 @@ BODY_MOTIF = ZoneSpec(
         "ghost_floating": {"none"},
         "animal_quadruped": {"none"},
         "winged": {"none"},
+        "blob_amorphous": {"none"},
+        "hand_creature": {"none"},
     },
     targets={
         # center-torso 2-row rectangle. Rows 10-11 on robot_boxy are plain
@@ -302,6 +311,8 @@ EYE_REGION = ZoneSpec(
         "ghost_floating": {"none"},
         "animal_quadruped": {"none", "oversized_spiral"},
         "winged": {"none"},
+        "blob_amorphous": {"none"},
+        "hand_creature": {"none"},
     },
     targets={
         # single-row replace of the eye row. humanoid_tall row 4 and
@@ -356,6 +367,8 @@ TRAILING = ZoneSpec(
         "ghost_floating": {"none", "hair_drift"},
         "animal_quadruped": {"none", "tail_curly"},
         "winged": {"none"},
+        "blob_amorphous": {"none"},
+        "hand_creature": {"none"},
     },
 )
 

@@ -204,6 +204,51 @@ WINGED = """\
 """
 
 
+# --- blob-amorphous: irregular, bumpy silhouette ---
+# Lumpy Space Princess, talking food (Peppermint Butler, Cinnamon Bun).
+# Asymmetric edges on purpose — no two rows share the same width — so the
+# eye never reads this as a regular oval or cloud. Headwear compat keeps
+# "crown" so LSP's star crown prepends above row 0.
+BLOB_AMORPHOUS = """\
+{hair}     ▄██▄▄          {c}
+{hair}   ▄▇██████▄        {c}
+{hair}  ▇██████████▇▅     {c}
+{hair}▇████████████████   {c}
+{hair}██████████████████  {c}
+{hair}█████{c}{skin}{eye}▓▓▓▓▓▓▓▓{eye}{c}{hair}████{c}
+{hair}████{c}{skin}▓▓▓▓▓▓▓▓▓▓▓▓{c}{hair}████{c}
+{hair}████{c}{skin}▓▓▓▓{mouth}▓▓▓▓▓▓▓{c}{hair}████{c}
+{hair}██████████████████  {c}
+{hair}▀█████████████████  {c}
+{hair}  ▀▀█████████████▀ {c}
+{hair}     ▀▀███████▀▀   {c}
+{hair}        ▀▀█▀▀      {c}
+{shadow}          ▀▀        {c}
+"""
+
+
+# --- hand-creature: five-fingered palm with a face ---
+# Hi Five Ghost, Thing, Rayman-style disembodied hand. Palm-forward
+# orientation: five fingers rise above a wide palm whose face occupies
+# the middle band; short stubby legs carry the body at the bottom.
+HAND_CREATURE = """\
+{hair}██ ██ ██ ██ ██   {c}
+{hair}██ ██ ██ ██ ██   {c}
+{hair}██ ██ ██ ██ ██   {c}
+{hair}██ ██ ██ ██ ██   {c}
+{hair}█████████████████{c}
+{hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
+{hair}█▓▓▓{c}{skin}{eye}▓▓▓▓▓▓▓{eye}{c}{hair}▓▓▓█{c}
+{hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
+{hair}█▓▓▓{c}{skin}▓▓▓▓{mouth}▓▓▓▓▓{c}{hair}▓▓▓█{c}
+{hair}█▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓█{c}
+{hair}██▄▄▄▄▄▄▄▄▄▄▄▄▄██{c}
+{hair}█████████████████{c}
+{hair}██           ██  {c}
+{shadow}▀▀           ▀▀  {c}
+"""
+
+
 SKELETONS: dict[str, str] = {
     "humanoid_tall": HUMANOID_TALL,
     "humanoid_stocky": HUMANOID_STOCKY,
@@ -213,6 +258,8 @@ SKELETONS: dict[str, str] = {
     "ghost_floating": GHOST_FLOATING,
     "animal_quadruped": ANIMAL_QUADRUPED,
     "winged": WINGED,
+    "blob_amorphous": BLOB_AMORPHOUS,
+    "hand_creature": HAND_CREATURE,
 }
 
 
@@ -306,6 +353,26 @@ _SAMPLE_PALETTES: dict[str, dict[str, str]] = {
         "highlight": "[#ffffff]",
         "eye": "●",
         "mouth": "▽",
+    },
+    "blob_amorphous": {  # Lumpy Space Princess-ish
+        "hair": "[#a78bfa]",       # LSP purple body
+        "skin": "[#c9b3ff]",       # lighter purple belly for face contrast
+        "outfit": "[#7d5ed8]",     # shade below
+        "accent": "[#ffd700]",     # gold star (zone-overlay only)
+        "shadow": "[#4d3580]",
+        "highlight": "[#e2d7ff]",
+        "eye": "●",
+        "mouth": "▽",
+    },
+    "hand_creature": {  # Hi Five Ghost-ish
+        "hair": "[#ffffff]",       # white body/fingers
+        "skin": "[#f2f2f2]",       # faint gray face for contrast
+        "outfit": "[#dddddd]",
+        "accent": "[#aaaaaa]",
+        "shadow": "[#888888]",
+        "highlight": "[#ffffff]",
+        "eye": "●",
+        "mouth": "◡",
     },
 }
 
