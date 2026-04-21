@@ -374,6 +374,148 @@ def test_motion_afk_slows() -> None:
     assert moved_active > moved_afk
 
 
+# --- BuddyMotion physics overlay (click/drag/shake) ---
+
+
+def _env_active() -> EnvState:
+    return EnvState.from_inputs(
+        weather_data=None, idle_event=None, sensitive_suppressed=False,
+    )
+
+
+def test_poke_sets_recoil_and_pulse_trigger() -> None:
+    m = _seeded_motion()
+    m.poke()
+    assert m.recoil_ticks > 0.0
+    # consume_poke_trigger is one-shot.
+    assert m.consume_poke_trigger() is True
+    assert m.consume_poke_trigger() is False
+
+
+def test_recoil_decays_to_zero() -> None:
+    m = _seeded_motion()
+    m.poke()
+    initial = m.recoil_ticks
+    # Tick just past the recoil window.
+    for _ in range(10):
+        m.tick(0.1, bounds_w=20.0, bounds_h=2.0, env=_env_active())
+    assert m.recoil_ticks == 0.0
+    assert initial > 0.0
+
+
+def test_drag_update_accumulates_offset() -> None:
+    m = _seeded_motion()
+    m.drag_update(3.0, 1.0, 0.05)
+    m.drag_update(2.0, 0.5, 0.05)
+    assert m.drag_offset_x == pytest.approx(5.0)
+    assert m.drag_offset_y == pytest.approx(1.5)
+
+
+def test_drag_offset_eases_after_release() -> None:
+    m = _seeded_motion()
+    m.drag_update(8.0, 0.0, 0.05)
+    assert m.drag_offset_x == pytest.approx(8.0)
+    m.release()
+    # Tick enough frames to fully decay. Ease rate is 14 cells/sec → 8 cells
+    # should clear in well under 1s.
+    for _ in range(20):
+        m.tick(0.05, bounds_w=40.0, bounds_h=2.0, env=_env_active())
+    assert m.drag_offset_x == 0.0
+    assert m.drag_offset_y == 0.0
+
+
+def test_drag_does_not_ease_while_held() -> None:
+    m = _seeded_motion()
+    m.drag_update(8.0, 0.0, 0.05)
+    # Ticking while still dragging must NOT ease the offset.
+    for _ in range(10):
+        m.tick(0.05, bounds_w=40.0, bounds_h=2.0, env=_env_active())
+    assert m.drag_offset_x == pytest.approx(8.0)
+
+
+def test_drag_offset_safety_cap() -> None:
+    m = _seeded_motion()
+    # Push way beyond the cap.
+    for _ in range(20):
+        m.drag_update(100.0, 100.0, 0.05)
+    assert abs(m.drag_offset_x) <= 40.0
+    assert abs(m.drag_offset_y) <= 40.0
+
+
+def test_shake_triggers_dizzy_on_reversals() -> None:
+    m = _seeded_motion()
+    # Alternating x-axis deltas produce direction reversals.
+    m.drag_update(3.0, 0.0, 0.05)
+    m.drag_update(-3.0, 0.0, 0.05)
+    m.drag_update(3.0, 0.0, 0.05)
+    m.drag_update(-3.0, 0.0, 0.05)
+    assert m.dizzy_ticks > 0.0
+    assert m.consume_shake_trigger() is True
+
+
+def test_shake_does_not_retrigger_during_active_dizzy() -> None:
+    m = _seeded_motion()
+    for dx in (3.0, -3.0, 3.0, -3.0):
+        m.drag_update(dx, 0.0, 0.05)
+    assert m.consume_shake_trigger() is True
+    # More alternating deltas during dizzy should not re-fire.
+    for dx in (3.0, -3.0, 3.0, -3.0):
+        m.drag_update(dx, 0.0, 0.05)
+    assert m.consume_shake_trigger() is False
+
+
+def test_shake_window_ages_out() -> None:
+    m = _seeded_motion()
+    m.drag_update(3.0, 0.0, 0.05)
+    m.drag_update(-3.0, 0.0, 0.05)
+    # Big dt purges the window.
+    m.tick(1.0, bounds_w=20.0, bounds_h=2.0, env=_env_active())
+    assert m._shake_window == []
+
+
+def test_dizzy_timeout_returns_to_normal() -> None:
+    m = _seeded_motion()
+    for dx in (3.0, -3.0, 3.0, -3.0):
+        m.drag_update(dx, 0.0, 0.05)
+    assert m.dizzy_ticks > 0.0
+    m.release()
+    # Tick past the full dizzy duration.
+    for _ in range(80):
+        m.tick(0.05, bounds_w=40.0, bounds_h=2.0, env=_env_active())
+    assert m.dizzy_ticks == 0.0
+
+
+def test_drag_suspends_target_wander() -> None:
+    m = _seeded_motion()
+    # Prime motion with a target.
+    m.tick(0.1, bounds_w=40.0, bounds_h=2.0, env=_env_active())
+    target_before = (m.target_x, m.target_y)
+    # Start dragging — dwell should not refresh the target.
+    m.drag_update(1.0, 0.0, 0.05)
+    for _ in range(100):
+        m.tick(0.1, bounds_w=40.0, bounds_h=2.0, env=_env_active())
+    assert (m.target_x, m.target_y) == target_before
+
+
+def test_sensitive_freezes_physics_fields() -> None:
+    m = _seeded_motion()
+    m.poke()
+    m.drag_update(5.0, 2.0, 0.05)
+    for dx in (3.0, -3.0, 3.0, -3.0):
+        m.drag_update(dx, 0.0, 0.05)
+    # Now flip to sensitive and tick once.
+    env_suppressed = EnvState.from_inputs(
+        weather_data=None, idle_event=None, sensitive_suppressed=True,
+    )
+    m.tick(0.1, bounds_w=20.0, bounds_h=2.0, env=env_suppressed)
+    assert m.drag_offset_x == 0.0
+    assert m.drag_offset_y == 0.0
+    assert m.recoil_ticks == 0.0
+    assert m.dizzy_ticks == 0.0
+    assert m.consume_shake_trigger() is False
+    assert m.consume_poke_trigger() is False
+
+
 # --- ParticleField ---
 
 

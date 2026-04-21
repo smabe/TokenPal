@@ -17,6 +17,14 @@ from typing import Any
 PARTICLE_LIMIT = 80
 HOT_OUTSIDE_F_DEFAULT = 85.0
 
+# Physics-overlay tuning for click/drag/shake reactions.
+_RECOIL_DURATION_S = 0.4
+_DIZZY_DURATION_S = 3.0
+_SHAKE_WINDOW_S = 0.5
+_SHAKE_REVERSAL_THRESHOLD = 3
+_DRAG_EASE_RATE = 14.0
+_MAX_DRAG_OFFSET = 40.0
+
 
 class Kind(StrEnum):
     CLEAR = "clear"
@@ -167,6 +175,74 @@ class BuddyMotion:
         self.max_dwell_s = max_dwell_s
         self._dwell_left = 0.0
         self._rng = rng or random.Random()
+        # Physics overlay — click/drag/shake reactions. Drag offset lives on
+        # a separate plane (applied to #buddy-stage) so ambient slide and
+        # drag don't fight for buddy.styles.offset.
+        self.recoil_ticks: float = 0.0
+        self.dizzy_ticks: float = 0.0
+        self.drag_offset_x: float = 0.0
+        self.drag_offset_y: float = 0.0
+        self._dragging: bool = False
+        self._shake_window: list[tuple[float, float, float]] = []
+        self._shake_trigger: bool = False
+        self._poke_trigger: bool = False
+
+    def poke(self) -> None:
+        """Register a click-reaction. Sets recoil animation + a one-shot
+        pulse flag for ParticleSky to emit impact stars."""
+        self.recoil_ticks = _RECOIL_DURATION_S
+        self._poke_trigger = True
+
+    def drag_update(self, dx: float, dy: float, dt: float) -> None:
+        """Accumulate a drag delta (cells). Runs shake-detection over a
+        rolling window of recent deltas."""
+        self._dragging = True
+        self.drag_offset_x = _clamp(
+            self.drag_offset_x + dx, -_MAX_DRAG_OFFSET, _MAX_DRAG_OFFSET
+        )
+        self.drag_offset_y = _clamp(
+            self.drag_offset_y + dy, -_MAX_DRAG_OFFSET, _MAX_DRAG_OFFSET
+        )
+        self._shake_window = [
+            (px, py, age + dt)
+            for (px, py, age) in self._shake_window
+            if age + dt <= _SHAKE_WINDOW_S
+        ]
+        self._shake_window.append((dx, dy, 0.0))
+        if self.dizzy_ticks <= 0.0 and self._count_reversals() >= _SHAKE_REVERSAL_THRESHOLD:
+            self.dizzy_ticks = _DIZZY_DURATION_S
+            self._shake_trigger = True
+            self._shake_window.clear()
+
+    def release(self) -> None:
+        """End drag. The stage offset eases back to (0, 0) via ``tick``."""
+        self._dragging = False
+
+    def consume_shake_trigger(self) -> bool:
+        out = self._shake_trigger
+        self._shake_trigger = False
+        return out
+
+    def consume_poke_trigger(self) -> bool:
+        out = self._poke_trigger
+        self._poke_trigger = False
+        return out
+
+    def _count_reversals(self) -> int:
+        def flips(signs: list[int]) -> int:
+            prev = 0
+            count = 0
+            for s in signs:
+                if s == 0:
+                    continue
+                if prev != 0 and s != prev:
+                    count += 1
+                prev = s
+            return count
+
+        sx = [(1 if dx > 0 else -1 if dx < 0 else 0) for dx, _, _ in self._shake_window]
+        sy = [(1 if dy > 0 else -1 if dy < 0 else 0) for _, dy, _ in self._shake_window]
+        return max(flips(sx), flips(sy))
 
     def tick(
         self,
@@ -176,32 +252,64 @@ class BuddyMotion:
         env: EnvState,
     ) -> None:
         if env.sensitive_suppressed:
+            # Freeze all physics. Clearing drag_offset snaps the buddy back
+            # in one frame rather than drifting while suppressed.
+            self.drag_offset_x = 0.0
+            self.drag_offset_y = 0.0
+            self.recoil_ticks = 0.0
+            self.dizzy_ticks = 0.0
+            self._dragging = False
+            self._shake_window.clear()
+            self._shake_trigger = False
+            self._poke_trigger = False
             self.x = _clamp(self.x, 0.0, bounds_w)
             self.y = _clamp(self.y, 0.0, bounds_h)
             self.target_x = _clamp(self.target_x, 0.0, bounds_w)
             self.target_y = _clamp(self.target_y, 0.0, bounds_h)
             return
 
-        speed_scale = 0.15 if env.afk_active else 1.0
-        self._dwell_left -= dt
-        if self._dwell_left <= 0.0:
-            self._pick_new_target(bounds_w, bounds_h, afk=env.afk_active)
+        if self.recoil_ticks > 0.0:
+            self.recoil_ticks = max(0.0, self.recoil_ticks - dt)
+        if self.dizzy_ticks > 0.0:
+            self.dizzy_ticks = max(0.0, self.dizzy_ticks - dt)
+        self._shake_window = [
+            (dx, dy, age + dt)
+            for (dx, dy, age) in self._shake_window
+            if age + dt <= _SHAKE_WINDOW_S
+        ]
 
-        # Re-clamp target in case panel shrank since last tick.
+        if not self._dragging and (self.drag_offset_x != 0.0 or self.drag_offset_y != 0.0):
+            dist = math.hypot(self.drag_offset_x, self.drag_offset_y)
+            step = _DRAG_EASE_RATE * dt
+            if step >= dist:
+                self.drag_offset_x = 0.0
+                self.drag_offset_y = 0.0
+            else:
+                self.drag_offset_x -= self.drag_offset_x / dist * step
+                self.drag_offset_y -= self.drag_offset_y / dist * step
+
+        held = self._dragging or self.dizzy_ticks > 0.0
+        speed_scale = 0.15 if env.afk_active else 1.0
+        if not held:
+            self._dwell_left -= dt
+            if self._dwell_left <= 0.0:
+                self._pick_new_target(bounds_w, bounds_h, afk=env.afk_active)
+
         self.target_x = _clamp(self.target_x, 0.0, bounds_w)
         self.target_y = _clamp(self.target_y, 0.0, bounds_h)
 
-        dx = self.target_x - self.x
-        dy = self.target_y - self.y
-        dist = math.hypot(dx, dy)
-        if dist > 1e-3:
-            step = self.speed * speed_scale * dt
-            if step >= dist:
-                self.x = self.target_x
-                self.y = self.target_y
-            else:
-                self.x += dx / dist * step
-                self.y += dy / dist * step
+        if not held:
+            dx = self.target_x - self.x
+            dy = self.target_y - self.y
+            dist = math.hypot(dx, dy)
+            if dist > 1e-3:
+                step = self.speed * speed_scale * dt
+                if step >= dist:
+                    self.x = self.target_x
+                    self.y = self.target_y
+                else:
+                    self.x += dx / dist * step
+                    self.y += dy / dist * step
 
         self.x = _clamp(self.x, 0.0, bounds_w)
         self.y = _clamp(self.y, 0.0, bounds_h)
