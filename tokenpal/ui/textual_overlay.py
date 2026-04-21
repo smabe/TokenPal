@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -462,10 +463,12 @@ class ParticleSky(Widget):
         self,
         get_buddy: Callable[[], BuddyWidget],
         get_speech_region: Callable[[], Vertical] | None = None,
+        get_stage: Callable[[], BuddyStage] | None = None,
     ) -> None:
         super().__init__(id="particle-sky")
         self._get_buddy = get_buddy
         self._get_speech_region = get_speech_region
+        self._get_stage = get_stage
         self._motion = BuddyMotion()
         self._field = ParticleField()
         self._cloud_drift = CloudDrift()
@@ -473,10 +476,15 @@ class ParticleSky(Widget):
         self._cached_prop_anchors: tuple[tuple[PropSprite, int, int], ...] = ()
         self._last_buddy_offset: tuple[int, int] = (0, 0)
         self._last_speech_offset: tuple[int, int] = (0, 0)
-        # Star field signature: (panel_w, panel_h, max_x). Re-populates
+        self._last_stage_offset: tuple[int, int] = (0, 0)
+        # Star field signature: (panel_w, panel_h, max_x, target). Re-populates
         # whenever the panel resizes OR the moon's left edge moves (e.g.
-        # the moon prop arrives after the first tick). None = not populated.
+        # the snapshot arrives after the first tick). None = not populated.
         self._starfield_for: tuple[int, int, int, int] | None = None
+
+    @property
+    def motion(self) -> BuddyMotion:
+        return self._motion
 
     def on_mount(self) -> None:
         self.set_interval(_PARTICLE_TICK_S, self._sim_tick)
@@ -572,6 +580,22 @@ class ParticleSky(Widget):
         if next_buddy_offset != self._last_buddy_offset:
             self._last_buddy_offset = next_buddy_offset
             buddy.styles.offset = next_buddy_offset
+
+        # Stage offset = drag/release plane. Separate from buddy offset so
+        # slide (buddy) and drag (stage) compose instead of overwriting.
+        if self._get_stage is not None:
+            try:
+                stage = self._get_stage()
+            except Exception:
+                stage = None
+            if stage is not None:
+                next_stage_offset = (
+                    int(round(self._motion.drag_offset_x)),
+                    int(round(self._motion.drag_offset_y)),
+                )
+                if next_stage_offset != self._last_stage_offset:
+                    self._last_stage_offset = next_stage_offset
+                    stage.styles.offset = next_stage_offset
 
         # Speech-region rides along horizontally so the bubble + tail stay
         # over the buddy as he slides.
@@ -676,6 +700,124 @@ class StatusBarWidget(Horizontal):
         self._main.update(markup)
 
 
+# --- Buddy stage (click / drag / shake) ---
+
+
+class BuddyStage(Container):
+    """Wrapper around ``BuddyWidget`` that owns click, drag, and shake
+    detection. Writes drag offset to itself so ambient slide (on
+    ``buddy.styles.offset``, driven by ParticleSky) composes additively
+    without either plane overwriting the other.
+    """
+
+    _DRAG_CELL_THRESHOLD = 4
+    _DRAG_HOLD_THRESHOLD_S = 0.15
+
+    class BuddyPoked(Message):
+        pass
+
+    class BuddyShaken(Message):
+        pass
+
+    def __init__(
+        self,
+        *children: Widget,
+        get_motion: Callable[[], BuddyMotion] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*children, **kwargs)
+        self._get_motion = get_motion
+        self._mouse_down_at: tuple[int, int] | None = None
+        self._mouse_down_ts: float = 0.0
+        self._dragging: bool = False
+        self._last_mouse_pos: tuple[int, int] | None = None
+        self._last_move_ts: float = 0.0
+
+    def bind_motion(self, provider: Callable[[], BuddyMotion]) -> None:
+        """Late-bound motion lookup; ParticleSky owns the BuddyMotion
+        instance so we can't construct it in ``__init__``.
+        """
+        self._get_motion = provider
+
+    def _motion(self) -> BuddyMotion | None:
+        if self._get_motion is None:
+            return None
+        try:
+            return self._get_motion()
+        except Exception:
+            return None
+
+    def on_mouse_down(self, event: MouseDown) -> None:
+        event.stop()
+        self.capture_mouse()
+        self._mouse_down_at = (event.screen_x, event.screen_y)
+        self._mouse_down_ts = time.monotonic()
+        self._dragging = False
+        self._last_mouse_pos = self._mouse_down_at
+        self._last_move_ts = self._mouse_down_ts
+
+    def on_mouse_move(self, event: MouseMove) -> None:
+        if self._mouse_down_at is None:
+            return
+        now = time.monotonic()
+        start_x, start_y = self._mouse_down_at
+        total_cells = abs(event.screen_x - start_x) + abs(event.screen_y - start_y)
+        held_s = now - self._mouse_down_ts
+        if not self._dragging:
+            if total_cells < self._DRAG_CELL_THRESHOLD and held_s < self._DRAG_HOLD_THRESHOLD_S:
+                return
+            self._dragging = True
+        last_x, last_y = self._last_mouse_pos or (event.screen_x, event.screen_y)
+        dx = event.screen_x - last_x
+        dy = event.screen_y - last_y
+        dt = max(1e-3, now - self._last_move_ts)
+        self._last_mouse_pos = (event.screen_x, event.screen_y)
+        self._last_move_ts = now
+        motion = self._motion()
+        if motion is None:
+            return
+        motion.drag_update(float(dx), float(dy), dt)
+        if motion.consume_shake_trigger():
+            self.post_message(self.BuddyShaken())
+        self.styles.offset = (int(motion.drag_offset_x), int(motion.drag_offset_y))
+
+    def on_mouse_up(self, event: MouseUp) -> None:
+        if self._mouse_down_at is None:
+            return
+        event.stop()
+        try:
+            self.release_mouse()
+        except Exception:
+            pass
+        was_dragging = self._dragging
+        self._mouse_down_at = None
+        self._dragging = False
+        self._last_mouse_pos = None
+        motion = self._motion()
+        if motion is None:
+            return
+        if was_dragging:
+            motion.release()
+        else:
+            motion.poke()
+            self.post_message(self.BuddyPoked())
+
+    def force_release(self) -> None:
+        """Flush stuck mouse capture (called on modal push/pop + resize)."""
+        if self._mouse_down_at is None and not self._dragging:
+            return
+        try:
+            self.release_mouse()
+        except Exception:
+            pass
+        self._mouse_down_at = None
+        self._dragging = False
+        self._last_mouse_pos = None
+        motion = self._motion()
+        if motion is not None:
+            motion.release()
+
+
 # --- Divider ---
 
 
@@ -760,10 +902,11 @@ class TokenPalApp(App[None]):
             yield ParticleSky(
                 get_buddy=lambda: self.query_one(BuddyWidget),
                 get_speech_region=lambda: self.query_one("#speech-region", Vertical),
+                get_stage=lambda: self.query_one(BuddyStage),
             )
             with Vertical(id="speech-region"):
                 yield SpeechBubbleWidget()
-            with Container(id="buddy-stage"):
+            with BuddyStage(id="buddy-stage"):
                 yield BuddyWidget()
             yield Input(placeholder="Type a message or /command...", id="user-input")
             yield StatusBarWidget()
@@ -787,6 +930,14 @@ class TokenPalApp(App[None]):
             buddy.show_frame(BuddyFrame.get("idle"))
         self._apply_buddy_panel_min_width()
         self._apply_chat_log_width()
+        # Late-bind BuddyStage to ParticleSky's BuddyMotion so click/drag
+        # events can update physics state.
+        try:
+            stage = self.query_one(BuddyStage)
+            sky = self.query_one(ParticleSky)
+            stage.bind_motion(lambda: sky.motion)
+        except Exception as exc:
+            log.debug("BuddyStage motion binding failed: %s", exc)
         if self._overlay._pending_chat_history is not None:
             pending = self._overlay._pending_chat_history
             self._overlay._pending_chat_history = None
@@ -849,6 +1000,26 @@ class TokenPalApp(App[None]):
             self._apply_chat_log_width()
         self._apply_chat_log_visibility()
         self._evict_oversized_bubble()
+        self._release_buddy_stage_capture()
+
+    def _release_buddy_stage_capture(self) -> None:
+        """Flush any stuck mouse capture on the buddy stage. Called on
+        resize and on modal push/pop so a drag that crosses one of those
+        transitions doesn't leave the terminal with a dead mouse.
+        """
+        try:
+            stage = self.query_one(BuddyStage)
+        except Exception:
+            return
+        stage.force_release()
+
+    def push_screen(self, screen: Any, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        self._release_buddy_stage_capture()
+        return super().push_screen(screen, *args, **kwargs)
+
+    def pop_screen(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        self._release_buddy_stage_capture()
+        return super().pop_screen(*args, **kwargs)
 
     def _apply_chat_log_visibility(self) -> None:
         if self._buddy_user_hidden:
