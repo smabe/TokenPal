@@ -13,11 +13,48 @@ quick and thread-safe (typically just a counter bump or timestamp).
 from __future__ import annotations
 
 import logging
+import platform
 import threading
 from collections.abc import Callable
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+
+def _patch_pynput_darwin_tsm() -> None:
+    """Work around macOS 26+ crash in pynput's keycode_context.
+
+    pynput's Listener enters ``keycode_context()`` on its listener thread,
+    which calls ``TISCopyCurrentKeyboardInputSource`` → ``TSMGetInputSourceProperty``.
+    Starting with macOS Tahoe, those Text Services APIs enforce main-thread
+    via ``dispatch_assert_queue`` and SIGTRAP if violated.
+
+    The captured layout data is only used by ``keycode_to_string`` — which
+    the Quartz event path never touches (see ``_event_to_key`` in
+    pynput/keyboard/_darwin.py; it uses ``CGEventKeyboardGetUnicodeString``
+    instead). Yielding a no-op tuple sidesteps the crash without breaking
+    key translation.
+    """
+    if platform.system() != "Darwin":
+        return
+    try:
+        from contextlib import contextmanager
+
+        from pynput._util import darwin as _pynput_darwin
+        from pynput.keyboard import _darwin as _pynput_kbd_darwin
+    except ImportError:
+        return
+    if getattr(_pynput_darwin.keycode_context, "_tokenpal_patched", False):
+        return
+
+    @contextmanager
+    def _safe_keycode_context() -> Any:
+        yield (None, None)
+
+    _safe_keycode_context._tokenpal_patched = True  # type: ignore[attr-defined]
+    _pynput_darwin.keycode_context = _safe_keycode_context
+    # keyboard._darwin imports keycode_context by value — patch the rebound name
+    _pynput_kbd_darwin.keycode_context = _safe_keycode_context
 
 Subscriber = Callable[[], None]
 
@@ -39,6 +76,7 @@ def subscribe(callback: Subscriber) -> None:
             return
 
         try:
+            _patch_pynput_darwin_tsm()
             from pynput import keyboard
         except ImportError:
             log.warning("pynput not installed — keyboard bus inactive")

@@ -47,6 +47,23 @@ _BUBBLE_HIDE_DELAY_MS = 6500  # how long a bubble lingers before auto-hide
 _BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
 
 
+def _default_monospace_family() -> str:
+    """Pick a monospace family that actually exists on the host.
+
+    "Courier" is missing on modern macOS — Qt substitutes silently but the
+    substituted font's true advance can differ from fontMetrics, which
+    breaks our wrap math. Prefer the platform-native monospace.
+    """
+    import platform
+
+    system = platform.system()
+    if system == "Darwin":
+        return "Menlo"
+    if system == "Windows":
+        return "Consolas"
+    return "DejaVu Sans Mono"
+
+
 class _UIBridge(QObject):
     """Marshals arbitrary no-arg callables from any thread onto the Qt
     main thread via a queued-connection signal."""
@@ -73,7 +90,9 @@ class QtOverlay(AbstractOverlay):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._buddy_name: str = config.get("buddy_name", "TokenPal")
-        self._font_family: str = config.get("font_family", "Courier")
+        self._font_family: str = config.get(
+            "font_family", _default_monospace_family(),
+        )
         self._font_size: int = int(config.get("font_size", 14))
 
         self._app: QApplication | None = None
@@ -457,6 +476,8 @@ class QtOverlay(AbstractOverlay):
         self._reposition_bubble()
         if self._hide_bubble_timer is not None and not bubble.persistent:
             self._hide_bubble_timer.start(_BUBBLE_HIDE_DELAY_MS)
+        speaker = self._voice_name or self._buddy_name
+        self._do_log(time.time(), speaker, bubble.text, None, persist=True)
 
     def _hide_bubble_now(self) -> None:
         if self._bubble is not None:
@@ -519,9 +540,19 @@ class QtOverlay(AbstractOverlay):
             return
         geom = self._buddy.geometry()
         bubble_w = self._bubble.width()
+        bubble_h = self._bubble.height()
         x = geom.x() + (geom.width() - bubble_w) // 2
-        y = geom.y() - self._bubble.height() - _BUBBLE_HOVER_OFFSET_Y
-        self._bubble.move(max(x, 0), max(y, 0))
+        y = geom.y() - bubble_h - _BUBBLE_HOVER_OFFSET_Y
+
+        screen = self._buddy.screen()
+        if screen is not None:
+            avail = screen.availableGeometry()
+            x = max(avail.left(), min(x, avail.right() - bubble_w + 1))
+            y = max(avail.top(), min(y, avail.bottom() - bubble_h + 1))
+        else:
+            x = max(0, x)
+            y = max(0, y)
+        self._bubble.move(x, y)
 
     def _popup_tray_menu(self, global_pos: object) -> None:
         if self._tray is None:

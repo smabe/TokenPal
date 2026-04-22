@@ -13,7 +13,11 @@ from PySide6.QtWidgets import QWidget
 
 _TYPING_INTERVAL_MS = 30
 _BUBBLE_PADDING = 12
-_BUBBLE_MAX_WIDTH = 380
+_BUBBLE_MAX_WIDTH = 360
+# Slack for font-substitution mismatch: Qt's fontMetrics can under-report
+# the advance for a substituted family, so wrap decisions fit a few
+# pixels tighter than the visible bubble. Keeps the last word inside.
+_BUBBLE_WRAP_SLACK = 28
 _BUBBLE_RADIUS = 10
 
 _BG = QColor(30, 30, 46, 232)
@@ -31,6 +35,11 @@ class SpeechBubble(QWidget):
         super().__init__()
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
+        # Must apply to the widget itself, not just the painter, so
+        # self.fontMetrics() measures the same font we later paint with.
+        # Otherwise wrap uses proportional-font advances while paint
+        # renders with monospace, and the longest line overflows.
+        self.setFont(self._font)
         self._full_text = ""
         self._visible_text = ""
         self._wrapped_cache: list[str] = []
@@ -80,8 +89,14 @@ class SpeechBubble(QWidget):
         lines = self._wrap_lines(text, fm)
         longest = max((fm.horizontalAdvance(line) for line in lines), default=0)
         line_h = fm.height()
+        # Add wrap-slack to the widget width too: fontMetrics can
+        # under-report the true pixel advance for a substituted family,
+        # which would clip the last few pixels of the longest line at
+        # the widget's right edge. Cap at MAX + slack so we don't grow
+        # past the intended visual maximum.
+        padded = min(longest + _BUBBLE_WRAP_SLACK, _BUBBLE_MAX_WIDTH)
         self.resize(
-            min(longest, _BUBBLE_MAX_WIDTH) + _BUBBLE_PADDING * 2,
+            padded + _BUBBLE_PADDING * 2,
             line_h * len(lines) + _BUBBLE_PADDING * 2,
         )
 
@@ -99,7 +114,7 @@ class SpeechBubble(QWidget):
             width = 0
             for word in paragraph.split(" "):
                 w = fm.horizontalAdvance(word + " ")  # type: ignore[attr-defined]
-                if width + w > _BUBBLE_MAX_WIDTH and current:
+                if width + w > _BUBBLE_MAX_WIDTH - _BUBBLE_WRAP_SLACK and current:
                     lines.append(" ".join(current))
                     current = [word]
                     width = w
