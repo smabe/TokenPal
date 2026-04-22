@@ -133,7 +133,11 @@ class UIConfig:
     # docs/qt-frontend.md and plans/shipped/new-ui-new-me.md.
     overlay: str = "qt"
     buddy_name: str = "TokenPal"
-    font_family: str = "Courier"
+    # Empty string = overlays pick a platform-appropriate monospace
+    # (Menlo on macOS, Consolas on Windows, DejaVu Sans Mono on Linux).
+    # Qt logs a font-alias-population warning on macOS when it has to
+    # substitute "Courier" — the platform defaults avoid that cost.
+    font_family: str = ""
     font_size: int = 14
     position: str = "bottom_right"
     chat_log_width: int = 40

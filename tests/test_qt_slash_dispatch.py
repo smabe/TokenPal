@@ -13,7 +13,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
-from tokenpal.ui.qt.chat_window import ChatWindow  # noqa: E402
+from tokenpal.ui.qt.chat_window import ChatDock  # noqa: E402
 from tokenpal.ui.qt.overlay import QtOverlay  # noqa: E402
 
 
@@ -39,18 +39,18 @@ def test_slash_prefix_routes_to_command_callback(qapp: QApplication) -> None:
         overlay.teardown()
 
 
-def test_chat_window_submit_handler_receives_raw_text(
+def test_chat_dock_submit_handler_receives_raw_text(
     qapp: QApplication,
 ) -> None:
-    """The ChatWindow's on_submit hook must pass the raw user string
-    through — the router lives in QtOverlay, not the window."""
+    """The ChatDock's on_submit hook must pass the raw user string
+    through — the router lives in QtOverlay, not the dock."""
     received: list[str] = []
-    window = ChatWindow(on_submit=received.append)
+    dock = ChatDock(on_submit=received.append)
     try:
-        window._input.setText("/options")
-        window._submit()
-        window._input.setText("yo")
-        window._submit()
+        dock._input.setText("/options")
+        dock._submit()
+        dock._input.setText("yo")
+        dock._submit()
         assert received == ["/options", "yo"]
     finally:
-        window.close()
+        dock.close()

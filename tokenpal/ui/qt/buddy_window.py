@@ -43,6 +43,7 @@ class BuddyWindow(QWidget):
     # follow the buddy across the screen.
     position_changed = Signal()
 
+
     def __init__(
         self,
         frame_lines: list[str],

@@ -2488,16 +2488,21 @@ class Brain:
 
         voice = self._personality.voice_name
 
-        parts = [mood]
+        # Field order: weather | voice+mood | server | model | app |
+        # music | spoke-ago. The first four are the contract the Qt
+        # dock's status label renders against — the trailing app / music
+        # / spoke-ago are extras the Textual overlay also displays.
+        voice_mood = f"{voice} \u00b7 {mood}" if voice else mood
+
+        parts: list[str] = []
+        if weather_label:
+            parts.append(weather_label)
+        parts.append(voice_mood)
         if server_label:
             parts.append(server_label)
         parts.append(self._llm.model_name)
-        if voice:
-            parts.append(voice)
         if app_label:
             parts.append(app_label)
-        if weather_label:
-            parts.append(weather_label)
         if music_label:
             parts.append(music_label)
         parts.append(f"spoke {ago}")

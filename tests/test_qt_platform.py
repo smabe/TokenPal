@@ -167,7 +167,9 @@ def test_wayland_warning_silent_off_linux(
 # --- Tray activation ----------------------------------------------------
 
 
-def test_tray_left_click_toggles_buddy(qapp: QApplication) -> None:
+def test_tray_click_does_not_toggle_buddy(qapp: QApplication) -> None:
+    """Clicking the tray icon should only pop the menu — no direct
+    toggle. The user explicitly picks Show/Hide from the menu."""
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
@@ -175,36 +177,11 @@ def test_tray_left_click_toggles_buddy(qapp: QApplication) -> None:
         on_options=lambda: None,
         on_quit=lambda: None,
     )
-    tray._on_activated(QSystemTrayIcon.ActivationReason.Trigger)
-    assert calls == [1]
-
-
-def test_tray_double_click_also_toggles(qapp: QApplication) -> None:
-    calls: list[int] = []
-    tray = BuddyTrayIcon(
-        on_toggle_buddy=lambda: calls.append(1),
-        on_toggle_chat=lambda: None,
-        on_options=lambda: None,
-        on_quit=lambda: None,
-    )
-    tray._on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
-    assert calls == [1]
-
-
-def test_tray_context_menu_trigger_does_not_double_fire(
-    qapp: QApplication,
-) -> None:
-    """Right-click opens the context menu via the menu's own action
-    system. The activation signal shouldn't also toggle — otherwise
-    a right-click-to-see-options accidentally hides the buddy."""
-    calls: list[int] = []
-    tray = BuddyTrayIcon(
-        on_toggle_buddy=lambda: calls.append(1),
-        on_toggle_chat=lambda: None,
-        on_options=lambda: None,
-        on_quit=lambda: None,
-    )
-    tray._on_activated(QSystemTrayIcon.ActivationReason.Context)
+    # No `activated` signal consumer any more — emitting Trigger /
+    # DoubleClick on the tray must not invoke on_toggle_buddy.
+    tray.activated.emit(QSystemTrayIcon.ActivationReason.Trigger)
+    tray.activated.emit(QSystemTrayIcon.ActivationReason.DoubleClick)
+    tray.activated.emit(QSystemTrayIcon.ActivationReason.Context)
     assert calls == []
 
 
@@ -220,19 +197,8 @@ def test_tray_chat_toggle_label_flips_with_visibility(
         on_quit=lambda: None,
     )
     tray.set_chat_visible(True)
-    assert tray._toggle_chat_action.text() == "Hide chat"
+    assert tray._toggle_chat_action.text() == "Hide chat log"
     tray.set_chat_visible(False)
-    assert tray._toggle_chat_action.text() == "Show chat"
+    assert tray._toggle_chat_action.text() == "Show chat log"
 
 
-def test_tray_unknown_reason_is_ignored(qapp: QApplication) -> None:
-    calls: list[int] = []
-    tray = BuddyTrayIcon(
-        on_toggle_buddy=lambda: calls.append(1),
-        on_toggle_chat=lambda: None,
-        on_options=lambda: None,
-        on_quit=lambda: None,
-    )
-    tray._on_activated(QSystemTrayIcon.ActivationReason.MiddleClick)
-    tray._on_activated(QSystemTrayIcon.ActivationReason.Unknown)
-    assert calls == []

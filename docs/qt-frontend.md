@@ -1,8 +1,8 @@
 # Qt desktop frontend
 
 TokenPal's default UI is a frameless, always-on-top desktop buddy plus
-a tray / menu-bar icon plus a hideable chat window, all built on
-PySide6. The Textual terminal UI is still supported and becomes the
+a tray / menu-bar icon plus a two-surface chat UI (input dock under the
+buddy + standalone history window), all built on PySide6. The Textual terminal UI is still supported and becomes the
 automatic fallback when Qt can't run. This doc is the map for anyone
 touching code under `tokenpal/ui/qt/`.
 
@@ -51,10 +51,21 @@ PySide6. It owns:
 - `SpeechBubble` (`qt/speech_bubble.py`) — frameless bubble with
   per-character typing animation. Line wrap cached on text + width
   so the 30ms paint tick doesn't re-wrap every frame.
-- `ChatWindow` (`qt/chat_window.py`) — `QMainWindow` with a
-  `QTextBrowser` (clickable URLs), a `QLineEdit` input, and a
-  `QStatusBar`. Lines starting with `/` route to the command
-  callback; anything else routes to the input callback.
+- `ChatDock` (`qt/chat_window.py`) — the always-visible input + status
+  strip under the buddy. Frameless, translucent, glass-pill `QLineEdit`
+  (glass styling from `qt/_text_fx.py`), status label below. Only the
+  line edit takes focus; the container is `WA_ShowWithoutActivating`
+  and `FocusPolicy.NoFocus` so clicking the strip never steals focus
+  from the user's active app. Follows the buddy across the screen via
+  `BuddyWindow.position_changed` → `QtOverlay._reposition_dock()`. Lines
+  starting with `/` route to the command callback; anything else routes
+  to the input callback.
+- `ChatHistoryWindow` (`qt/chat_window.py`) — standalone frameless
+  translucent chat log with `QTextBrowser` (clickable URLs), transparent
+  viewport, glass-styled scrollbar, and a "Hide" button at bottom-left.
+  Starts hidden; tray menu / `toggle_chat_log` / F2 flip its visibility.
+  Carries the persist/hydrate/link-click contract from the old
+  monolithic `ChatWindow`.
 - `BuddyTrayIcon` (`qt/tray.py`) — `QSystemTrayIcon` with Show/Hide
   buddy · Quit. Left-click and double-click also toggle the buddy
   on Windows and Linux; macOS menu-bar icons only respond via the
@@ -174,7 +185,11 @@ voice-frame test matrix covers it end-to-end.
 - `tests/test_qt_shell.py` — shell boots, frameless flags set, tray
   menu has Toggle + Quit.
 - `tests/test_qt_overlay.py` — every brain-invoked method end-to-end,
-  pre-setup buffering, `_on_user_submit` dispatch.
+  pre-setup buffering, `_on_user_submit` dispatch, history hidden by
+  default, `toggle_chat_log` flips history visibility, status prefix
+  composition order.
+- `tests/test_qt_dock_follow.py` — chat dock moves with the buddy via
+  `position_changed` and sits below the buddy's bottom edge.
 - `tests/test_qt_edge_dock.py` — edge snaps on all 4 sides + mid-screen
   no-op.
 - `tests/test_qt_slash_dispatch.py` — `/` routes to command_callback.

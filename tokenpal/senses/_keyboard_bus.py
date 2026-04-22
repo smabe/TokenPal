@@ -21,6 +21,24 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+def _warmup_pynput_darwin_axtrust() -> None:
+    """Force pyobjc to bind ``AXIsProcessTrusted`` before pynput
+    listener threads race for it — pyobjc's lazy-import isn't
+    thread-safe for unresolved constants, and the loser gets
+    ``KeyError: 'AXIsProcessTrusted'``. No-op off macOS.
+    """
+    if platform.system() != "Darwin":
+        return
+    try:
+        import HIServices  # noqa: PLC0415
+    except ImportError:
+        return
+    try:
+        HIServices.AXIsProcessTrusted()
+    except Exception:
+        log.debug("AXIsProcessTrusted warmup raised", exc_info=True)
+
+
 def _patch_pynput_darwin_tsm() -> None:
     """Work around macOS 26+ crash in pynput's keycode_context.
 
@@ -77,6 +95,7 @@ def subscribe(callback: Subscriber) -> None:
 
         try:
             _patch_pynput_darwin_tsm()
+            _warmup_pynput_darwin_axtrust()
             from pynput import keyboard
         except ImportError:
             log.warning("pynput not installed — keyboard bus inactive")

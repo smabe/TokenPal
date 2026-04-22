@@ -119,11 +119,144 @@ def test_qt_overlay_buffers_calls_before_setup(qapp: QApplication) -> None:
     overlay.setup()
     try:
         _pump(qapp, ms=30)
-        assert overlay._chat is not None
-        # History loaded into the chat widget.
-        doc_text = overlay._chat._log.toPlainText()
+        assert overlay._history is not None
+        assert overlay._dock is not None
+        # History loaded into the history widget.
+        doc_text = overlay._history._log.toPlainText()
         assert "earlier" in doc_text
-        assert overlay._chat.windowTitle().startswith("Early")
+        assert overlay._history.windowTitle().startswith("Early")
+        # Status routed to the dock's status label.
+        assert overlay._dock._status.text() == "preboot"
     finally:
         overlay.teardown()
         _pump(qapp, ms=20)
+
+
+def test_history_window_hidden_by_default(qapp: QApplication) -> None:
+    """The chat history window must start hidden — the dock's input
+    strip is what the user sees under the buddy. The history only opens
+    via the tray menu / toggle_chat_log / F2.
+
+    setup() builds widgets without showing them; run_loop() is what
+    shows the dock + hides the history. We mirror run_loop's show-path
+    here without entering the blocking event loop, then assert the
+    history was explicitly hidden while the dock was explicitly shown.
+    """
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._history is not None
+        assert overlay._dock is not None
+
+        # Mirror run_loop's show ordering.
+        overlay._dock.show()
+        overlay._history.hide()
+
+        # Check the explicit hide-flag, not isVisible(): headless Qt
+        # test runs on macOS let all translucent windows auto-hide
+        # between event-loop pumps regardless of what show() did, so
+        # isVisible() is unreliable. isHidden() reflects the explicit
+        # code-path state we care about.
+        assert overlay._history.isHidden(), (
+            "history window should be explicitly hidden on boot"
+        )
+        assert not overlay._dock.isHidden(), (
+            "dock should be explicitly shown on boot"
+        )
+    finally:
+        overlay.teardown()
+
+
+def test_toggle_chat_log_flips_history_visibility(qapp: QApplication) -> None:
+    """toggle_chat_log alternates the history window's hidden state.
+
+    We check hidden state synchronously right after each toggle — macOS
+    auto-hides translucent frameless windows when the test app loses
+    focus between pumps, which confuses isVisible()-based assertions.
+    The explicit show()/hide() call is what we actually care about.
+    """
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._history is not None
+        overlay._history.hide()
+        assert overlay._history.isHidden()
+
+        overlay._do_toggle_chat()  # should show
+        assert not overlay._history.isHidden()
+        assert overlay._tray is not None
+
+        overlay._do_toggle_chat()  # should hide
+        assert overlay._history.isHidden()
+    finally:
+        overlay.teardown()
+
+
+def test_reposition_dock_fires_on_position_changed(qapp: QApplication) -> None:
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._dock is not None
+        assert overlay._buddy is not None
+        overlay._reposition_dock()
+        _pump(qapp, ms=30)
+        before = (overlay._dock.x(), overlay._dock.y())
+
+        overlay._buddy._sim.set_anchor(900.0, 500.0)
+        overlay._buddy._wake_timer()
+        _pump(qapp, ms=120)
+
+        after = (overlay._dock.x(), overlay._dock.y())
+        assert after != before, (
+            "dock should follow the buddy via position_changed"
+        )
+    finally:
+        overlay.teardown()
+        _pump(qapp, ms=20)
+
+
+def test_status_composition_order() -> None:
+    """Prefix order must be weather | voice+mood | server | model.
+
+    Tests the orchestrator's _push_status composition directly so the
+    Qt dock's status label receives fields in the documented order.
+    """
+    from unittest.mock import MagicMock
+
+    from tokenpal.brain.orchestrator import Brain
+
+    # Wire just enough state to exercise _push_status.
+    brain = Brain.__new__(Brain)
+    brain._personality = MagicMock(mood="happy", voice_name="Glados")
+    brain._llm = MagicMock(
+        api_url="http://remote-gpu:11434",
+        primary_url="http://remote-gpu:11434",
+        using_fallback=False,
+        model_name="gemma4:4b",
+    )
+    brain._last_comment_time = 0.0
+    brain._context = MagicMock()
+    from tokenpal.senses.base import SenseReading
+    brain._context.active_readings.return_value = {
+        "weather": SenseReading(
+            sense_name="weather",
+            timestamp=0.0,
+            data={},
+            summary="sunny 72F",
+        ),
+    }
+    brain._abbreviate_weather = lambda s: s[:12]
+
+    captured: list[str] = []
+    brain._status_callback = captured.append
+    brain._push_status()
+
+    assert captured, "status callback should have been invoked"
+    parts = [p.strip() for p in captured[0].split("|")]
+    # First four fields in the contract order.
+    assert parts[0].startswith("sunny"), f"first field should be weather, got {parts}"
+    assert "Glados" in parts[1] and "happy" in parts[1], (
+        f"second field should be voice+mood, got {parts}"
+    )
+    assert parts[2] == "remote-gpu", f"third field should be server host, got {parts}"
+    assert parts[3] == "gemma4:4b", f"fourth field should be model, got {parts}"

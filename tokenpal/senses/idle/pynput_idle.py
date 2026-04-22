@@ -55,6 +55,8 @@ class PynputIdle(AbstractSense):
             self.disable()
             return
 
+        _keyboard_bus._warmup_pynput_darwin_axtrust()
+
         self._mouse_listener = mouse.Listener(
             on_move=self._touch,
             on_click=self._touch,

@@ -29,7 +29,7 @@ class TkOverlay(AbstractOverlay):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._position = config.get("position", "bottom_right")
-        self._font_family = config.get("font_family", "Menlo")
+        self._font_family = config.get("font_family") or "Menlo"
         self._font_size = config.get("font_size", 13)
         self._root: tk.Tk | None = None
         self._buddy_label: tk.Label | None = None

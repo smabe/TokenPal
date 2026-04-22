@@ -15,18 +15,10 @@ from tokenpal.ui.palette import BUDDY_GREEN
 
 _HIDE_BUDDY_LABEL = "Hide buddy"
 _SHOW_BUDDY_LABEL = "Show buddy"
-_HIDE_CHAT_LABEL = "Hide chat"
-_SHOW_CHAT_LABEL = "Show chat"
-
-# Tray activation reasons that should toggle the buddy directly. On
-# macOS the menu bar icon only responds via its context menu and a
-# single click already pops the menu, so the `Trigger` branch is
-# effectively Windows + Linux. Double-click also toggles as a courtesy
-# for users who habitually double-click tray icons.
-_TOGGLE_ACTIVATION_REASONS = frozenset({
-    QSystemTrayIcon.ActivationReason.Trigger,
-    QSystemTrayIcon.ActivationReason.DoubleClick,
-})
+# "chat log" (not just "chat") — the dock's input line is always
+# visible under the buddy; this action only toggles the history window.
+_HIDE_CHAT_LABEL = "Hide chat log"
+_SHOW_CHAT_LABEL = "Show chat log"
 
 
 def _fallback_icon() -> QIcon:
@@ -50,7 +42,6 @@ class BuddyTrayIcon(QSystemTrayIcon):
     ) -> None:
         super().__init__(icon or _fallback_icon(), parent)
         self.setToolTip("TokenPal")
-        self._on_toggle_buddy = on_toggle_buddy
 
         menu = QMenu()
 
@@ -78,15 +69,6 @@ class BuddyTrayIcon(QSystemTrayIcon):
         # Retain a reference or Qt will garbage-collect the menu and the
         # tray click will pop up nothing on macOS.
         self._menu = menu
-
-        # Left-click on Windows / Linux toggles the buddy window. On
-        # macOS the menu bar icon opens the context menu on any click,
-        # so this signal never fires there — nothing to special-case.
-        self.activated.connect(self._on_activated)
-
-    def _on_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in _TOGGLE_ACTIVATION_REASONS:
-            self._on_toggle_buddy()
 
     def set_buddy_visible(self, visible: bool) -> None:
         self._toggle_buddy_action.setText(
