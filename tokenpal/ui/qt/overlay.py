@@ -27,9 +27,11 @@ from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatWindow
+from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
 from tokenpal.ui.qt.tray import BuddyTrayIcon
 from tokenpal.ui.registry import register_overlay
+from tokenpal.ui.selection_modal import SelectionGroup
 
 log = logging.getLogger(__name__)
 
@@ -286,6 +288,47 @@ class QtOverlay(AbstractOverlay):
 
     def toggle_chat_log(self) -> None:
         self._post(self._do_toggle_chat)
+
+    # --- Modals ---------------------------------------------------------
+
+    def open_selection_modal(
+        self,
+        title: str,
+        groups: Any,
+        on_save: Callable[[dict[str, list[str]] | None], None],
+    ) -> bool:
+        group_list: list[SelectionGroup] = list(groups)
+        self._post(lambda: self._do_open_selection_modal(
+            title, group_list, on_save,
+        ))
+        return True
+
+    def open_confirm_modal(
+        self,
+        title: str,
+        body: str,
+        on_result: Callable[[bool], None],
+    ) -> bool:
+        self._post(lambda: self._do_open_confirm_modal(title, body, on_result))
+        return True
+
+    def _do_open_selection_modal(
+        self,
+        title: str,
+        groups: list[SelectionGroup],
+        on_save: Callable[[dict[str, list[str]] | None], None],
+    ) -> None:
+        dialog = SelectionDialog(title, groups, on_save, parent=self._chat)
+        _focus_dialog(dialog)
+
+    def _do_open_confirm_modal(
+        self,
+        title: str,
+        body: str,
+        on_result: Callable[[bool], None],
+    ) -> None:
+        dialog = ConfirmDialog(title, body, on_result, parent=self._chat)
+        _focus_dialog(dialog)
 
     # --- Callback registration -------------------------------------------
 

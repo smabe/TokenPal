@@ -177,4 +177,5 @@ Edited:
 6. **Docs + flip default**: CLAUDE.md, qt-frontend.md, installers default to desktop extra, `[ui] overlay` default flipped to `"qt"`. Commit.
 
 ## Parking lot
-(empty at start — ideas that surface mid-work go here)
+- `app.py:408` voice-regenerate has inverted confirm semantics: `if not overlay.open_confirm_modal(...): _do_regen()`. On overlays that lack a modal (returns False) this regenerates **without** asking, burning ~60s of LLM work on an unintended trigger. Pre-dates Phase 4; Qt's text-fallback path for the richer modals makes it visible. File as its own small PR.
+- Full Qt ports of cloud / options / voice modals. Currently they inherit AbstractOverlay's False default and callers fall back to the slash-command text UI, which works. Visual parity with Textual's Textual-modal counterparts is a later pass.
