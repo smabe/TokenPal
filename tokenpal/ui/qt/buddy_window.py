@@ -7,6 +7,7 @@ brain wiring — that lands in Phase 3.
 
 from __future__ import annotations
 
+import sys
 import time
 from collections import deque
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter,
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
+from tokenpal.ui.qt.markup import parse_markup, stripped_text
 from tokenpal.ui.qt.physics import DangleSimulator, PhysicsConfig, run_until_settled
 
 _PHYSICS_HZ = 60
@@ -50,11 +52,21 @@ class BuddyWindow(QWidget):
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
 
-        self.setWindowFlags(
+        flags = (
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool,
+            | Qt.WindowType.WindowDoesNotAcceptFocus
         )
+        # Qt.Tool on macOS maps to NSWindow utility-panel behavior that
+        # hides the window whenever the app loses focus — so clicking
+        # the desktop would make the buddy vanish. On Windows / Linux
+        # it's the right flag for "don't show in taskbar"; on macOS we
+        # rely on LSUIElement-equivalent (apply_macos_accessory_mode)
+        # plus the NSWindow collectionBehavior tweak applied after the
+        # window is native (see qt/platform.apply_macos_stay_visible).
+        if sys.platform != "darwin":
+            flags |= Qt.WindowType.Tool
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 
@@ -96,8 +108,11 @@ class BuddyWindow(QWidget):
 
     def _resize_to_frame(self) -> None:
         fm = self.fontMetrics()
-        longest = max((fm.horizontalAdvance(line) for line in self._frame_lines),
-                      default=0)
+        longest = max(
+            (fm.horizontalAdvance(stripped_text(line))
+             for line in self._frame_lines),
+            default=0,
+        )
         line_h = fm.height()
         # Pad to avoid clipping glyphs at the edges.
         self.resize(longest + 12, line_h * len(self._frame_lines) + 8)
@@ -213,10 +228,13 @@ class BuddyWindow(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setFont(self._font)
-        painter.setPen(_FG_COLOR)
         fm = self.fontMetrics()
         line_h = fm.height()
         y = fm.ascent() + 4
         for line in self._frame_lines:
-            painter.drawText(6, y, line)
+            x = 6
+            for seg in parse_markup(line):
+                painter.setPen(QColor(seg.color) if seg.color else _FG_COLOR)
+                painter.drawText(x, y, seg.text)
+                x += fm.horizontalAdvance(seg.text)
             y += line_h

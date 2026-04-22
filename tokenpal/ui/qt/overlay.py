@@ -31,6 +31,7 @@ from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.platform import (
     apply_macos_accessory_mode,
+    apply_macos_stay_visible,
     warn_wayland_limitations,
 )
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
@@ -194,6 +195,9 @@ class QtOverlay(AbstractOverlay):
             raise RuntimeError("QtOverlay.setup() must run before run_loop()")
         if self._buddy is not None:
             self._buddy.show()
+            # NSWindow collectionBehavior can only be set once the
+            # native window actually exists — i.e. after show().
+            apply_macos_stay_visible(self._buddy)
         if self._tray is not None:
             self._tray.show()
         self._app.exec()

@@ -51,6 +51,55 @@ def apply_macos_accessory_mode() -> None:
         log.exception("macOS accessory-mode activation policy failed")
 
 
+def apply_macos_stay_visible(window: object) -> None:
+    """Keep ``window`` visible when the app loses focus or the user
+    switches spaces on macOS.
+
+    Qt's ``FramelessWindowHint`` + ``WindowStaysOnTopHint`` alone
+    isn't enough: the NSWindow AppKit wraps ends up with the default
+    collection behavior, which makes it vanish whenever the user
+    clicks on the desktop or covers the buddy with another window.
+
+    Fix: set ``CanJoinAllSpaces | Stationary | FullScreenAuxiliary``
+    on the underlying NSWindow. Done in code rather than via Info.plist
+    because we don't ship a bundled .app — we're a plain Python process.
+
+    No-op off macOS or when pyobjc isn't installed.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import objc  # noqa: PLC0415
+        from AppKit import (  # noqa: PLC0415
+            NSWindowCollectionBehaviorCanJoinAllSpaces,
+            NSWindowCollectionBehaviorFullScreenAuxiliary,
+            NSWindowCollectionBehaviorStationary,
+        )
+    except ImportError:
+        log.debug(
+            "pyobjc not installed — buddy will hide on app deactivate; "
+            "install the 'macos' extra to keep it visible.",
+        )
+        return
+    try:
+        # Qt's QWidget.winId() returns a void* pointer to the NSView on
+        # macOS. Reconstitute it as an ObjC object and walk up to the
+        # enclosing NSWindow.
+        view_id = int(window.winId())  # type: ignore[attr-defined]
+        view = objc.objc_object(c_void_p=view_id)
+        ns_window = view.window()
+        if ns_window is None:
+            log.debug("NSView has no window yet; call show() first")
+            return
+        ns_window.setCollectionBehavior_(
+            NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehaviorStationary
+            | NSWindowCollectionBehaviorFullScreenAuxiliary,
+        )
+    except Exception:
+        log.exception("macOS stay-visible collection behavior failed")
+
+
 def warn_wayland_limitations() -> None:
     """One-time INFO log that ``WindowStaysOnTopHint`` is advisory
     under Wayland — some compositors honor it, many don't. The buddy
