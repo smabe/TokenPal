@@ -40,6 +40,7 @@ from tokenpal.ui.buddy_environment import (
     EnvironmentSnapshot,
     EnvState,
 )
+from tokenpal.ui.chat_format import format_chat_ts as _shared_format_chat_ts
 from tokenpal.ui.confirm_modal import ConfirmModal
 from tokenpal.ui.registry import register_overlay
 from tokenpal.ui.selection_modal import SelectionGroup, SelectionModal
@@ -1288,10 +1289,7 @@ class TokenPalApp(App[None]):
     @staticmethod
     def _format_chat_ts(ts_val: float, today_ymd: str) -> str:
         """Short time-of-day for today, ``Mon DD HH:MM`` prefix otherwise."""
-        dt = datetime.fromtimestamp(ts_val)
-        if dt.strftime("%Y%m%d") == today_ymd:
-            return dt.strftime("%I:%M %p")
-        return dt.strftime("%b %d %I:%M %p")
+        return _shared_format_chat_ts(ts_val, today_ymd)
 
     def _compose_log_line(
         self,

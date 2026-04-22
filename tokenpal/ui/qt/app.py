@@ -16,6 +16,7 @@ from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE
+from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.tray import BuddyTrayIcon
 
@@ -27,22 +28,14 @@ class QtShell:
     tray: BuddyTrayIcon
 
 
-def _ensure_qapplication(existing: QApplication | None) -> QApplication:
-    if existing is not None:
-        return existing
-    inst = QApplication.instance()
-    if isinstance(inst, QApplication):
-        return inst
-    return QApplication(sys.argv)
-
-
 def build_shell(app: QApplication | None = None) -> QtShell:
     """Wire the buddy + tray to an existing (or new) QApplication.
 
     Returns the shell so callers (tests, entry points) can attach
     additional signals before running the event loop.
     """
-    qapp = _ensure_qapplication(app)
+    qapp = ensure_qapplication(app)
+    assert isinstance(qapp, QApplication)
     qapp.setQuitOnLastWindowClosed(False)
 
     buddy = BuddyWindow(
