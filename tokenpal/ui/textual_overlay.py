@@ -1817,8 +1817,8 @@ class TextualOverlay(AbstractOverlay):
 
     def set_chat_persist_callback(
         self,
-        persist: Callable[[str, str, str | None], None] | None,
-        clear: Callable[[], None] | None,
+        persist: Callable[[str, str, str | None], None],
+        clear: Callable[[], None],
     ) -> None:
         """Wire chat-log write-through. ``persist`` is invoked after each
         live line lands; ``clear`` when /clear wipes the widget."""

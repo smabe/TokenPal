@@ -114,8 +114,8 @@ class AbstractOverlay(abc.ABC):
 
     def set_chat_persist_callback(
         self,
-        persist: Callable[[str, str, str | None], None] | None,
-        clear: Callable[[], None] | None,
+        persist: Callable[[str, str, str | None], None],
+        clear: Callable[[], None],
     ) -> None:
         """Wire chat-log write-through. Optional — overlays without a
         persisted chat log no-op."""

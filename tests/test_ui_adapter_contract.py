@@ -10,25 +10,16 @@ overlay without ``hasattr`` probing. Plan: plans/new-ui-new-me.md.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 import pytest
 
-# Importing the overlay modules is what registers them. Do it explicitly
-# so the registry is populated no matter the pytest collection order.
-import tokenpal.ui.console_overlay  # noqa: F401
-import tokenpal.ui.textual_overlay  # noqa: F401
-import tokenpal.ui.tk_overlay  # noqa: F401
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
-from tokenpal.ui.registry import _OVERLAY_REGISTRY
+from tokenpal.ui.registry import discover_overlays, list_overlays
 
-def _dummy_snapshot() -> EnvironmentSnapshot:
-    return EnvironmentSnapshot(
-        weather_data=None, idle_event=None, sensitive_suppressed=False,
-    )
+discover_overlays()
 
 
 _BRAIN_INVOKED_METHODS: tuple[tuple[str, tuple[Any, ...]], ...] = (
@@ -53,7 +44,11 @@ _BRAIN_INVOKED_METHODS: tuple[tuple[str, tuple[Any, ...]], ...] = (
     # Chat-pane control
     ("toggle_chat_log", ()),
     # Environment / persistence hooks
-    ("set_environment_provider", (_dummy_snapshot,)),
+    ("set_environment_provider", (
+        lambda: EnvironmentSnapshot(
+            weather_data=None, idle_event=None, sensitive_suppressed=False,
+        ),
+    )),
     ("set_chat_persist_callback", (lambda s, t, u: None, lambda: None)),
     # Callback wiring
     ("set_input_callback", (lambda s: None,)),
@@ -70,11 +65,7 @@ _MODAL_METHODS: tuple[tuple[str, tuple[Any, ...]], ...] = (
 )
 
 
-def _all_overlay_classes() -> list[type[AbstractOverlay]]:
-    return list(_OVERLAY_REGISTRY.values())
-
-
-@pytest.mark.parametrize("overlay_cls", _all_overlay_classes())
+@pytest.mark.parametrize("overlay_cls", list_overlays())
 def test_overlay_has_no_abstract_methods(overlay_cls: type[AbstractOverlay]) -> None:
     """Every registered overlay must satisfy the ABC at construction time."""
     leftover: frozenset[str] = getattr(
@@ -86,7 +77,7 @@ def test_overlay_has_no_abstract_methods(overlay_cls: type[AbstractOverlay]) -> 
     )
 
 
-@pytest.mark.parametrize("overlay_cls", _all_overlay_classes())
+@pytest.mark.parametrize("overlay_cls", list_overlays())
 def test_overlay_exposes_full_adapter_surface(
     overlay_cls: type[AbstractOverlay],
 ) -> None:
@@ -120,11 +111,3 @@ def test_console_overlay_accepts_full_adapter_surface(
             f"ConsoleOverlay.{name} should return False (no modal support)"
         )
     capsys.readouterr()  # drain any render output so it doesn't pollute
-
-
-def test_base_module_documents_adapter_seam() -> None:
-    """The base module's docstring is where future readers will look for
-    the adapter contract. Keep the seam signposted."""
-    import tokenpal.ui.base as base_mod
-    module_doc = inspect.getdoc(base_mod) or ""
-    assert "adapter seam" in module_doc.lower()

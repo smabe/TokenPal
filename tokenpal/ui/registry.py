@@ -21,6 +21,12 @@ def register_overlay(cls: type[AbstractOverlay]) -> type[AbstractOverlay]:
     return cls
 
 
+def list_overlays() -> list[type[AbstractOverlay]]:
+    """Return every registered overlay class. Call ``discover_overlays()``
+    first if you need the full set, not just whatever's been imported."""
+    return list(_OVERLAY_REGISTRY.values())
+
+
 def discover_overlays() -> None:
     """Import all modules under tokenpal.ui so decorators fire."""
     import tokenpal.ui as ui_pkg
