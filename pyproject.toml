@@ -52,6 +52,9 @@ server = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
 ]
+desktop = [
+    "PySide6>=6.9",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -76,6 +79,11 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Qt subclasses must use camelCase method names to override Qt APIs
+# (paintEvent, mousePressEvent, etc.).
+"tokenpal/ui/qt/*.py" = ["N802"]
 
 [tool.mypy]
 python_version = "3.12"
