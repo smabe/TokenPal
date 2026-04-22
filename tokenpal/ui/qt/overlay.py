@@ -27,6 +27,7 @@ from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatWindow
+from tokenpal.ui.qt.cloud_dialog import CloudDialog
 from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.platform import (
@@ -36,6 +37,7 @@ from tokenpal.ui.qt.platform import (
 )
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
 from tokenpal.ui.qt.tray import BuddyTrayIcon
+from tokenpal.ui.qt.voice_dialog import VoiceDialog
 from tokenpal.ui.registry import register_overlay
 from tokenpal.ui.selection_modal import SelectionGroup
 
@@ -386,6 +388,30 @@ class QtOverlay(AbstractOverlay):
         self, state: Any, on_result: Callable[[Any], None],
     ) -> None:
         dialog = OptionsDialog(state, on_result, parent=self._chat)
+        _focus_dialog(dialog)
+
+    def open_cloud_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> bool:
+        self._post(lambda: self._do_open_cloud_modal(state, on_result))
+        return True
+
+    def _do_open_cloud_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> None:
+        dialog = CloudDialog(state, on_result, parent=self._chat)
+        _focus_dialog(dialog)
+
+    def open_voice_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> bool:
+        self._post(lambda: self._do_open_voice_modal(state, on_result))
+        return True
+
+    def _do_open_voice_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> None:
+        dialog = VoiceDialog(state, on_result, parent=self._chat)
         _focus_dialog(dialog)
 
     # --- Callback registration -------------------------------------------
