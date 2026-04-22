@@ -178,4 +178,5 @@ Edited:
 
 ## Parking lot
 - `app.py:408` voice-regenerate has inverted confirm semantics: `if not overlay.open_confirm_modal(...): _do_regen()`. On overlays that lack a modal (returns False) this regenerates **without** asking, burning ~60s of LLM work on an unintended trigger. Pre-dates Phase 4; Qt's text-fallback path for the richer modals makes it visible. File as its own small PR.
-- Full Qt ports of cloud / options / voice modals. Currently they inherit AbstractOverlay's False default and callers fall back to the slash-command text UI, which works. Visual parity with Textual's Textual-modal counterparts is a later pass.
+- Full Qt ports of cloud and voice modals. Currently they inherit AbstractOverlay's False default and callers fall back to the slash-command text UI, which works. Visual parity is a later pass. (Options modal has been pulled into v1 — see qt/options_dialog.py.)
+- Async `/v1/models` probing for non-active servers in the Qt options dialog. Textual probes in the background on server-row click; Qt version shows "(switch to see models)" for non-displayed servers until the user saves. Add a QThread + signal probe pattern so the Qt modal matches Textual's live-probe behavior.

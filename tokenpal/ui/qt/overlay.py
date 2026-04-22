@@ -28,6 +28,7 @@ from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatWindow
 from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
+from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
 from tokenpal.ui.qt.tray import BuddyTrayIcon
 from tokenpal.ui.registry import register_overlay
@@ -328,6 +329,18 @@ class QtOverlay(AbstractOverlay):
         on_result: Callable[[bool], None],
     ) -> None:
         dialog = ConfirmDialog(title, body, on_result, parent=self._chat)
+        _focus_dialog(dialog)
+
+    def open_options_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> bool:
+        self._post(lambda: self._do_open_options_modal(state, on_result))
+        return True
+
+    def _do_open_options_modal(
+        self, state: Any, on_result: Callable[[Any], None],
+    ) -> None:
+        dialog = OptionsDialog(state, on_result, parent=self._chat)
         _focus_dialog(dialog)
 
     # --- Callback registration -------------------------------------------
