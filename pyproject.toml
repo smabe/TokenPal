@@ -82,8 +82,10 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.lint.per-file-ignores]
 # Qt subclasses must use camelCase method names to override Qt APIs
-# (paintEvent, mousePressEvent, etc.).
+# (paintEvent, mousePressEvent, etc.). Same exception applies to Qt /
+# Cocoa mocks in Qt-adjacent test files.
 "tokenpal/ui/qt/*.py" = ["N802"]
+"tests/test_qt_platform.py" = ["N802"]
 
 [tool.mypy]
 python_version = "3.12"

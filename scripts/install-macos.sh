@@ -20,6 +20,7 @@ set -euo pipefail
 TOKENPAL_DIR="${TOKENPAL_DIR:-$HOME/tokenpal}"
 MODEL="${TOKENPAL_MODEL:-gemma4}"
 MODE=""
+HEADLESS="0"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 
@@ -33,9 +34,13 @@ while [[ $# -gt 0 ]]; do
             esac
             shift
             ;;
+        --headless)
+            HEADLESS="1"
+            shift
+            ;;
         *)
             echo "Unknown argument: $1"
-            echo "Usage: $0 [--mode client|server|both]"
+            echo "Usage: $0 [--mode client|server|both] [--headless]"
             exit 1
             ;;
     esac
@@ -199,12 +204,16 @@ if [[ -z "$MODE" ]]; then
 fi
 ok "Mode: $MODE"
 
-# Determine pip extras based on mode
+# Determine pip extras based on mode. Desktop (PySide6) is included by
+# default; --headless drops it for terminal-only installs.
 case "$MODE" in
     client) PIP_EXTRAS="macos,dev" ;;
     server) PIP_EXTRAS="macos,server,dev" ;;
     both)   PIP_EXTRAS="macos,server,dev" ;;
 esac
+if [[ "$HEADLESS" != "1" ]]; then
+    PIP_EXTRAS="$PIP_EXTRAS,desktop"
+fi
 
 # Set total phase count now that we know the mode
 # Phases: xcode(1) brew(2) python(3) git(4) mode(5) repo(6) venv(7) ollama(8) server?(9) config(10) validate(11) summary(12)

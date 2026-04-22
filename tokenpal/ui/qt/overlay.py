@@ -29,6 +29,10 @@ from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatWindow
 from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.options_dialog import OptionsDialog
+from tokenpal.ui.qt.platform import (
+    apply_macos_accessory_mode,
+    warn_wayland_limitations,
+)
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
 from tokenpal.ui.qt.tray import BuddyTrayIcon
 from tokenpal.ui.registry import register_overlay
@@ -128,6 +132,14 @@ class QtOverlay(AbstractOverlay):
         self._app = ensure_qapplication()  # type: ignore[assignment]
         assert isinstance(self._app, QApplication)
         self._app.setQuitOnLastWindowClosed(False)
+
+        # IMPORTANT: apply_macos_accessory_mode must run AFTER
+        # ensure_qapplication — the NSApplication it pokes is the one
+        # QApplication created underneath. Flipping the order
+        # silently breaks Dock-hiding (the policy reverts when Qt
+        # finally constructs its app).
+        apply_macos_accessory_mode()
+        warn_wayland_limitations()
 
         self._bridge = _UIBridge()
 

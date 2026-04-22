@@ -15,7 +15,8 @@
 
 param(
     [ValidateSet("Client", "Server", "Both")]
-    [string]$Mode
+    [string]$Mode,
+    [switch]$Headless
 )
 
 $ErrorActionPreference = "Stop"
@@ -207,13 +208,17 @@ if (-not (Test-Path $VenvDir)) {
 Write-Host "  Upgrading pip..."
 & "$VenvDir\Scripts\python.exe" -m pip install --upgrade pip -q
 
-# Determine extras based on mode
+# Determine extras based on mode. Desktop (PySide6) is included by
+# default; -Headless drops it for terminal-only installs.
 if ($InstallClient -and $InstallServer) {
     $extras = "windows,server,dev"
 } elseif ($InstallServer) {
     $extras = "windows,server,dev"
 } else {
     $extras = "windows,dev"
+}
+if (-not $Headless) {
+    $extras = "$extras,desktop"
 }
 
 Write-Host "  Installing tokenpal[$extras]..."

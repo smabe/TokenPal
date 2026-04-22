@@ -18,6 +18,7 @@ INSTALL_DIR="${TOKENPAL_DIR:-$HOME/tokenpal}"
 MODEL="${TOKENPAL_MODEL:-gemma4}"
 PORT="${TOKENPAL_PORT:-8585}"
 MODE=""
+HEADLESS="0"
 
 # ── Argument parsing ────────────────────────────────────────────────────────
 
@@ -31,8 +32,12 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --headless)
+            HEADLESS="1"
+            shift
+            ;;
         -h|--help)
-            echo "Usage: install-linux.sh [--mode client|server|both]"
+            echo "Usage: install-linux.sh [--mode client|server|both] [--headless]"
             echo ""
             echo "Environment variables:"
             echo "  TOKENPAL_DIR    install directory (default: ~/tokenpal)"
@@ -214,6 +219,10 @@ case "$MODE" in
     server) EXTRAS="server,dev" ;;
     both)   EXTRAS="server,dev" ;;
 esac
+# Desktop (PySide6) is included by default; --headless drops it.
+if [[ "$HEADLESS" != "1" ]]; then
+    EXTRAS="$EXTRAS,desktop"
+fi
 
 echo "  Installing tokenpal[$EXTRAS]..."
 pip install -e "$INSTALL_DIR[$EXTRAS]" -q

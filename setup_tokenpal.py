@@ -77,9 +77,12 @@ def detect_platform() -> str:
     return system
 
 
-def pip_extras(plat: str) -> str:
+def pip_extras(plat: str, headless: bool = False) -> str:
     extras = {"macos": "macos,dev", "windows": "windows,dev", "linux": "dev"}
-    return extras.get(plat, "dev")
+    base = extras.get(plat, "dev")
+    if headless:
+        return base
+    return f"{base},desktop"
 
 
 # ── Steps ────────────────────────────────────────────────────────────────────
@@ -126,9 +129,9 @@ def get_venv_python(venv_dir: Path) -> str:
     return str(venv_dir / "bin" / "python3")
 
 
-def install_deps(python: str, plat: str) -> bool:
+def install_deps(python: str, plat: str, headless: bool = False) -> bool:
     step("Installing dependencies")
-    extras = pip_extras(plat)
+    extras = pip_extras(plat, headless=headless)
     print(f"  Running: pip install -e \".[{extras}]\"")
 
     subprocess.run(
@@ -342,6 +345,10 @@ def parse_setup_args() -> argparse.Namespace:
         "--client", action="store_const", dest="mode", const="client",
         help="client-only install (skip Ollama, configure remote server)",
     )
+    parser.add_argument(
+        "--headless", action="store_true",
+        help="skip the Qt desktop extra — terminal UI only",
+    )
     parser.set_defaults(mode="default")
     return parser.parse_args()
 
@@ -366,7 +373,7 @@ def main() -> None:
     venv_dir = setup_venv()
     python = get_venv_python(venv_dir)
 
-    if not install_deps(python, plat):
+    if not install_deps(python, plat, headless=args.headless):
         sys.exit(1)
 
     if mode != "client":
