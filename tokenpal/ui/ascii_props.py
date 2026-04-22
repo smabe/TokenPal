@@ -90,7 +90,7 @@ SUN_SPRITE = PropSprite(
 
 MOON_SPRITE = PropSprite(
     lines=(
-      "     █████     ",
+      "    ▒█████▒    ",
       "   ▓█░░░░████  ",
       "         ░███▒ ",
       "          ░███░",
