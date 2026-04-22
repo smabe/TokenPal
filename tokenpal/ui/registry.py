@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 import pkgutil
 from typing import Any
 
@@ -13,6 +14,27 @@ from tokenpal.util.platform import current_platform
 log = logging.getLogger(__name__)
 
 _OVERLAY_REGISTRY: dict[str, type[AbstractOverlay]] = {}
+
+_TEXTUAL_FALLBACK = "textual"
+
+
+def _qt_unavailable_reason() -> str | None:
+    """Return a short human-readable reason if Qt can't run here, else
+    None. Used by the silent-fallback path in ``resolve_overlay`` when
+    the user asks for ``qt`` but the host can't actually show a window.
+    """
+    if os.environ.get("TOKENPAL_HEADLESS") == "1":
+        return "TOKENPAL_HEADLESS=1"
+    if "qt" not in _OVERLAY_REGISTRY:
+        return "PySide6 not installed (tokenpal[desktop] extra)"
+    # On Linux, a missing DISPLAY / WAYLAND_DISPLAY means no compositor
+    # to attach to. macOS and Windows always have a window server when a
+    # user session is live.
+    if current_platform() == "linux":
+        if not (os.environ.get("DISPLAY")
+                or os.environ.get("WAYLAND_DISPLAY")):
+            return "no DISPLAY / WAYLAND_DISPLAY"
+    return None
 
 
 def register_overlay(cls: type[AbstractOverlay]) -> type[AbstractOverlay]:
@@ -57,6 +79,14 @@ def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
                     log.info("Auto-selected overlay: %s", cls.__name__)
                     return cls(config)
         overlay_name = "tkinter"
+
+    if overlay_name == "qt":
+        reason = _qt_unavailable_reason()
+        if reason is not None:
+            log.info(
+                "qt overlay unavailable (%s) — falling back to textual", reason,
+            )
+            overlay_name = _TEXTUAL_FALLBACK
 
     cls = _OVERLAY_REGISTRY.get(overlay_name)
     if cls is None:

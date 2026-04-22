@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPaintEvent
+from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
@@ -22,6 +22,7 @@ _PHYSICS_HZ = 60
 _TICK_MS = int(1000 / _PHYSICS_HZ)
 _FLING_SAMPLE_WINDOW_S = 0.08  # how much recent cursor motion counts as fling
 _FLING_SAMPLE_MAX = 32          # ring-buffer cap
+_EDGE_DOCK_THRESHOLD = 20       # px from screen edge triggers snap
 
 _FG_COLOR = QColor(BUDDY_GREEN)
 
@@ -177,7 +178,32 @@ class BuddyWindow(QWidget):
             vy = (p1.y() - p0.y()) / span
             self._sim.apply_impulse(vx, vy)
         self._fling_samples.clear()
+        self._maybe_edge_dock()
         # Keep the timer running — the body may still be swinging.
+
+    def _maybe_edge_dock(self) -> None:
+        """Snap the anchor to the nearest screen edge when dropped close
+        to one. Keeps the buddy feeling "sticky" to monitor boundaries
+        and covers the multi-monitor case via QScreen lookup at the
+        anchor's current position."""
+        anchor_x, anchor_y = self._sim.anchor
+        screen = QGuiApplication.screenAt(QPoint(int(anchor_x), int(anchor_y)))
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        geom = screen.availableGeometry()
+        new_x, new_y = anchor_x, anchor_y
+        if anchor_x - geom.left() < _EDGE_DOCK_THRESHOLD:
+            new_x = geom.left()
+        elif geom.right() - anchor_x < _EDGE_DOCK_THRESHOLD:
+            new_x = geom.right()
+        if anchor_y - geom.top() < _EDGE_DOCK_THRESHOLD:
+            new_y = geom.top()
+        elif geom.bottom() - anchor_y < _EDGE_DOCK_THRESHOLD:
+            new_y = geom.bottom()
+        if (new_x, new_y) != (anchor_x, anchor_y):
+            self._sim.set_anchor(new_x, new_y)
 
     # --- Render ----------------------------------------------------------
 

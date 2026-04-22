@@ -15,11 +15,20 @@ def ensure_qapplication(existing: object | None = None) -> object:
     """Return the live ``QApplication`` — reuse if the caller supplied one,
     reuse the global instance if it's already been created, else construct
     a new one. Import Qt lazily so non-Qt overlays don't pay the PySide6
-    cost just by importing this package."""
+    cost just by importing this package.
+
+    Applies ``PassThrough`` hi-DPI scaling on first construction so the
+    buddy renders crisply on Retina / 4K displays without Qt nudging
+    fractional scale factors to integers.
+    """
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
     if existing is not None and isinstance(existing, QApplication):
         return existing
     inst = QApplication.instance()
     if isinstance(inst, QApplication):
         return inst
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough,
+    )
     return QApplication(sys.argv)
