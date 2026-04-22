@@ -126,7 +126,12 @@ class LLMConfig:
 
 @dataclass
 class UIConfig:
-    overlay: str = "textual"
+    # ``qt`` is the default desktop experience (frameless buddy, tray /
+    # menu-bar icon, chat window). When PySide6 isn't installed, or
+    # TOKENPAL_HEADLESS=1, or there's no display on Linux, the resolver
+    # in tokenpal.ui.registry falls back to ``textual`` silently. See
+    # docs/qt-frontend.md and plans/shipped/new-ui-new-me.md.
+    overlay: str = "qt"
     buddy_name: str = "TokenPal"
     font_family: str = "Courier"
     font_size: int = 14

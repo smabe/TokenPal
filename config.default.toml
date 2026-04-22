@@ -97,7 +97,14 @@ temperature = 1.0
 # research     = 120
 
 [ui]
-overlay = "textual"
+# "qt" (default): frameless desktop buddy + tray / menu-bar icon +
+# chat window. Needs PySide6 (installed automatically by the
+# platform installers; headless installs skip it via --headless).
+# "textual": terminal TUI. Used automatically when Qt can't run
+# (no PySide6, no DISPLAY, or TOKENPAL_HEADLESS=1). Set explicitly
+# if you prefer the terminal frontend on a desktop host.
+# "console": minimal ANSI printer; fallback for tiny / remote shells.
+overlay = "qt"
 buddy_name = "TokenPal"
 font_size = 14
 position = "bottom_right"
