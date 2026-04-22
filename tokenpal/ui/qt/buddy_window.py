@@ -12,7 +12,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QGuiApplication, QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
@@ -36,6 +36,12 @@ class BuddyWindow(QWidget):
     any residual cursor velocity is injected as an impulse so a fast
     whip sends the buddy swinging.
     """
+
+    # Fires whenever the body physically moves — either because the
+    # physics tick advanced the simulator or because ``set_frame``
+    # resized the window. Consumers (the speech bubble) use this to
+    # follow the buddy across the screen.
+    position_changed = Signal()
 
     def __init__(
         self,
@@ -124,6 +130,7 @@ class BuddyWindow(QWidget):
         # the width to center the buddy under the anchor.
         offset_x = self.width() // 2
         self.move(int(x) - offset_x, int(y))
+        self.position_changed.emit()
 
     def _on_tick(self) -> None:
         now = time.monotonic()

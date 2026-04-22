@@ -43,6 +43,7 @@ class BuddyTrayIcon(QSystemTrayIcon):
         self,
         on_toggle_buddy: Callable[[], None],
         on_toggle_chat: Callable[[], None],
+        on_options: Callable[[], None],
         on_quit: Callable[[], None],
         parent: QWidget | None = None,
         icon: QIcon | None = None,
@@ -60,6 +61,12 @@ class BuddyTrayIcon(QSystemTrayIcon):
         self._toggle_chat_action = QAction(_HIDE_CHAT_LABEL, menu)
         self._toggle_chat_action.triggered.connect(on_toggle_chat)
         menu.addAction(self._toggle_chat_action)
+
+        menu.addSeparator()
+
+        options_action = QAction("Options…", menu)
+        options_action.triggered.connect(on_options)
+        menu.addAction(options_action)
 
         menu.addSeparator()
 

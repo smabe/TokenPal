@@ -150,6 +150,9 @@ class QtOverlay(AbstractOverlay):
             font_family=self._font_family,
             font_size=self._font_size,
         )
+        # Keep the speech bubble glued to the buddy as he swings — the
+        # physics tick emits `position_changed` after every move.
+        self._buddy.position_changed.connect(self._reposition_bubble)
         self._bubble = BubbleWidget(
             font_family=self._font_family,
             font_size=max(self._font_size - 1, 10),
@@ -176,6 +179,15 @@ class QtOverlay(AbstractOverlay):
             # stays in sync with the window's actual visibility.
             self._do_toggle_chat()
 
+        def _launch_options() -> None:
+            # Route through the existing slash-command dispatcher in
+            # app.py — it already knows how to assemble OptionsModalState
+            # and call back into overlay.open_options_modal. Reusing it
+            # keeps the tray and /options paths identical.
+            cb = self._command_callback
+            if cb is not None:
+                cb("/options")
+
         def _quit() -> None:
             if self._app is not None:
                 self._app.quit()
@@ -183,6 +195,7 @@ class QtOverlay(AbstractOverlay):
         self._tray = BuddyTrayIcon(
             on_toggle_buddy=_toggle_buddy,
             on_toggle_chat=_toggle_chat,
+            on_options=_launch_options,
             on_quit=_quit,
         )
         self._buddy.set_right_click_handler(self._popup_tray_menu)

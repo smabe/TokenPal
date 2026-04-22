@@ -172,6 +172,7 @@ def test_tray_left_click_toggles_buddy(qapp: QApplication) -> None:
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.Trigger)
@@ -183,6 +184,7 @@ def test_tray_double_click_also_toggles(qapp: QApplication) -> None:
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
@@ -199,6 +201,7 @@ def test_tray_context_menu_trigger_does_not_double_fire(
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.Context)
@@ -213,6 +216,7 @@ def test_tray_chat_toggle_label_flips_with_visibility(
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: None,
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=lambda: None,
     )
     tray.set_chat_visible(True)
@@ -226,6 +230,7 @@ def test_tray_unknown_reason_is_ignored(qapp: QApplication) -> None:
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.MiddleClick)

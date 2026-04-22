@@ -54,11 +54,12 @@ def build_shell(app: QApplication | None = None) -> QtShell:
     def _quit() -> None:
         qapp.quit()
 
-    # Pre-brain shell has no chat window to toggle; make the action a
-    # harmless no-op so the menu still renders consistently.
+    # Pre-brain shell has no chat window or options dispatcher; make
+    # those actions harmless no-ops so the menu still renders.
     tray = BuddyTrayIcon(
         on_toggle_buddy=_toggle_buddy,
         on_toggle_chat=lambda: None,
+        on_options=lambda: None,
         on_quit=_quit,
     )
     buddy.set_right_click_handler(
