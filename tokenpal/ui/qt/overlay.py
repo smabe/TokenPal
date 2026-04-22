@@ -170,12 +170,19 @@ class QtOverlay(AbstractOverlay):
             if self._tray is not None:
                 self._tray.set_buddy_visible(not visible)
 
+        def _toggle_chat() -> None:
+            # Funnel through _do_toggle_chat so the tray and the slash
+            # command path share one implementation and the tray label
+            # stays in sync with the window's actual visibility.
+            self._do_toggle_chat()
+
         def _quit() -> None:
             if self._app is not None:
                 self._app.quit()
 
         self._tray = BuddyTrayIcon(
             on_toggle_buddy=_toggle_buddy,
+            on_toggle_chat=_toggle_chat,
             on_quit=_quit,
         )
         self._buddy.set_right_click_handler(self._popup_tray_menu)
@@ -198,6 +205,15 @@ class QtOverlay(AbstractOverlay):
             # NSWindow collectionBehavior can only be set once the
             # native window actually exists — i.e. after show().
             apply_macos_stay_visible(self._buddy)
+        if self._chat is not None:
+            # Show the chat window by default — otherwise the user has
+            # no way to type to the buddy until they find the tray's
+            # Show-chat action. The tray label stays in sync via
+            # set_chat_visible so toggling from the menu still reads
+            # correctly.
+            self._chat.show()
+            if self._tray is not None:
+                self._tray.set_chat_visible(True)
         if self._tray is not None:
             self._tray.show()
         self._app.exec()
@@ -442,10 +458,14 @@ class QtOverlay(AbstractOverlay):
             return
         if self._chat.isVisible():
             self._chat.hide()
+            if self._tray is not None:
+                self._tray.set_chat_visible(False)
         else:
             self._chat.show()
             self._chat.raise_()
             self._chat.focus_input()
+            if self._tray is not None:
+                self._tray.set_chat_visible(True)
 
     def _on_user_submit(self, text: str) -> None:
         # Called on the Qt main thread — safe to touch widgets.

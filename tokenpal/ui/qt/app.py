@@ -54,7 +54,13 @@ def build_shell(app: QApplication | None = None) -> QtShell:
     def _quit() -> None:
         qapp.quit()
 
-    tray = BuddyTrayIcon(on_toggle_buddy=_toggle_buddy, on_quit=_quit)
+    # Pre-brain shell has no chat window to toggle; make the action a
+    # harmless no-op so the menu still renders consistently.
+    tray = BuddyTrayIcon(
+        on_toggle_buddy=_toggle_buddy,
+        on_toggle_chat=lambda: None,
+        on_quit=_quit,
+    )
     buddy.set_right_click_handler(
         lambda global_pos: _popup_tray_menu(tray, global_pos),
     )

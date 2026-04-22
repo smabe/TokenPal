@@ -171,6 +171,7 @@ def test_tray_left_click_toggles_buddy(qapp: QApplication) -> None:
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
+        on_toggle_chat=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.Trigger)
@@ -181,6 +182,7 @@ def test_tray_double_click_also_toggles(qapp: QApplication) -> None:
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
+        on_toggle_chat=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.DoubleClick)
@@ -196,16 +198,34 @@ def test_tray_context_menu_trigger_does_not_double_fire(
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
+        on_toggle_chat=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.Context)
     assert calls == []
 
 
+def test_tray_chat_toggle_label_flips_with_visibility(
+    qapp: QApplication,
+) -> None:
+    """The 'Show chat' / 'Hide chat' menu label must track whatever the
+    overlay reports, otherwise the menu lies about the current state."""
+    tray = BuddyTrayIcon(
+        on_toggle_buddy=lambda: None,
+        on_toggle_chat=lambda: None,
+        on_quit=lambda: None,
+    )
+    tray.set_chat_visible(True)
+    assert tray._toggle_chat_action.text() == "Hide chat"
+    tray.set_chat_visible(False)
+    assert tray._toggle_chat_action.text() == "Show chat"
+
+
 def test_tray_unknown_reason_is_ignored(qapp: QApplication) -> None:
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
+        on_toggle_chat=lambda: None,
         on_quit=lambda: None,
     )
     tray._on_activated(QSystemTrayIcon.ActivationReason.MiddleClick)

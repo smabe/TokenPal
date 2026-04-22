@@ -13,8 +13,10 @@ from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
 
-_HIDE_LABEL = "Hide buddy"
-_SHOW_LABEL = "Show buddy"
+_HIDE_BUDDY_LABEL = "Hide buddy"
+_SHOW_BUDDY_LABEL = "Show buddy"
+_HIDE_CHAT_LABEL = "Hide chat"
+_SHOW_CHAT_LABEL = "Show chat"
 
 # Tray activation reasons that should toggle the buddy directly. On
 # macOS the menu bar icon only responds via its context menu and a
@@ -40,6 +42,7 @@ class BuddyTrayIcon(QSystemTrayIcon):
     def __init__(
         self,
         on_toggle_buddy: Callable[[], None],
+        on_toggle_chat: Callable[[], None],
         on_quit: Callable[[], None],
         parent: QWidget | None = None,
         icon: QIcon | None = None,
@@ -50,9 +53,13 @@ class BuddyTrayIcon(QSystemTrayIcon):
 
         menu = QMenu()
 
-        self._toggle_action = QAction(_HIDE_LABEL, menu)
-        self._toggle_action.triggered.connect(on_toggle_buddy)
-        menu.addAction(self._toggle_action)
+        self._toggle_buddy_action = QAction(_HIDE_BUDDY_LABEL, menu)
+        self._toggle_buddy_action.triggered.connect(on_toggle_buddy)
+        menu.addAction(self._toggle_buddy_action)
+
+        self._toggle_chat_action = QAction(_HIDE_CHAT_LABEL, menu)
+        self._toggle_chat_action.triggered.connect(on_toggle_chat)
+        menu.addAction(self._toggle_chat_action)
 
         menu.addSeparator()
 
@@ -75,4 +82,11 @@ class BuddyTrayIcon(QSystemTrayIcon):
             self._on_toggle_buddy()
 
     def set_buddy_visible(self, visible: bool) -> None:
-        self._toggle_action.setText(_HIDE_LABEL if visible else _SHOW_LABEL)
+        self._toggle_buddy_action.setText(
+            _HIDE_BUDDY_LABEL if visible else _SHOW_BUDDY_LABEL,
+        )
+
+    def set_chat_visible(self, visible: bool) -> None:
+        self._toggle_chat_action.setText(
+            _HIDE_CHAT_LABEL if visible else _SHOW_CHAT_LABEL,
+        )
