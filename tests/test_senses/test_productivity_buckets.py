@@ -28,7 +28,7 @@ def _stats(
 def test_bucket_key_switch_tiers() -> None:
     assert ProductivityStats._bucket_key(_stats(switches_per_hour=3))[1] == "calm"
     assert ProductivityStats._bucket_key(_stats(switches_per_hour=10))[1] == "active"
-    assert ProductivityStats._bucket_key(_stats(switches_per_hour=20))[1] == "restless"
+    assert ProductivityStats._bucket_key(_stats(switches_per_hour=20))[1] == "very_active"
 
 
 def test_bucket_key_time_tiers() -> None:
@@ -53,16 +53,16 @@ def test_summary_omits_drifting_integers() -> None:
 def test_summary_changes_across_buckets() -> None:
     sense = ProductivityStats({})
     calm = sense._build_summary(_stats(switches_per_hour=3))
-    restless = sense._build_summary(_stats(switches_per_hour=20))
-    assert calm != restless
+    very_active = sense._build_summary(_stats(switches_per_hour=20))
+    assert calm != very_active
 
 
 def test_switch_rate_uses_rolling_window_not_session_average(tmp_path: Path) -> None:
-    """Early churn must not keep the rate 'restless' after the user goes AFK.
+    """Early churn must not keep the rate elevated after the user goes AFK.
 
     Scenario: 20 app switches in the first 10 min of a 90-min session, then
     AFK for 80 min. Session-lifetime average would still read ~13/hr (near
-    the restless threshold). The rolling window (last 15 min) must see zero
+    the very_active threshold). The rolling window (last 15 min) must see zero
     recent switches and fall into the 'calm' bucket.
     """
     store = MemoryStore(tmp_path / "prod.db")

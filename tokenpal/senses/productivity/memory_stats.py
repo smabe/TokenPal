@@ -16,7 +16,7 @@ log = logging.getLogger(__name__)
 _MIN_SESSION_MINUTES = 5
 
 # Rolling window for switches_per_hour. Session-lifetime averages linger long
-# after the user goes AFK (early churn keeps the rate "restless" for an hour),
+# after the user goes AFK (early churn keeps the rate elevated for an hour),
 # so the rate is computed over recent activity only.
 _SWITCH_WINDOW_S = 15 * 60
 
@@ -110,7 +110,7 @@ class ProductivityStats(AbstractSense):
             time_bucket = "just_arrived"
 
         if switches >= 15:
-            switch_bucket = "restless"
+            switch_bucket = "very_active"
         elif switches >= 8:
             switch_bucket = "active"
         else:
@@ -192,8 +192,8 @@ class ProductivityStats(AbstractSense):
         elif time_bucket == "settled":
             parts.append(f"Settled into {app_label}")
 
-        if switch_bucket == "restless":
-            parts.append("very restless — bouncing between apps")
+        if switch_bucket == "very_active":
+            parts.append("very active — bouncing between apps")
         elif switch_bucket == "active":
             parts.append("active multitasking across apps")
 
