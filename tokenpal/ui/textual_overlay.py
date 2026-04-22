@@ -1726,6 +1726,9 @@ class TextualOverlay(AbstractOverlay):
         """
         self._buddy_reaction_callback = callback
 
+    def set_voice_name(self, name: str) -> None:
+        self._voice_name = name
+
     def run_loop(self) -> None:
         if self._app:
             self._app.run()

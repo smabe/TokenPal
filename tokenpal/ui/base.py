@@ -1,4 +1,20 @@
-"""Base class for UI overlays."""
+"""Base class for UI overlays.
+
+`AbstractOverlay` is the adapter seam between the brain and any frontend
+(Textual, console, tkinter, Qt). Methods fall into two tiers:
+
+- Abstract: every overlay must implement (``setup``, ``show_buddy``,
+  ``show_speech``, ``hide_speech``, ``run_loop``, ``schedule_callback``,
+  ``teardown``).
+- Optional with no-op defaults: capability surface the brain may invoke on
+  any overlay without ``hasattr`` probing. Overlays that lack the feature
+  inherit a safe no-op; the ones that implement it override.
+
+The no-op defaults are deliberate — they kill silent ``hasattr(overlay,
+...)`` drift in callers (``app.py`` used to gate on ``hasattr(overlay,
+"set_mood")`` etc., which caused features to vanish quietly when a new
+overlay missed a method).
+"""
 
 from __future__ import annotations
 
@@ -7,6 +23,7 @@ from collections.abc import Callable
 from typing import Any, ClassVar
 
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
+from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
 
 class AbstractOverlay(abc.ABC):
@@ -63,6 +80,45 @@ class AbstractOverlay(abc.ABC):
         """Register handler for buddy physical reactions ("poke"/"shake").
         Optional — only the Textual overlay emits these today.
         """
+
+    def load_voice_frames(
+        self,
+        frames: dict[str, BuddyFrame],
+        mood_frames: dict[str, dict[str, BuddyFrame]] | None = None,
+    ) -> None:
+        """Swap in voice-specific ASCII art. Optional — overlays without
+        custom frame support no-op and keep the default buddy."""
+
+    def clear_voice_frames(self) -> None:
+        """Revert to the default built-in frames. Optional."""
+
+    def set_mood(self, mood: str) -> None:
+        """Swap to a mood-specific frame set. Optional."""
+
+    def set_voice_name(self, name: str) -> None:
+        """Record the active voice's display name (used for speech-bubble
+        speaker labels). Optional — overlays that don't render a speaker
+        label ignore this."""
+
+    def toggle_chat_log(self) -> None:
+        """Show/hide the chat log widget. Optional — overlays without a
+        separate chat pane no-op."""
+
+    def set_environment_provider(
+        self,
+        provider: Callable[[], EnvironmentSnapshot] | None,
+    ) -> None:
+        """Wire the brain's ``environment_snapshot`` getter so the overlay
+        can pull weather/idle/sensitive state for its own render loop.
+        Optional — overlays without a particle/physics layer no-op."""
+
+    def set_chat_persist_callback(
+        self,
+        persist: Callable[[str, str, str | None], None] | None,
+        clear: Callable[[], None] | None,
+    ) -> None:
+        """Wire chat-log write-through. Optional — overlays without a
+        persisted chat log no-op."""
 
     def open_selection_modal(
         self,

@@ -224,10 +224,9 @@ def main() -> None:
             lambda t=text: overlay.update_status(t)
         ),
         mood_callback=(
-            (lambda role: overlay.schedule_callback(
+            lambda role: overlay.schedule_callback(
                 lambda r=role: overlay.set_mood(r)
-            ))
-            if hasattr(overlay, "set_mood") else None
+            )
         ),
         memory=memory,
         actions=actions,
@@ -260,24 +259,19 @@ def main() -> None:
     # Load voice-specific buddy art into the overlay
     def _load_voice_art() -> None:
         idle, idle_alt, talking = personality.voice_frames
-        if hasattr(overlay, "_voice_name"):
-            overlay._voice_name = personality.voice_name
+        overlay.set_voice_name(personality.voice_name)
         if idle:
             frames = BuddyFrame.from_voice("custom", idle, idle_alt, talking)
             mood_frame_sets = BuddyFrame.mood_frame_sets(
                 personality.voice_mood_frames,
             )
-            if hasattr(overlay, "load_voice_frames"):
-                overlay.load_voice_frames(frames, mood_frame_sets or None)
-        elif hasattr(overlay, "clear_voice_frames"):
+            overlay.load_voice_frames(frames, mood_frame_sets or None)
+        else:
             overlay.clear_voice_frames()
 
     _load_voice_art()
 
-    # Wire the buddy environment overlay (animated weather/idle/sensitive
-    # reactions). Textual overlay uses it; other overlays no-op.
-    if hasattr(overlay, "set_environment_provider"):
-        overlay.set_environment_provider(brain.environment_snapshot)
+    overlay.set_environment_provider(brain.environment_snapshot)
 
     # Slash command dispatcher
     dispatcher = CommandDispatcher()
@@ -1434,19 +1428,17 @@ def main() -> None:
         memory.set_chat_log_max_persisted(
             config.chat_log.max_persisted if config.chat_log.persist else 0
         )
-        _overlay_setter = getattr(overlay, "set_chat_persist_callback", None)
-        if callable(_overlay_setter):
-            def _persist_chat(
-                speaker: str, text: str, url: str | None,
-            ) -> None:
-                memory.record_chat_entry(
-                    speaker=speaker, text=text, url=url,
-                )
+        def _persist_chat(
+            speaker: str, text: str, url: str | None,
+        ) -> None:
+            memory.record_chat_entry(
+                speaker=speaker, text=text, url=url,
+            )
 
-            def _clear_chat() -> None:
-                memory.clear_chat_log()
+        def _clear_chat() -> None:
+            memory.clear_chat_log()
 
-            _overlay_setter(_persist_chat, _clear_chat)
+        overlay.set_chat_persist_callback(_persist_chat, _clear_chat)
 
         # Hydrate the chat log before the brain thread starts emitting.
         if config.chat_log.persist and config.chat_log.hydrate_on_start > 0:
