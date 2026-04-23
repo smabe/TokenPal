@@ -52,24 +52,42 @@ PySide6. It owns:
   per-character typing animation. Line wrap cached on text + width
   so the 30ms paint tick doesn't re-wrap every frame.
 - `ChatDock` (`qt/chat_window.py`) — the always-visible input + status
-  strip under the buddy. Frameless, translucent, glass-pill `QLineEdit`
-  (glass styling from `qt/_text_fx.py`), status label below. Only the
-  line edit takes focus; the container is `WA_ShowWithoutActivating`
-  and `FocusPolicy.NoFocus` so clicking the strip never steals focus
-  from the user's active app. Follows the buddy across the screen via
-  `BuddyWindow.position_changed` → `QtOverlay._reposition_dock()`. Lines
+  strip. Frameless, translucent, glass-pill `QLineEdit` (glass styling
+  from `qt/_text_fx.py`), status label below. Only the line edit takes
+  focus; the container is `WA_ShowWithoutActivating` and
+  `FocusPolicy.NoFocus` so clicking the strip never steals focus from
+  the user's active app. Reparents between two mount modes: floating
+  top-level window under the buddy (follows via
+  `position_changed` → `_reposition_dock`), or embedded into
+  `ChatHistoryWindow`'s bottom slot when the buddy is hidden. Lines
   starting with `/` route to the command callback; anything else routes
   to the input callback.
 - `ChatHistoryWindow` (`qt/chat_window.py`) — standalone frameless
   translucent chat log with `QTextBrowser` (clickable URLs), transparent
-  viewport, glass-styled scrollbar, and a "Hide" button at bottom-left.
-  Starts hidden; tray menu / `toggle_chat_log` / F2 flip its visibility.
-  Carries the persist/hydrate/link-click contract from the old
-  monolithic `ChatWindow`.
-- `BuddyTrayIcon` (`qt/tray.py`) — `QSystemTrayIcon` with Show/Hide
-  buddy · Quit. Left-click and double-click also toggle the buddy
-  on Windows and Linux; macOS menu-bar icons only respond via the
-  context menu.
+  viewport, glass-styled scrollbar, a glass drag handle at the top
+  (frameless windows have no titlebar, so we paint our own grip), a
+  dock slot below the log for the embedded `ChatDock`, and a "Hide"
+  button at bottom-left. Starts hidden; tray menu / `toggle_chat_log` /
+  F2 flip its visibility. Carries the persist/hydrate/link-click
+  contract from the old monolithic `ChatWindow`.
+- Text legibility: white text on translucent surfaces gets a symmetric
+  `QGraphicsDropShadowEffect` glow (`blur=4, offset=(0,0), alpha=255`,
+  equivalent to CSS `text-shadow: 0 0 4px black`). For `QTextBrowser`
+  the effect is attached to the **viewport**, not the browser frame —
+  `QAbstractScrollArea` paints text into the viewport, so an effect on
+  the viewport casts only from glyph pixels.
+- Dock placement is a state machine driven by `_update_dock_placement`
+  / `_apply_dock_mode(mode)` where `mode ∈ {"floating", "embedded",
+  "hidden"}`. Inputs are `_buddy_user_visible` + `_history_user_visible`
+  tracked as explicit user-intent state (separate from Qt's
+  `isVisible()`, which lies on macOS due to the NSWindow auto-hide on
+  app deactivate). `_toggle_buddy` and `_do_toggle_chat` flip their own
+  flag and call `_update_dock_placement()` — neither window's toggle
+  touches the other's state.
+- `BuddyTrayIcon` (`qt/tray.py`) — `QSystemTrayIcon`. Clicking the
+  icon only pops the context menu (Show/Hide buddy · Show/Hide chat log
+  · Options… · Quit); no direct single-click or double-click toggle, to
+  avoid the macOS menu-bar-click-accidentally-hides-buddy footgun.
 - Modals: `ConfirmDialog`, `SelectionDialog` (`qt/modals.py`),
   `OptionsDialog` (`qt/options_dialog.py`). `_OneShotCallback` mixin
   guarantees the caller's `on_result` fires exactly once across
@@ -188,7 +206,8 @@ voice-frame test matrix covers it end-to-end.
   pre-setup buffering, `_on_user_submit` dispatch, history hidden by
   default, `toggle_chat_log` flips history visibility, status prefix
   composition order.
-- `tests/test_qt_dock_follow.py` — chat dock moves with the buddy via
+- `tests/test_qt_dock_follow.py` — dock placement state machine
+  (floating / embedded / hidden) and chat dock moves with the buddy via
   `position_changed` and sits below the buddy's bottom edge.
 - `tests/test_qt_edge_dock.py` — edge snaps on all 4 sides + mid-screen
   no-op.

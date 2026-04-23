@@ -145,7 +145,12 @@ class ChatDock(QWidget):
             QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred,
         )
         self._status.setMinimumWidth(0)
-        apply_drop_shadow(self._status, blur=8, offset=(0, 1))
+        apply_drop_shadow(
+            self._status,
+            blur=4,
+            offset=(0, 0),
+            color=QColor(0, 0, 0, 255),
+        )
         layout.addWidget(self._status, 0)
 
         # QLineEdit's default minimum width is substantial — shrink it
@@ -208,12 +213,21 @@ class ChatHistoryWindow(QWidget):
         self._log.viewport().setAutoFillBackground(False)
         self._log.setFrameShape(QTextBrowser.Shape.NoFrame)
         self._log.setStyleSheet(
-            "QTextBrowser { background: rgba(0, 0, 0, 0.28); "
-            "color: #ffffff; border-radius: 10px; padding: 8px; }"
+            "QTextBrowser { background: transparent; "
+            "color: #ffffff; padding: 8px; }"
             + glass_scrollbar_stylesheet()
         )
+        # Symmetric glow rather than a directional drop shadow: offset
+        # (0, 0) with a short blur radius gives a dense halo wrapping
+        # every glyph on all sides — equivalent of CSS
+        # ``text-shadow: 0 0 4px black``. Applied to the viewport so
+        # only glyph pixels cast (QAbstractScrollArea paints text
+        # there, not on the outer frame).
         apply_drop_shadow(
-            self._log, blur=12, offset=(0, 2), color=QColor(0, 0, 0, 200),
+            self._log.viewport(),
+            blur=4,
+            offset=(0, 0),
+            color=QColor(0, 0, 0, 255),
         )
         layout.addWidget(self._log, 1)
 
