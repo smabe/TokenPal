@@ -8,8 +8,8 @@ app-layer dispatcher is untouched. Sections:
 - Server / Model picker (active server's models shown; pending server
   + model picks applied on Save)
 - Custom server URL
-- Weather zip code (immediate Apply → dismiss with ``set_zip``)
-- Wifi label (immediate Apply → dismiss with ``set_wifi_label``)
+- Weather zip code (Apply fires ``set_zip`` immediately; dialog stays open)
+- Wifi label (Apply fires ``set_wifi_label`` immediately; dialog stays open)
 - Launcher buttons (Cloud / Senses / Tools / Voice → invoke
   ``on_open_subdialog`` so the overlay opens the target as a sibling
   window without closing this one; pending picks stay pending)
@@ -74,9 +74,10 @@ _WIFI_LABEL_MAX = 64
 
 
 class OptionsDialog(QDialog, _OneShotCallback):
-    """Umbrella options dialog. ``on_result`` fires exactly once —
-    ``OptionsModalResult`` on any save/apply/launcher action,
-    ``None`` on cancel / Esc / close."""
+    """Umbrella options dialog. ``on_result`` may fire multiple times:
+    once per in-dialog Apply (zip / wifi partial results), then exactly
+    once on Save (full result) or Cancel/Esc/close (``None``). Once the
+    terminal Save/Cancel has fired, further invocations are suppressed."""
 
     def __init__(
         self,
@@ -321,6 +322,9 @@ class OptionsDialog(QDialog, _OneShotCallback):
         row.addWidget(self._zip_input, 1)
         row.addWidget(apply_btn)
         parent.addLayout(row)
+        self._zip_status = QLabel("")
+        self._zip_status.setStyleSheet("color: #888")
+        parent.addWidget(self._zip_status)
 
     def _build_wifi(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Wifi label"))
@@ -341,6 +345,9 @@ class OptionsDialog(QDialog, _OneShotCallback):
         row.addWidget(self._wifi_input, 1)
         row.addWidget(apply_btn)
         parent.addLayout(row)
+        self._wifi_status = QLabel("")
+        self._wifi_status.setStyleSheet("color: #888")
+        parent.addWidget(self._wifi_status)
 
     def _build_launchers(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Settings shortcuts"))
@@ -477,25 +484,31 @@ class OptionsDialog(QDialog, _OneShotCallback):
         raw = self._zip_input.text().strip()
         if not raw:
             return
-        self._deliver(
-            self._on_result,
-            OptionsModalResult(
-                max_persisted=self._state.max_persisted, set_zip=raw,
-            ),
-        )
-        self.accept()
+        self._deliver_partial(OptionsModalResult(
+            max_persisted=self._state.max_persisted, set_zip=raw,
+        ))
+        self._zip_status.setText(f"Applied: {raw}")
+        self._zip_input.clear()
 
     def _on_apply_wifi(self) -> None:
         raw = self._wifi_input.text().strip()
         if not raw:
             return
-        self._deliver(
-            self._on_result,
-            OptionsModalResult(
-                max_persisted=self._state.max_persisted, set_wifi_label=raw,
-            ),
-        )
-        self.accept()
+        self._deliver_partial(OptionsModalResult(
+            max_persisted=self._state.max_persisted, set_wifi_label=raw,
+        ))
+        self._wifi_status.setText(f"Applied: {raw}")
+        self._wifi_input.clear()
+
+    def _deliver_partial(self, result: OptionsModalResult) -> None:
+        """Fire ``on_result`` without arming the one-shot guard, so later
+        Apply clicks (and the terminal Save) still reach the app layer."""
+        if getattr(self, "_fired", False):
+            return
+        try:
+            self._on_result(result)
+        except Exception:
+            log.exception("%s partial callback raised", self._callback_name)
 
     def _on_launch(self, target: str) -> None:
         nav: NavigateTo = target  # type: ignore[assignment]

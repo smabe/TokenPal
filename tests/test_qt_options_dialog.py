@@ -84,22 +84,40 @@ def test_clear_history_button_sets_flag(qapp: QApplication) -> None:
     assert captured[0].clear_history is True
 
 
-def test_zip_apply_dismisses_with_set_zip(qapp: QApplication) -> None:
+def test_zip_apply_fires_partial_and_keeps_dialog_open(
+    qapp: QApplication,
+) -> None:
     captured: list[OptionsModalResult | None] = []
     dlg = OptionsDialog(_state(), captured.append)
     dlg._zip_input.setText("94103")
     dlg._on_apply_zip()
     assert captured[0] is not None
     assert captured[0].set_zip == "94103"
+    # One-shot guard must NOT be armed — Save must still be able to fire.
+    assert dlg._fired is False
+    assert "94103" in dlg._zip_status.text()
+    # Subsequent Save still delivers a final result.
+    dlg._on_save()
+    assert len(captured) == 2
+    assert captured[1] is not None
+    assert captured[1].set_zip is None
 
 
-def test_wifi_apply_dismisses_with_set_wifi_label(qapp: QApplication) -> None:
+def test_wifi_apply_fires_partial_and_keeps_dialog_open(
+    qapp: QApplication,
+) -> None:
     captured: list[OptionsModalResult | None] = []
     dlg = OptionsDialog(_state(), captured.append)
     dlg._wifi_input.setText("office")
     dlg._on_apply_wifi()
     assert captured[0] is not None
     assert captured[0].set_wifi_label == "office"
+    assert dlg._fired is False
+    assert "office" in dlg._wifi_status.text()
+    dlg._on_save()
+    assert len(captured) == 2
+    assert captured[1] is not None
+    assert captured[1].set_wifi_label is None
 
 
 def test_launcher_button_invokes_on_open_subdialog(qapp: QApplication) -> None:
