@@ -68,6 +68,25 @@ from tokenpal.util.logging import setup_logging
 log = logging.getLogger(__name__)
 
 
+def _apply_font_change(
+    section: str,
+    cfg: Any,
+    live_apply: Callable[[Any], None],
+) -> None:
+    """Persist a font change to config.toml and push it live to the overlay.
+
+    ``section`` is ``chat_font`` or ``bubble_font``. Logs but does not crash
+    if the disk write fails — the in-memory state and overlay still update.
+    """
+    from tokenpal.config.chatlog_writer import set_font
+
+    try:
+        set_font(section, cfg)
+    except OSError as e:
+        log.warning("could not persist ui.%s: %s", section, e)
+    live_apply(cfg)
+
+
 def main() -> None:
     args = parse_args()
 
@@ -174,6 +193,17 @@ def main() -> None:
 
     # Set up the overlay (must happen on main thread)
     overlay.setup()
+
+    # Persist chat-font bumps from the Cmd/Ctrl +/-/0 shortcuts. The overlay
+    # owns the live FontConfig; we just write it back to config.toml and
+    # mirror the change into the in-memory dataclass so /options reopens
+    # with the up-to-date values.
+    if hasattr(overlay, "set_chat_font_persist_callback"):
+        def _persist_chat_font_bump(new_cfg: Any) -> None:
+            _apply_font_change("chat_font", new_cfg, lambda _c: None)
+            config.ui.chat_font = new_cfg
+
+        overlay.set_chat_font_persist_callback(_persist_chat_font_bump)
 
     def _agent_log(
         text: str, *, markup: bool = False, url: str | None = None,
@@ -632,6 +662,9 @@ def main() -> None:
             available_models=tuple(getattr(llm, "available_models", ())),
             weather_label=config.weather.location_label,
             current_wifi_label="",
+            chat_history_opacity=cl.background_opacity,
+            chat_font=config.ui.chat_font,
+            bubble_font=config.ui.bubble_font,
         )
 
         def on_save(result: OptionsModalResult | None) -> None:
@@ -690,9 +723,44 @@ def main() -> None:
 
             # Navigation was None — apply field edits.
             from tokenpal.config.chatlog_writer import (
+                clamp_background_opacity,
                 clamp_max_persisted,
+                set_background_opacity,
                 set_max_persisted,
             )
+
+            if result.set_chat_history_opacity is not None:
+                new_op = clamp_background_opacity(
+                    result.set_chat_history_opacity,
+                )
+                if abs(new_op - cl.background_opacity) >= 0.005:
+                    try:
+                        set_background_opacity(new_op)
+                        cl.background_opacity = new_op
+                        overlay.set_chat_history_opacity(new_op)
+                        overlay.log_buddy_message(
+                            f"/options: chat background opacity = "
+                            f"{int(round(new_op * 100))}%.",
+                        )
+                    except OSError as e:
+                        overlay.log_buddy_message(
+                            f"/options: could not write config: {e}",
+                        )
+
+            if result.set_chat_font is not None:
+                _apply_font_change(
+                    "chat_font", result.set_chat_font,
+                    overlay.set_chat_font,
+                )
+                config.ui.chat_font = result.set_chat_font
+                overlay.log_buddy_message("/options: saved chat font.")
+            if result.set_bubble_font is not None:
+                _apply_font_change(
+                    "bubble_font", result.set_bubble_font,
+                    overlay.set_bubble_font,
+                )
+                config.ui.bubble_font = result.set_bubble_font
+                overlay.log_buddy_message("/options: saved speech bubble font.")
 
             new_max = clamp_max_persisted(result.max_persisted)
             if new_max != cl.max_persisted:
@@ -1424,6 +1492,9 @@ def main() -> None:
     # Chat-log persistence: write-through on every buddy/user line, plus a
     # clear hook for Ctrl+L. MemoryStore holds the cap so the hot path
     # doesn't pay a config lookup or SELECT COUNT per insert.
+    if config.chat_log.background_opacity > 0.0:
+        overlay.set_chat_history_opacity(config.chat_log.background_opacity)
+
     if memory is not None:
         memory.set_chat_log_max_persisted(
             config.chat_log.max_persisted if config.chat_log.persist else 0

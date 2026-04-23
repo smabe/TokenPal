@@ -176,6 +176,58 @@ Hi-DPI scaling: `ensure_qapplication()` in `qt/__init__.py` sets
 `QApplication` is constructed so the buddy renders crisply on Retina
 and 4K without Qt snapping fractional scale factors to integers.
 
+## Font sizing and style
+
+Two separate `FontConfig` blocks live under `[ui]` in config.toml:
+
+```toml
+[ui.chat_font]
+family = ""          # empty → Qt default. Any OS-installed family name works.
+size_pt = 13         # 0 → fallback (chat = 13 pt).
+bold = false
+italic = false
+underline = false
+
+[ui.bubble_font]
+# Same fields; 0 → buddy overlay font size minus 1.
+```
+
+Schema: `FontConfig` in `tokenpal/config/schema.py`, registered in
+`tokenpal/config/loader.py:_NESTED_FIELDS` so the TOML section
+deserializes as a dataclass instance. Writer: `set_font(section, cfg)`
+in `tokenpal/config/chatlog_writer.py` — mirrors the existing
+`set_max_persisted` / `set_background_opacity` pattern.
+
+Keyboard shortcuts (chat window only, dock + history):
+
+- `Cmd +` / `Ctrl +` → bump chat font size by 1
+- `Cmd -` / `Ctrl -` → shrink by 1
+- `Cmd 0` / `Ctrl 0` → reset to 13 pt baseline
+
+`QKeySequence.StandardKey.ZoomIn/ZoomOut` maps to Cmd on macOS and Ctrl
+elsewhere natively — one binding, correct on every platform. The reset
+uses the string `"Ctrl+0"`; Qt auto-remaps Ctrl to Cmd on macOS. Size
+clamped to `[8, 48]` via `clamp_font_size` in `chatlog_writer.py`. The
+speech bubble has no keyboard shortcut — it doesn't own focus.
+
+Plumbing in `QtOverlay`: `_handle_chat_zoom(delta)` mutates the live
+`_chat_font: FontConfig`, applies to both `ChatDock` and
+`ChatHistoryWindow` via `apply_font(QFont)`, then fires
+`set_chat_font_persist_callback` so `app.py` can write to disk.
+`set_chat_font(cfg)` / `set_bubble_font(cfg)` + matching `apply_font_config`
+on `SpeechBubble` handle dialog-driven changes. The bubble re-layouts
+and invalidates its wrap cache on font change — `setFont(font)` alone
+leaves stale `fontMetrics` cached values.
+
+Options dialog (`qt/options_dialog.py::_build_font_group`): two
+identical groups — family `QFontComboBox`, size `QSpinBox`, three
+checkboxes (bold/italic/underline), and a live-preview `QLabel`.
+`_FontGroupWidgets.baseline` snapshots widget state after construction
+so the save path only emits a `FontConfig` result if the user actually
+changed something (Qt's font combo auto-picks a family even when the
+stored config has `family=""`, so comparing against the passed-in
+`initial` would false-positive).
+
 ## Mood and voice frame swaps (Phase 4 TODO)
 
 `QtOverlay.set_mood(mood)` currently only stores `_current_mood`.

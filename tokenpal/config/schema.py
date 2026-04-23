@@ -125,6 +125,19 @@ class LLMConfig:
 
 
 @dataclass
+class FontConfig:
+    # Empty family = use the widget's platform default. Size 0 = inherit
+    # (chat defaults to 13, bubble inherits buddy overlay size - 1 when
+    # left unset). Style flags compose: bold + italic + underline all
+    # independently toggleable.
+    family: str = ""
+    size_pt: int = 0
+    bold: bool = False
+    italic: bool = False
+    underline: bool = False
+
+
+@dataclass
 class UIConfig:
     # ``qt`` is the default desktop experience (frameless buddy, tray /
     # menu-bar icon, chat window). When PySide6 isn't installed, or
@@ -141,6 +154,10 @@ class UIConfig:
     font_size: int = 14
     position: str = "bottom_right"
     chat_log_width: int = 40
+    # Per-surface typography. Chat font is also driven live by the
+    # Cmd/Ctrl +/-/0 shortcuts inside the chat window.
+    chat_font: FontConfig = field(default_factory=FontConfig)
+    bubble_font: FontConfig = field(default_factory=FontConfig)
 
 
 @dataclass
@@ -427,6 +444,8 @@ class ChatLogConfig:
     persist: bool = True
     max_persisted: int = 200
     hydrate_on_start: int = 100
+    # 0.0 = fully transparent (legacy behavior), 1.0 = solid dark panel.
+    background_opacity: float = 0.0
 
 
 @dataclass

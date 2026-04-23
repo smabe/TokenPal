@@ -9,8 +9,17 @@ from __future__ import annotations
 from collections.abc import Callable
 from html import escape
 
-from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QColor, QMouseEvent
+from PySide6.QtCore import QPoint, QRectF, Qt
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QShortcut,
+)
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -22,6 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from tokenpal.config.chatlog_writer import clamp_background_opacity
 from tokenpal.ui.chat_format import format_chat_ts
 from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
@@ -102,9 +112,11 @@ class ChatDock(QWidget):
         self,
         *,
         on_submit: Callable[[str], None] | None = None,
+        on_zoom: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__()
         self._on_submit = on_submit
+        _install_zoom_shortcuts(self, on_zoom)
 
         self.setWindowFlags(transparent_window_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -178,6 +190,9 @@ class ChatDock(QWidget):
         back out of an embedded layout that stretched the widget."""
         self.resize(_DOCK_DEFAULT_WIDTH, _DOCK_INPUT_HEIGHT + 26)
 
+    def apply_font(self, font: QFont) -> None:
+        self._input.setFont(font)
+
 
 class ChatHistoryWindow(QWidget):
     """Frameless translucent scrollable chat history with Hide button.
@@ -189,11 +204,13 @@ class ChatHistoryWindow(QWidget):
         *,
         buddy_name: str = "TokenPal",
         on_hide: Callable[[], None] | None = None,
+        on_zoom: Callable[[int], None] | None = None,
     ) -> None:
         super().__init__()
         self.setWindowTitle(f"{buddy_name} — chat")
         self.resize(*_HISTORY_DEFAULT_SIZE)
         self._on_hide = on_hide
+        _install_zoom_shortcuts(self, on_zoom)
 
         self.setWindowFlags(transparent_window_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
@@ -217,6 +234,8 @@ class ChatHistoryWindow(QWidget):
             "color: #ffffff; padding: 8px; }"
             + glass_scrollbar_stylesheet()
         )
+        self._background_opacity: float = 0.0
+        self._background_brush = QBrush(QColor(0, 0, 0, 0))
         # Symmetric glow rather than a directional drop shadow: offset
         # (0, 0) with a short blur radius gives a dense halo wrapping
         # every glyph on all sides — equivalent of CSS
@@ -249,6 +268,22 @@ class ChatHistoryWindow(QWidget):
         row.addWidget(self._hide_button, 0, Qt.AlignmentFlag.AlignLeft)
         row.addStretch(1)
         layout.addLayout(row)
+
+    def set_background_opacity(self, opacity: float) -> None:
+        self._background_opacity = clamp_background_opacity(opacity)
+        alpha = int(round(self._background_opacity * 255))
+        self._background_brush = QBrush(QColor(0, 0, 0, alpha))
+        self.update()
+
+    def paintEvent(self, event: QPaintEvent) -> None:
+        if self._background_opacity > 0.0:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._background_brush)
+            painter.drawRoundedRect(QRectF(self.rect()), 10.0, 10.0)
+            painter.end()
+        super().paintEvent(event)
 
     def embed_dock(self, dock: QWidget) -> None:
         """Mount the chat dock inside this window's bottom slot.
@@ -314,3 +349,27 @@ class ChatHistoryWindow(QWidget):
 
     def clear_log(self) -> None:
         self._log.clear()
+
+    def apply_font(self, font: QFont) -> None:
+        self._log.setFont(font)
+
+
+def _install_zoom_shortcuts(
+    widget: QWidget, on_zoom: Callable[[int], None] | None,
+) -> None:
+    """Wire Cmd/Ctrl +/-/0 shortcuts that call ``on_zoom`` with +1, -1, 0.
+
+    ``StandardKey.ZoomIn/ZoomOut`` maps to Cmd on macOS and Ctrl elsewhere.
+    The reset binding uses ``Ctrl+0`` which Qt auto-remaps to Cmd+0 on macOS.
+    No-op when ``on_zoom`` is None.
+    """
+    if on_zoom is None:
+        return
+    for key, delta in (
+        (QKeySequence.StandardKey.ZoomIn, +1),
+        (QKeySequence.StandardKey.ZoomOut, -1),
+        (QKeySequence("Ctrl+0"), 0),
+    ):
+        QShortcut(key, widget).activated.connect(
+            lambda d=delta: on_zoom(d),
+        )

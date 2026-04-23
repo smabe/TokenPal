@@ -32,6 +32,7 @@ from tokenpal.config.chatlog_writer import (
     MIN_PERSISTED,
     clamp_max_persisted,
 )
+from tokenpal.config.schema import FontConfig
 
 NavigateTo = Literal["cloud", "senses", "tools", "voice"]
 
@@ -70,6 +71,9 @@ class OptionsModalState:
     available_models: tuple[str, ...] = field(default_factory=tuple)
     weather_label: str = ""
     current_wifi_label: str = ""
+    chat_history_opacity: float = 0.0
+    chat_font: FontConfig = field(default_factory=FontConfig)
+    bubble_font: FontConfig = field(default_factory=FontConfig)
 
 
 @dataclass(frozen=True)
@@ -90,6 +94,9 @@ class OptionsModalResult:
     switch_model_to: str | None = None
     set_zip: str | None = None
     set_wifi_label: str | None = None
+    set_chat_history_opacity: float | None = None
+    set_chat_font: FontConfig | None = None
+    set_bubble_font: FontConfig | None = None
 
 
 class OptionsModal(ModalScreen[OptionsModalResult | None]):

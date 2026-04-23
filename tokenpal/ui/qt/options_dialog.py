@@ -24,12 +24,15 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
+    QFontComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -37,15 +40,22 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QScrollArea,
+    QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
 from tokenpal.config.chatlog_writer import (
+    MAX_FONT_SIZE,
     MAX_PERSISTED,
+    MIN_FONT_SIZE,
     MIN_PERSISTED,
+    clamp_background_opacity,
+    clamp_font_size,
     clamp_max_persisted,
 )
+from tokenpal.config.schema import FontConfig
 from tokenpal.ui.options_modal import (
     NavigateTo,
     OptionsModalResult,
@@ -53,6 +63,7 @@ from tokenpal.ui.options_modal import (
     _canon_url,
     _same_server,
 )
+from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.modals import _OneShotCallback
 
 log = logging.getLogger(__name__)
@@ -71,6 +82,7 @@ class OptionsDialog(QDialog, _OneShotCallback):
         state: OptionsModalState,
         on_result: Callable[[OptionsModalResult | None], None],
         parent: QWidget | None = None,
+        on_opacity_preview: Callable[[float], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Options")
@@ -78,6 +90,10 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self.resize(560, 640)
         self._state = state
         self._on_result = on_result
+        self._on_opacity_preview = on_opacity_preview
+        self._initial_opacity = clamp_background_opacity(
+            state.chat_history_opacity,
+        )
         self._fired = False
         self._callback_name = "OptionsDialog"
 
@@ -95,6 +111,12 @@ class OptionsDialog(QDialog, _OneShotCallback):
         body_layout = QVBoxLayout(body)
 
         self._build_chat_history(body_layout)
+        self._chat_font_widgets = self._build_font_group(
+            body_layout, "Chat font", state.chat_font,
+        )
+        self._bubble_font_widgets = self._build_font_group(
+            body_layout, "Speech bubble font", state.bubble_font,
+        )
         self._build_server_model(body_layout)
         self._build_custom_server(body_layout)
         self._build_weather(body_layout)
@@ -137,6 +159,82 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._clear_button = QPushButton("Clear history now")
         self._clear_button.clicked.connect(self._on_clear_history)
         parent.addWidget(self._clear_button)
+
+        initial_pct = int(round(
+            clamp_background_opacity(self._state.chat_history_opacity) * 100,
+        ))
+        self._opacity_label = QLabel(
+            f"Background opacity: {initial_pct}%",
+        )
+        self._opacity_label.setStyleSheet("color: #888")
+        parent.addWidget(self._opacity_label)
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setRange(0, 100)
+        self._opacity_slider.setValue(initial_pct)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        parent.addWidget(self._opacity_slider)
+
+    def _build_font_group(
+        self, parent: QVBoxLayout, title: str, initial: FontConfig,
+    ) -> _FontGroupWidgets:
+        """Compose a font picker: family combo, size spinner, bold/italic/
+        underline checkboxes, and a live preview. Returns the widget bundle
+        so the save path can read back the values."""
+        parent.addWidget(_section_header(title))
+        parent.addWidget(_section_help(
+            "Pick a family installed on this machine. Size 8 - 48. "
+            "Leave family empty for the default.",
+        ))
+        family = QFontComboBox()
+        if initial.family:
+            family.setCurrentText(initial.family)
+        parent.addWidget(family)
+
+        row = QHBoxLayout()
+        size = QSpinBox()
+        size.setRange(MIN_FONT_SIZE, MAX_FONT_SIZE)
+        size.setValue(
+            clamp_font_size(initial.size_pt) if initial.size_pt > 0 else 13,
+        )
+        size.setSuffix(" pt")
+        row.addWidget(QLabel("Size"))
+        row.addWidget(size)
+        bold = QCheckBox("Bold")
+        bold.setChecked(initial.bold)
+        italic = QCheckBox("Italic")
+        italic.setChecked(initial.italic)
+        underline = QCheckBox("Underline")
+        underline.setChecked(initial.underline)
+        for cb in (bold, italic, underline):
+            row.addWidget(cb)
+        row.addStretch(1)
+        row_widget = QWidget()
+        row_widget.setLayout(row)
+        parent.addWidget(row_widget)
+
+        preview = QLabel("The quick brown fox jumps over the lazy dog.")
+        preview.setStyleSheet("color: #ccc; padding: 4px 0;")
+        parent.addWidget(preview)
+
+        widgets = _FontGroupWidgets(
+            family=family, size=size, bold=bold, italic=italic,
+            underline=underline, preview=preview, initial=initial,
+        )
+        # Snapshot the widget state AFTER Qt has populated combo boxes and
+        # honored our .setValue calls. Comparing user-visible state against
+        # this baseline avoids a false "changed" diff on the first open,
+        # where QFontComboBox auto-picks an arbitrary family even when the
+        # stored config is empty.
+        widgets.baseline = widgets.read()
+
+        def refresh_preview() -> None:
+            preview.setFont(qt_font_from_config(widgets.read()))
+        family.currentFontChanged.connect(lambda _f: refresh_preview())
+        size.valueChanged.connect(lambda _v: refresh_preview())
+        for cb in (bold, italic, underline):
+            cb.toggled.connect(lambda _t: refresh_preview())
+        refresh_preview()
+        return widgets
 
     def _build_server_model(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Server / Model"))
@@ -339,6 +437,13 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._model_header.setText(self._model_header_text())
         self._populate_model_list()
 
+    def _on_opacity_changed(self, value: int) -> None:
+        self._opacity_label.setText(f"Background opacity: {value}%")
+        if self._on_opacity_preview is not None:
+            self._on_opacity_preview(
+                clamp_background_opacity(value / 100.0),
+            )
+
     def _on_apply_custom_server(self) -> None:
         url = self._custom_server_input.text().strip()
         if not url:
@@ -355,6 +460,8 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self.accept()
 
     def _on_cancel(self) -> None:
+        if self._on_opacity_preview is not None:
+            self._on_opacity_preview(self._initial_opacity)
         self._deliver(self._on_result, None)
         self.reject()
 
@@ -407,6 +514,24 @@ class OptionsDialog(QDialog, _OneShotCallback):
             navigate_to=None,
             switch_server_to=self._pending_server,
             switch_model_to=self._pending_model,
+            set_chat_history_opacity=self._read_opacity(),
+            set_chat_font=self._read_font_if_changed(self._chat_font_widgets),
+            set_bubble_font=self._read_font_if_changed(self._bubble_font_widgets),
+        )
+
+    def _read_font_if_changed(
+        self, w: _FontGroupWidgets,
+    ) -> FontConfig | None:
+        """Return the current widget values only if they differ from the
+        baseline captured at dialog construction time."""
+        current = w.read()
+        if w.baseline is not None and current == w.baseline:
+            return None
+        return current
+
+    def _read_opacity(self) -> float:
+        return clamp_background_opacity(
+            self._opacity_slider.value() / 100.0,
         )
 
     def _read_max_persisted(self) -> int:
@@ -420,6 +545,30 @@ class OptionsDialog(QDialog, _OneShotCallback):
             # the fallback so a weird paste + programmatic setText
             # doesn't crash Save.
             return self._state.max_persisted
+
+
+@dataclass
+class _FontGroupWidgets:
+    family: QFontComboBox
+    size: QSpinBox
+    bold: QCheckBox
+    italic: QCheckBox
+    underline: QCheckBox
+    preview: QLabel
+    initial: FontConfig
+    baseline: FontConfig | None = None  # snapshotted after widgets render
+
+    def read(self) -> FontConfig:
+        # Empty currentText means "use Qt's default" — preserve that as
+        # empty family so downstream callers pick their own fallback.
+        family_text = self.family.currentText().strip()
+        return FontConfig(
+            family=family_text,
+            size_pt=clamp_font_size(self.size.value()),
+            bold=self.bold.isChecked(),
+            italic=self.italic.isChecked(),
+            underline=self.underline.isChecked(),
+        )
 
 
 def _section_header(text: str) -> QLabel:

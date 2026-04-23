@@ -56,13 +56,17 @@ def test_save_returns_result_with_current_max_persisted(
     dlg = OptionsDialog(_state(), captured.append)
     dlg._max_persisted_input.setText("150")
     dlg._on_save()
-    assert captured == [OptionsModalResult(
-        max_persisted=150,
-        clear_history=False,
-        navigate_to=None,
-        switch_server_to=None,
-        switch_model_to=None,
-    )]
+    assert len(captured) == 1
+    result = captured[0]
+    assert result is not None
+    assert result.max_persisted == 150
+    assert result.clear_history is False
+    assert result.navigate_to is None
+    assert result.switch_server_to is None
+    assert result.switch_model_to is None
+    # No font interaction → None (baselined at dialog construction).
+    assert result.set_chat_font is None
+    assert result.set_bubble_font is None
 
 
 def test_cancel_fires_none(qapp: QApplication) -> None:

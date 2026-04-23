@@ -16,15 +16,19 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication
 
+from tokenpal.config.chatlog_writer import clamp_font_size
+from tokenpal.config.schema import FontConfig
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
+from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
 from tokenpal.ui.qt.cloud_dialog import CloudDialog
@@ -46,6 +50,17 @@ log = logging.getLogger(__name__)
 _BUBBLE_HIDE_DELAY_MS = 6500  # how long a bubble lingers before auto-hide
 _BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
 _DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
+_CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
+
+
+def _to_font_config(raw: Any) -> FontConfig:
+    """Coerce a FontConfig, a dict, or ``None`` into a ``FontConfig``."""
+    if isinstance(raw, FontConfig):
+        return raw
+    if isinstance(raw, dict):
+        valid = {f.name for f in dataclass_fields(FontConfig)}
+        return FontConfig(**{k: v for k, v in raw.items() if k in valid})
+    return FontConfig()
 
 
 def _default_monospace_family() -> str:
@@ -101,6 +116,13 @@ class QtOverlay(AbstractOverlay):
         )
         self._font_size: int = int(config.get("font_size", 14))
 
+        # Per-surface font configs. The dataclass loader (issue #16) turns
+        # [ui.chat_font] / [ui.bubble_font] into FontConfig instances;
+        # dataclasses.asdict then flattens them to plain dicts before the
+        # registry hands them off. Accept either shape for resilience.
+        self._chat_font: FontConfig = _to_font_config(config.get("chat_font"))
+        self._bubble_font: FontConfig = _to_font_config(config.get("bubble_font"))
+
         self._app: QApplication | None = None
         self._bridge: _UIBridge | None = None
         self._buddy: BuddyWindow | None = None
@@ -120,6 +142,9 @@ class QtOverlay(AbstractOverlay):
             Callable[[str, str, str | None], None] | None
         ) = None
         self._chat_clear_callback: Callable[[], None] | None = None
+        self._chat_font_persist_callback: (
+            Callable[[FontConfig], None] | None
+        ) = None
 
         # Pre-setup buffers. The brain may call any adapter method before
         # setup() runs; stash the payload and drain on mount.
@@ -187,7 +212,10 @@ class QtOverlay(AbstractOverlay):
             font_family=self._font_family,
             font_size=max(self._font_size - 1, 10),
         )
-        self._dock = ChatDock(on_submit=self._on_user_submit)
+        self._dock = ChatDock(
+            on_submit=self._on_user_submit,
+            on_zoom=self._handle_chat_zoom,
+        )
         self._dock_docked: bool = False
         # User-intent visibility tracked separately from Qt's isVisible()
         # — macOS auto-hides frameless translucent windows on app
@@ -197,7 +225,9 @@ class QtOverlay(AbstractOverlay):
         self._history = ChatHistoryWindow(
             buddy_name=self._buddy_name,
             on_hide=self._do_toggle_chat,
+            on_zoom=self._handle_chat_zoom,
         )
+        self._apply_chat_font_live()
 
         def _toggle_buddy() -> None:
             if self._buddy is None:
@@ -429,10 +459,73 @@ class QtOverlay(AbstractOverlay):
         self._post(lambda: self._do_open_options_modal(state, on_result))
         return True
 
+    def set_chat_history_opacity(self, opacity: float) -> None:
+        def apply() -> None:
+            if self._history is not None:
+                self._history.set_background_opacity(opacity)
+        self._post(apply)
+
+    def set_chat_font(self, cfg: FontConfig) -> None:
+        self._chat_font = cfg
+        self._post(self._apply_chat_font_live)
+
+    def set_bubble_font(self, cfg: FontConfig) -> None:
+        self._bubble_font = cfg
+        self._post(self._apply_bubble_font_live)
+
+    def get_chat_font(self) -> FontConfig:
+        return self._chat_font
+
+    def get_bubble_font(self) -> FontConfig:
+        return self._bubble_font
+
+    def _apply_chat_font_live(self) -> None:
+        font = qt_font_from_config(
+            self._chat_font, fallback_size=_CHAT_FONT_DEFAULT_SIZE,
+        )
+        if self._dock is not None:
+            self._dock.apply_font(font)
+        if self._history is not None:
+            self._history.apply_font(font)
+
+    def _apply_bubble_font_live(self) -> None:
+        if self._bubble is not None:
+            self._bubble.apply_font_config(
+                self._bubble_font,
+                fallback_family=self._font_family,
+                fallback_size=max(self._font_size - 1, 10),
+            )
+
+    def _handle_chat_zoom(self, delta: int) -> None:
+        """``delta`` +1 / -1 bumps the chat font size; 0 resets to baseline."""
+        current = self._chat_font
+        current_size = (
+            current.size_pt if current.size_pt > 0 else _CHAT_FONT_DEFAULT_SIZE
+        )
+        if delta == 0:
+            new_size = _CHAT_FONT_DEFAULT_SIZE
+        else:
+            new_size = clamp_font_size(current_size + delta)
+        if new_size == current_size and current.size_pt > 0:
+            return
+        self._chat_font = FontConfig(
+            family=current.family,
+            size_pt=new_size,
+            bold=current.bold,
+            italic=current.italic,
+            underline=current.underline,
+        )
+        self._apply_chat_font_live()
+        if self._chat_font_persist_callback is not None:
+            self._chat_font_persist_callback(self._chat_font)
+
     def _do_open_options_modal(
         self, state: Any, on_result: Callable[[Any], None],
     ) -> None:
-        dialog = OptionsDialog(state, on_result, parent=self._history)
+        dialog = OptionsDialog(
+            state, on_result, parent=self._history,
+            on_opacity_preview=self.set_chat_history_opacity,
+        )
         _focus_dialog(dialog)
 
     def open_cloud_modal(
@@ -479,6 +572,11 @@ class QtOverlay(AbstractOverlay):
     ) -> None:
         self._chat_persist_callback = persist
         self._chat_clear_callback = clear
+
+    def set_chat_font_persist_callback(
+        self, persist: Callable[[FontConfig], None],
+    ) -> None:
+        self._chat_font_persist_callback = persist
 
     def set_environment_provider(
         self, provider: Callable[[], EnvironmentSnapshot] | None,

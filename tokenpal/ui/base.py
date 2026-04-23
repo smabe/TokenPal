@@ -104,6 +104,10 @@ class AbstractOverlay(abc.ABC):
         """Show/hide the chat log widget. Optional — overlays without a
         separate chat pane no-op."""
 
+    def set_chat_history_opacity(self, opacity: float) -> None:
+        """Set the chat history window's background opacity (0.0–1.0).
+        Optional — overlays without a painted chat panel no-op."""
+
     def set_environment_provider(
         self,
         provider: Callable[[], EnvironmentSnapshot] | None,

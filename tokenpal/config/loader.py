@@ -18,6 +18,7 @@ from tokenpal.config.schema import (
     ConversationConfig,
     FilesystemPulseConfig,
     FinetuneConfig,
+    FontConfig,
     LLMConfig,
     MemoryConfig,
     MinTokensPerPathConfig,
@@ -86,6 +87,8 @@ _NESTED_FIELDS: dict[tuple[type, str], type] = {
     (FinetuneConfig, "remote"): RemoteTrainConfig,
     (LLMConfig, "target_latency_s"): TargetLatencyConfig,
     (LLMConfig, "min_tokens_per_path"): MinTokensPerPathConfig,
+    (UIConfig, "chat_font"): FontConfig,
+    (UIConfig, "bubble_font"): FontConfig,
 }
 
 

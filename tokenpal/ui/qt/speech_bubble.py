@@ -11,6 +11,9 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.config.schema import FontConfig
+from tokenpal.ui.qt._text_fx import qt_font_from_config
+
 _TYPING_INTERVAL_MS = 30
 _BUBBLE_PADDING = 12
 _BUBBLE_MAX_WIDTH = 360
@@ -75,6 +78,30 @@ class SpeechBubble(QWidget):
     def hide_bubble(self) -> None:
         self._timer.stop()
         self.hide()
+
+    def apply_font_config(
+        self,
+        cfg: FontConfig,
+        *,
+        fallback_family: str = "",
+        fallback_size: int = 13,
+    ) -> None:
+        """Replace the bubble font and re-layout. Keeps the monospace
+        style hint so the wrap math keeps using a fixed-advance metric
+        when ``cfg.family`` is empty."""
+        font = qt_font_from_config(
+            cfg,
+            fallback_family=fallback_family or self._font.family(),
+            fallback_size=fallback_size,
+        )
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        self._font = font
+        self.setFont(font)
+        # fontMetrics changed — wrap cache and widget size are stale.
+        self._wrapped_cache_key = ("", 0)
+        if self._full_text:
+            self._resize_for_text(self._full_text)
+        self.update()
 
     def _advance_typing(self) -> None:
         if len(self._visible_text) >= len(self._full_text):

@@ -23,8 +23,10 @@ from __future__ import annotations
 import sys
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
+
+from tokenpal.config.schema import FontConfig
 
 
 def apply_drop_shadow(
@@ -122,6 +124,27 @@ def glass_scrollbar_stylesheet() -> str:
         background: transparent;
     }
     """
+
+
+def qt_font_from_config(
+    cfg: FontConfig,
+    *,
+    fallback_family: str = "",
+    fallback_size: int = 13,
+) -> QFont:
+    """Build a ``QFont`` from a ``FontConfig``, filling holes from fallbacks.
+
+    Empty ``cfg.family`` → ``fallback_family`` → Qt's platform default.
+    ``cfg.size_pt`` of 0 → ``fallback_size``.
+    """
+    family = cfg.family or fallback_family
+    size = cfg.size_pt if cfg.size_pt > 0 else fallback_size
+    font = QFont(family) if family else QFont()
+    font.setPointSize(size)
+    font.setBold(cfg.bold)
+    font.setItalic(cfg.italic)
+    font.setUnderline(cfg.underline)
+    return font
 
 
 def transparent_window_flags() -> Qt.WindowType:
