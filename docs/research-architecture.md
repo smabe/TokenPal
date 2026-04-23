@@ -398,6 +398,84 @@ return the previous synthesis without re-fetching. Zero disables the
 cache. To bust manually during development: vary the query wording or
 set `cache_ttl_s = 0` in `config.toml`.
 
+## Follow-ups on cloud research
+
+A cloud-backed `/research` (synth / search / deep) can be cheaply extended
+with follow-up questions. Two paths, both active simultaneously:
+
+**Path B — conversation context (default, free).** When a research
+answer is injected into `ConversationSession.history` via
+`_inject_research_into_conversation`, the ambient conversation LLM can
+answer simple follow-ups ("what did you mean by thumbs regen?") directly
+from that context without any tool call. No new cost, no new latency.
+This handles the majority of real-world follow-ups.
+
+**Path A — `research_followup` tool (escalation, ~$0.02-0.05).** When
+the user needs information the prior `<answer>` doesn't contain (new
+symptom, excluded option, deeper detail on one pick), the conversation
+LLM calls `research_followup`. Personality rule 9 in
+`PersonalityEngine._tool_use_rule` enforces the "only if NEW info needed"
+check. The action replays the original Anthropic message history with a
+`cache_control: ephemeral` breakpoint on the prior assistant turn, so
+the cached prefix bills at 10% of fresh tokens. For search/deep-mode
+sessions, the follow-up can trigger new `web_search` / `web_fetch` calls
+on top of the cached exchange. Synth-mode sessions reason over the
+original sources; no new fetching.
+
+### Lifecycle
+
+One `FollowupSession` lives on the Brain at a time
+(`Brain._active_followup_session`). Stashed by
+`_maybe_stash_followup_session` after a successful cloud /research.
+Overwritten on the next /research (local or cloud — local runs clear the
+slot). Expires lazily at read time based on
+`ResearchConfig.followup_ttl_s` (default 900s). Capped at
+`followup_max_per_session` (default 5) to bound worst-case cost. No
+cross-restart persistence.
+
+### cache_control placement
+
+`_apply_cache_breakpoint` walks backwards through
+`FollowupSession.messages` to find the last assistant turn and attaches
+`cache_control: {"type": "ephemeral"}` to its last content block.
+Anthropic caches everything up to and including that block — all prior
+user + assistant turns get cached. For synth mode (stashed as string
+content) the block is converted to a text-block dict; for search/deep
+(stashed as SDK pydantic blocks) the last block is dumped via
+`.model_dump()` and the cache_control field added.
+
+Ephemeral cache has a ~5-minute server-side lifetime. Follow-ups within
+that window hit the cache; those between 5-15m within TTL miss the cache
+but still run correctly. A follow-up with
+`usage.cache_read_input_tokens == 0` logs a warning so cost-watch can
+distinguish a stale cache from a misaligned breakpoint.
+
+### Cost math
+
+Reference run (synth mode, Haiku 4.5):
+- Fresh `/research`: ~16K input + ~1.5K output = ~$0.024
+- Follow-up (cache hit): ~16K cached @ 10% + ~0.5K new input +
+  ~1K output = ~$0.006
+
+Target per done criterion: follow-up ≤ $0.07 on search mode with Sonnet.
+
+### /followup slash
+
+`/followup <question>` explicitly calls the `research_followup` tool,
+bypassing the conversation LLM's escalation rule. Handled by
+`_handle_followup` (orchestrator) via `submit_followup_question`.
+Shows the `<answer>` body extracted from the tool_result XML.
+
+### Key files (follow-up specific)
+
+- `tokenpal/brain/research_followup.py` — `FollowupSession` dataclass +
+  TTL/cap helpers.
+- `tokenpal/llm/cloud_backend.py` — `CloudBackend.followup()`,
+  `_apply_cache_breakpoint()`, `FollowupResult`, shared `_run_messages_loop`
+  and `_to_cloud_error` helpers.
+- `tokenpal/actions/research/research_action.py` — `ResearchFollowupAction`.
+- `tokenpal/brain/personality.py` — rule 9 in `_tool_use_rule`.
+
 ## Extension points
 
 - **New search backends**: implement in

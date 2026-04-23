@@ -1350,7 +1350,17 @@ class PersonalityEngine:
             "from memory, even ones you're sure about. If the <answer> "
             "says sources don't name specific picks or describes what's "
             "missing, echo that in your voice and ask a clarifying "
-            "question; do NOT fabricate picks to fill the gap.\n\n"
+            "question; do NOT fabricate picks to fill the gap.\n"
+            "9. For follow-ups on the most recent `research` answer: "
+            "ALWAYS answer from context first when the prior <answer> "
+            "already covers what the user is asking. Only call "
+            "`research_followup` when the user needs information the "
+            "prior answer does NOT contain (new symptom, excluded option, "
+            "a pick they already tried, a deeper detail on one pick). "
+            "Never call `research_followup` twice in a row without the "
+            "user speaking in between. If `research_followup` returns a "
+            "'no recent research' or 'expired' error, tell the user "
+            "plainly and offer to run `/research` again — don't retry.\n\n"
         )
 
     def build_context_injection(self, context_snapshot: str) -> str:

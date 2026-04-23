@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, NamedTuple
 
 from tokenpal.llm.base import LLMResponse
 
@@ -90,6 +90,12 @@ class CloudBackendDeepResult:
     sum of output_tokens across all continuations. ``iterations`` counts how
     many pause_turn continuations were needed — 0 means the first response
     was final.
+
+    ``messages`` and ``tools`` are captured for follow-up persistence — the
+    orchestrator snapshots them into a ``FollowupSession`` so a subsequent
+    `research_followup` tool call can replay the Anthropic conversation with a
+    cache_control breakpoint. Empty for synth mode (which uses the one-shot
+    ``synthesize`` path).
     """
 
     text: str
@@ -97,6 +103,181 @@ class CloudBackendDeepResult:
     iterations: int
     latency_ms: float
     finish_reason: str | None
+    messages: list[dict[str, Any]] = field(default_factory=list)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class FollowupResult:
+    """Raw output of a cloud follow-up call.
+
+    ``messages`` is the full updated conversation (prior history + new user
+    turn + new assistant turn(s)) — caller replaces the session's ``messages``
+    with this so the next follow-up picks up where this one left off.
+
+    ``cache_read_tokens`` / ``cache_creation_tokens`` come from the Anthropic
+    ``usage`` object. A ``cache_read_tokens`` of ~0 on a followup means the
+    cache_control breakpoint didn't hit — worth a telemetry warning.
+    """
+
+    text: str
+    messages: list[dict[str, Any]]
+    tokens_used: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    iterations: int
+    latency_ms: float
+    finish_reason: str | None
+
+
+class _LoopResult(NamedTuple):
+    final_text: str
+    messages: list[dict[str, Any]]
+    output_tokens: int
+    cache_read_tokens: int
+    cache_creation_tokens: int
+    iterations: int
+    stop_reason: str | None
+    latency_ms: float
+
+
+def _to_cloud_error(
+    exc: Exception, *, timeout_s: float, label: str,
+) -> CloudBackendError:
+    """Translate an Anthropic SDK exception into our CloudBackendError.
+
+    ``label`` gets embedded into the error message so callers can tell whether
+    a 401 hit on the initial research, a deep-mode loop, or a follow-up. The
+    ``kind`` attribute is the stable programmatic identifier — `/cloud status`
+    and the runner's fallback path key off it.
+    """
+    from anthropic import (
+        APIConnectionError,
+        APIStatusError,
+        APITimeoutError,
+        AuthenticationError,
+        BadRequestError,
+        PermissionDeniedError,
+        RateLimitError,
+    )
+    if isinstance(exc, AuthenticationError):
+        return CloudBackendError(
+            "Anthropic rejected the API key (401). Run /cloud enable "
+            "with a valid key.",
+            kind="auth",
+        )
+    if isinstance(exc, PermissionDeniedError):
+        txt = str(exc).lower()
+        if "credit balance" in txt or "insufficient" in txt:
+            return CloudBackendError(
+                "Workspace has no credit. Add funds at console.anthropic.com.",
+                kind="no_credit",
+            )
+        return CloudBackendError(
+            f"Anthropic denied the request (403): {exc}", kind="permission",
+        )
+    if isinstance(exc, RateLimitError):
+        retry_after = None
+        try:
+            retry_after = (
+                float(exc.response.headers.get("retry-after", "") or 0) or None
+            )
+        except (AttributeError, ValueError):
+            pass
+        return CloudBackendError(
+            f"Anthropic rate limit hit (429) on {label}.",
+            kind="rate_limit",
+            retry_after=retry_after,
+        )
+    if isinstance(exc, APITimeoutError):
+        return CloudBackendError(
+            f"{label} timed out after {timeout_s}s.", kind="timeout",
+        )
+    if isinstance(exc, APIConnectionError):
+        return CloudBackendError(
+            f"Could not reach Anthropic: {exc}", kind="network",
+        )
+    if isinstance(exc, BadRequestError):
+        return CloudBackendError(
+            f"Anthropic rejected the {label} request (400): {exc}",
+            kind="bad_request",
+        )
+    if isinstance(exc, APIStatusError):
+        status_code = getattr(exc, "status_code", "?")
+        return CloudBackendError(
+            f"Anthropic returned {status_code}: {exc}", kind="api_status",
+        )
+    return CloudBackendError(str(exc), kind="unknown")
+
+
+def _run_messages_loop(
+    *,
+    client: Any,
+    messages: list[dict[str, Any]],
+    base_kwargs: dict[str, Any],
+    timeout_s: float,
+    label: str,
+    max_continuations: int,
+) -> _LoopResult:
+    """Shared pause-turn loop for research_deep + followup.
+
+    Mutates ``messages`` in place (appends assistant turns). Always terminates
+    either on a non-pause_turn ``stop_reason`` or by hitting ``max_continuations``.
+    """
+    from anthropic import APIError
+
+    total_output = 0
+    cache_read = 0
+    cache_creation = 0
+    iterations = 0
+    last_stop_reason: str | None = None
+    start = time.monotonic()
+
+    while True:
+        try:
+            msg = client.messages.create(
+                messages=messages,  # type: ignore[arg-type]
+                **base_kwargs,
+            )
+        except APIError as e:
+            raise _to_cloud_error(e, timeout_s=timeout_s, label=label) from e
+
+        usage = getattr(msg, "usage", None)
+        if usage is not None:
+            total_output += int(getattr(usage, "output_tokens", 0) or 0)
+            cache_read += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            cache_creation += int(
+                getattr(usage, "cache_creation_input_tokens", 0) or 0
+            )
+
+        last_stop_reason = getattr(msg, "stop_reason", None)
+        assistant_content = _content_to_serializable(
+            getattr(msg, "content", []) or []
+        )
+        messages.append({"role": "assistant", "content": assistant_content})
+
+        if last_stop_reason != "pause_turn":
+            break
+        if iterations >= max_continuations:
+            log.warning(
+                "%s hit max continuations (%d); stopping",
+                label, max_continuations,
+            )
+            break
+        iterations += 1
+
+    latency_ms = (time.monotonic() - start) * 1000.0
+    final_text = _extract_text_from_blocks(messages[-1]["content"]).strip()
+    return _LoopResult(
+        final_text=final_text,
+        messages=messages,
+        output_tokens=total_output,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_creation,
+        iterations=iterations,
+        stop_reason=last_stop_reason,
+        latency_ms=latency_ms,
+    )
 
 
 @dataclass
@@ -141,15 +322,7 @@ class CloudBackend:
         into ``_parse_synth_json`` and the downstream validation pipeline.
         """
         import anthropic
-        from anthropic import (
-            APIConnectionError,
-            APIStatusError,
-            APITimeoutError,
-            AuthenticationError,
-            BadRequestError,
-            PermissionDeniedError,
-            RateLimitError,
-        )
+        from anthropic import APIError
 
         client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout_s)
         kwargs: dict[str, Any] = {
@@ -163,10 +336,8 @@ class CloudBackend:
             # Haiku 4.5 errors if sent thinking params, so only on Sonnet/Opus.
             kwargs["thinking"] = {"type": "adaptive"}
         if json_schema is not None:
-            # Constrain output to valid JSON matching the synth schema. This
-            # replaces the fragile ``response_format`` advisory we use for
-            # Ollama; Anthropic enforces the schema server-side, but requires
-            # additionalProperties: false on every object - the local schema
+            # Anthropic enforces the schema server-side but requires
+            # additionalProperties: false on every object; the local schema
             # omits it because Ollama/llama-server don't require it.
             kwargs["output_config"] = {
                 "format": {
@@ -178,50 +349,9 @@ class CloudBackend:
         start = time.monotonic()
         try:
             msg = client.messages.create(**kwargs)
-        except AuthenticationError as e:
-            raise CloudBackendError(
-                "Anthropic rejected the API key (401). Run /cloud enable "
-                "with a valid key.",
-                kind="auth",
-            ) from e
-        except PermissionDeniedError as e:
-            # 403. Most common cause is an unfunded workspace — detect that
-            # specifically so /cloud status can nudge the user to add credit.
-            msg_txt = str(e).lower()
-            if "credit balance" in msg_txt or "insufficient" in msg_txt:
-                raise CloudBackendError(
-                    "Workspace has no credit. Add funds at console.anthropic.com.",
-                    kind="no_credit",
-                ) from e
-            raise CloudBackendError(
-                f"Anthropic denied the request (403): {e}", kind="permission",
-            ) from e
-        except RateLimitError as e:
-            retry_after = None
-            try:
-                retry_after = float(e.response.headers.get("retry-after", "") or 0) or None
-            except (AttributeError, ValueError):
-                pass
-            raise CloudBackendError(
-                "Anthropic rate limit hit (429).", kind="rate_limit",
-                retry_after=retry_after,
-            ) from e
-        except APITimeoutError as e:
-            raise CloudBackendError(
-                f"Anthropic request timed out after {self.timeout_s}s.",
-                kind="timeout",
-            ) from e
-        except APIConnectionError as e:
-            raise CloudBackendError(
-                f"Could not reach Anthropic: {e}", kind="network",
-            ) from e
-        except BadRequestError as e:
-            raise CloudBackendError(
-                f"Anthropic rejected the request (400): {e}", kind="bad_request",
-            ) from e
-        except APIStatusError as e:
-            raise CloudBackendError(
-                f"Anthropic returned {e.status_code}: {e}", kind="api_status",
+        except APIError as e:
+            raise _to_cloud_error(
+                e, timeout_s=self.timeout_s, label="research",
             ) from e
 
         latency_ms = (time.monotonic() - start) * 1000.0
@@ -270,18 +400,9 @@ class CloudBackend:
             )
 
         import anthropic
-        from anthropic import (
-            APIConnectionError,
-            APIStatusError,
-            APITimeoutError,
-            AuthenticationError,
-            BadRequestError,
-            PermissionDeniedError,
-            RateLimitError,
-        )
 
         client = anthropic.Anthropic(
-            api_key=self.api_key, timeout=self.deep_timeout_s
+            api_key=self.api_key, timeout=self.deep_timeout_s,
         )
         tools: list[dict[str, Any]] = [
             {
@@ -311,114 +432,133 @@ class CloudBackend:
             }
 
         messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
-        total_output_tokens = 0
-        last_stop_reason: str | None = None
-        iterations = 0
-        start = time.monotonic()
-
-        while True:
-            try:
-                msg = client.messages.create(
-                    messages=messages,  # type: ignore[arg-type]
-                    **base_kwargs,
-                )
-            except AuthenticationError as e:
-                raise CloudBackendError(
-                    "Anthropic rejected the API key (401).", kind="auth",
-                ) from e
-            except PermissionDeniedError as e:
-                txt = str(e).lower()
-                if "credit balance" in txt or "insufficient" in txt:
-                    raise CloudBackendError(
-                        "Workspace has no credit. Add funds at "
-                        "console.anthropic.com.",
-                        kind="no_credit",
-                    ) from e
-                raise CloudBackendError(
-                    f"Anthropic denied the request (403): {e}", kind="permission",
-                ) from e
-            except RateLimitError as e:
-                retry_after = None
-                try:
-                    retry_after = (
-                        float(e.response.headers.get("retry-after", "") or 0)
-                        or None
-                    )
-                except (AttributeError, ValueError):
-                    pass
-                raise CloudBackendError(
-                    "Anthropic rate limit hit (429) on web search tools.",
-                    kind="rate_limit",
-                    retry_after=retry_after,
-                ) from e
-            except APITimeoutError as e:
-                raise CloudBackendError(
-                    f"Deep-mode request timed out after {self.deep_timeout_s}s.",
-                    kind="timeout",
-                ) from e
-            except APIConnectionError as e:
-                raise CloudBackendError(
-                    f"Could not reach Anthropic: {e}", kind="network",
-                ) from e
-            except BadRequestError as e:
-                raise CloudBackendError(
-                    f"Anthropic rejected the deep-mode request (400): {e}",
-                    kind="bad_request",
-                ) from e
-            except APIStatusError as e:
-                raise CloudBackendError(
-                    f"Anthropic returned {e.status_code}: {e}",
-                    kind="api_status",
-                ) from e
-
-            usage = getattr(msg, "usage", None)
-            if usage is not None:
-                total_output_tokens += int(
-                    getattr(usage, "output_tokens", 0) or 0
-                )
-
-            last_stop_reason = getattr(msg, "stop_reason", None)
-            if last_stop_reason != "pause_turn":
-                # end_turn / stop_sequence / max_tokens / tool_use (shouldn't
-                # happen for server tools) — we're done looping.
-                assistant_content = _content_to_serializable(
-                    getattr(msg, "content", []) or []
-                )
-                messages.append({"role": "assistant", "content": assistant_content})
-                break
-
-            if iterations >= _MAX_DEEP_CONTINUATIONS:
-                log.warning(
-                    "deep-mode hit max continuations (%d); stopping with "
-                    "whatever the model has produced",
-                    _MAX_DEEP_CONTINUATIONS,
-                )
-                assistant_content = _content_to_serializable(
-                    getattr(msg, "content", []) or []
-                )
-                messages.append({"role": "assistant", "content": assistant_content})
-                break
-
-            iterations += 1
-            assistant_content = _content_to_serializable(
-                getattr(msg, "content", []) or []
-            )
-            messages.append({"role": "assistant", "content": assistant_content})
-            # No user follow-up; the API detects the trailing
-            # server_tool_use block and resumes automatically.
-
-        latency_ms = (time.monotonic() - start) * 1000.0
-        # Extract text from the LAST assistant message we appended.
-        last_assistant = messages[-1]
-        final_text = _extract_text_from_blocks(last_assistant["content"]).strip()
+        result = _run_messages_loop(
+            client=client,
+            messages=messages,
+            base_kwargs=base_kwargs,
+            timeout_s=self.deep_timeout_s,
+            label="deep-mode",
+            max_continuations=_MAX_DEEP_CONTINUATIONS,
+        )
 
         return CloudBackendDeepResult(
-            text=final_text,
-            tokens_used=total_output_tokens,
-            iterations=iterations,
-            latency_ms=latency_ms,
-            finish_reason=_map_stop_reason(last_stop_reason),
+            text=result.final_text,
+            tokens_used=result.output_tokens,
+            iterations=result.iterations,
+            latency_ms=result.latency_ms,
+            finish_reason=_map_stop_reason(result.stop_reason),
+            messages=result.messages,
+            tools=list(tools),
         )
+
+    def followup(
+        self,
+        prior_messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        new_user_turn: str,
+        *,
+        max_tokens: int = 3000,
+        enable_cache: bool = True,
+    ) -> FollowupResult:
+        """Ask a follow-up against a cached cloud /research exchange.
+
+        ``prior_messages`` is the session's full history (see
+        ``FollowupSession.messages``). We append the new user turn, add a
+        ``cache_control: ephemeral`` breakpoint on the last assistant block so
+        the prior exchange gets cached at 10% billing, and invoke the same
+        pause-turn loop ``research_deep`` uses so follow-ups that trigger
+        server-side tool calls resume automatically.
+
+        ``tools`` is the exact list the original call used (empty for synth
+        mode). Re-sent unchanged — schema pinning is automatic.
+        """
+        import anthropic
+
+        timeout = self.deep_timeout_s if tools else self.timeout_s
+        client = anthropic.Anthropic(api_key=self.api_key, timeout=timeout)
+
+        base = (
+            _apply_cache_breakpoint(prior_messages)
+            if enable_cache else list(prior_messages)
+        )
+        messages: list[dict[str, Any]] = [
+            *base,
+            {"role": "user", "content": new_user_turn},
+        ]
+
+        base_kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+        }
+        if tools:
+            base_kwargs["tools"] = tools
+        if self.model in _THINKING_MODELS:
+            base_kwargs["thinking"] = {"type": "adaptive"}
+
+        result = _run_messages_loop(
+            client=client,
+            messages=messages,
+            base_kwargs=base_kwargs,
+            timeout_s=timeout,
+            label="follow-up",
+            max_continuations=_MAX_DEEP_CONTINUATIONS,
+        )
+
+        return FollowupResult(
+            text=result.final_text,
+            messages=result.messages,
+            tokens_used=result.output_tokens,
+            cache_read_tokens=result.cache_read_tokens,
+            cache_creation_tokens=result.cache_creation_tokens,
+            iterations=result.iterations,
+            latency_ms=result.latency_ms,
+            finish_reason=_map_stop_reason(result.stop_reason),
+        )
+
+
+def _apply_cache_breakpoint(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return a shallow copy of ``messages`` with a ``cache_control: ephemeral``
+    block on the last content block of the last assistant turn.
+
+    Anthropic caches everything UP TO AND INCLUDING the cache_control block,
+    so placing it on the tail of the prior assistant turn maximizes the cached
+    prefix (all prior user/assistant exchanges).
+
+    Synth-mode content is stashed as a plain string — wrap it into a single
+    text block so cache_control can attach. Deep/search-mode content is
+    already a list of SDK blocks (text / tool_use / tool_result); mutate a
+    shallow copy of the last block to carry cache_control.
+    """
+    if not messages:
+        return list(messages)
+    out = [dict(m) for m in messages]
+    for idx in range(len(out) - 1, -1, -1):
+        if out[idx].get("role") != "assistant":
+            continue
+        content = out[idx]["content"]
+        if isinstance(content, str):
+            out[idx]["content"] = [{
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }]
+            break
+        if isinstance(content, list) and content:
+            new_content = list(content)
+            last = new_content[-1]
+            if isinstance(last, dict):
+                last_dict = dict(last)
+            elif hasattr(last, "model_dump"):
+                last_dict = last.model_dump()
+            else:
+                last_dict = dict(last)  # best effort
+            last_dict["cache_control"] = {"type": "ephemeral"}
+            new_content[-1] = last_dict
+            out[idx]["content"] = new_content
+            break
+    return out
 
 
 def _harden_schema_for_anthropic(schema: dict[str, Any]) -> dict[str, Any]:

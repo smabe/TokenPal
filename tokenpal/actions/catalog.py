@@ -234,6 +234,12 @@ RESEARCH_SECTION = CatalogSection(
             consent_category="research_mode",
         ),
         CatalogEntry(
+            "research_followup",
+            "Follow-up on the most recent cloud /research via prompt caching.",
+            kind="research",
+            consent_category="research_mode",
+        ),
+        CatalogEntry(
             "fetch_url",
             "Fetch a URL and extract clean article text (no JS).",
             kind="research",

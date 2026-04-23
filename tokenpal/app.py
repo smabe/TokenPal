@@ -1091,6 +1091,22 @@ def main() -> None:
         brain.submit_refine_question(follow_up)
         return CommandResult(f"Refining: {follow_up[:60]}")
 
+    def _cmd_followup(args: str) -> CommandResult:
+        question = args.strip()
+        if not question:
+            return CommandResult(
+                "Usage: /followup <question>. Replays the most recent cloud "
+                "/research answer with prompt caching — cheap follow-up "
+                "(~$0.02-0.05) vs a fresh /research (~$0.20)."
+            )
+        if "research_followup" not in config.tools.enabled_tools:
+            return CommandResult(
+                "/followup is off. Enable 'research_followup' in /tools and "
+                "restart."
+            )
+        brain.submit_followup_question(question)
+        return CommandResult(f"Following up: {question[:60]}")
+
     def _cmd_research(args: str) -> CommandResult:
         from tokenpal.config.consent import Category, has_consent
 
@@ -1465,6 +1481,7 @@ def main() -> None:
     dispatcher.register("agent", _cmd_agent)
     dispatcher.register("research", _cmd_research)
     dispatcher.register("refine", _cmd_refine)
+    dispatcher.register("followup", _cmd_followup)
     dispatcher.register("intent", _cmd_intent)
     dispatcher.register("summary", _cmd_summary)
     dispatcher.register("cloud", _cmd_cloud)

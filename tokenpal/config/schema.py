@@ -279,6 +279,13 @@ class ResearchConfig:
     # Identical questions within this window return the previous synthesis
     # instead of re-searching. Zero disables the cache.
     cache_ttl_s: float = 86400.0
+    # Follow-up questions on the most recent cloud /research call reuse the
+    # Anthropic message history with a cache_control breakpoint, so the
+    # cached prefix costs 10% of fresh tokens. See plans/shipped/smarter-buddy.md.
+    followup_enabled: bool = True
+    followup_ttl_s: int = 900          # 15 min since last use
+    followup_max_per_session: int = 5  # hard cap per cloud /research call
+    followup_cache_breakpoints: bool = True  # kill-switch if caching misbehaves
 
 
 @dataclass

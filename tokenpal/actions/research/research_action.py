@@ -185,6 +185,198 @@ class ResearchAction(AbstractAction):
         )
 
 
+@register_action
+class ResearchFollowupAction(AbstractAction):
+    """Ask a follow-up on the most recent cloud /research.
+
+    Cheap — replays the cached Anthropic message history with a cache_control
+    breakpoint (~10% billing on cached tokens, so ~$0.02-0.05 vs the ~$0.20 a
+    fresh /research costs). Returns an error tool_result when no session is
+    active; the conversation LLM uses that signal to either answer from
+    context or suggest a fresh /research.
+
+    See plans/shipped/smarter-buddy.md for the design. Only fires when the
+    LLM judges the prior answer doesn't cover what the user's asking — the
+    personality prompt enforces that check (``_tool_use_rule``).
+    """
+
+    action_name = "research_followup"
+    description = (
+        "Ask a follow-up question on the most recent /research answer. "
+        "Use ONLY when the prior <answer> block doesn't contain what the "
+        "user is asking about (new symptom, excluded option, deeper detail). "
+        "If the prior answer already covers it, answer from context instead. "
+        "Cheap replay of the same cloud exchange with prompt caching. "
+        "Errors out with a message if no recent /research session is active."
+    )
+    parameters: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {
+            "question": {
+                "type": "string",
+                "description": (
+                    "The follow-up question. Should reference the prior "
+                    "research topic; standalone questions belong in /research."
+                ),
+            },
+        },
+        "required": ["question"],
+    }
+    platforms: ClassVar[tuple[str, ...]] = ("windows", "darwin", "linux")
+    safe: ClassVar[bool] = True
+    requires_confirm: ClassVar[bool] = False
+    rate_limit: ClassVar[RateLimit | None] = RateLimit(max_calls=5, window_s=120.0)
+
+    def __init__(self, config: dict[str, Any]) -> None:
+        super().__init__(config)
+        self._research_config: ResearchConfig | None = None
+        self._cloud_config: CloudLLMConfig | None = None
+        self._brain_ref: Any = None  # Brain, injected by orchestrator
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        question = (kwargs.get("question") or "").strip()
+        if not question:
+            return ActionResult(
+                output="research_followup: empty question", success=False,
+            )
+        if not has_consent(Category.RESEARCH_MODE):
+            return ActionResult(
+                output=(
+                    "research_followup: research_mode consent not granted. "
+                    "Run /consent."
+                ),
+                success=False,
+            )
+        if self._brain_ref is None:
+            return ActionResult(
+                output="research_followup: brain ref not wired up",
+                success=False,
+            )
+        cfg = self._research_config or ResearchConfig()
+        if not cfg.followup_enabled:
+            return ActionResult(
+                output="research_followup: disabled in config",
+                success=False,
+            )
+
+        from tokenpal.brain.research_followup import (
+            bump,
+            is_expired,
+            over_cap,
+        )
+        session = getattr(self._brain_ref, "_active_followup_session", None)
+        if session is None:
+            return ActionResult(
+                output=(
+                    "research_followup: no recent cloud research in session. "
+                    "Run /research for a fresh answer."
+                ),
+                success=False,
+            )
+        if is_expired(session):
+            self._brain_ref._active_followup_session = None
+            return ActionResult(
+                output=(
+                    "research_followup: previous research expired "
+                    f"(>{cfg.followup_ttl_s}s). Run /research for a fresh answer."
+                ),
+                success=False,
+            )
+        if over_cap(session):
+            return ActionResult(
+                output=(
+                    "research_followup: follow-up cap reached "
+                    f"({session.max_followups}/session). Run /research."
+                ),
+                success=False,
+            )
+
+        api_key = get_cloud_key()
+        if not api_key:
+            return ActionResult(
+                output=(
+                    "research_followup: cloud key no longer on disk. "
+                    "Re-run /cloud enable <key>."
+                ),
+                success=False,
+            )
+        # Pin the backend to the model the original research used, not the
+        # current /cloud model. A mid-session model swap must not poison a
+        # saved message history — the cache and tool schema are model-specific.
+        try:
+            backend = CloudBackend(api_key=api_key, model=session.model)
+        except (ValueError, CloudBackendError) as e:
+            return ActionResult(
+                output=f"research_followup: backend setup failed ({e})",
+                success=False,
+            )
+
+        import asyncio
+        try:
+            result = await asyncio.to_thread(
+                backend.followup,
+                session.messages,
+                session.tools,
+                question,
+                enable_cache=cfg.followup_cache_breakpoints,
+            )
+        except CloudBackendError as e:
+            log.warning("research_followup: cloud call failed (%s)", e.kind)
+            return ActionResult(
+                output=f"research_followup: cloud call failed ({e.kind}): {e}",
+                success=False,
+            )
+
+        session.messages = result.messages
+        session.total_cache_read_tokens += result.cache_read_tokens
+        session.total_cache_creation_tokens += result.cache_creation_tokens
+        bump(session)
+
+        log.info(
+            "research_followup: count=%d/%d cache_read=%d cache_creation=%d "
+            "output=%d latency=%.1fs",
+            session.followup_count, session.max_followups,
+            result.cache_read_tokens, result.cache_creation_tokens,
+            result.tokens_used, result.latency_ms / 1000.0,
+        )
+        if cfg.followup_cache_breakpoints and result.cache_read_tokens == 0:
+            # Ephemeral cache has a ~5min lifetime; gap > 5min between the
+            # initial research and a followup legitimately misses. Warn so
+            # cost-watch can tell a misaligned breakpoint from a stale cache.
+            log.warning(
+                "research_followup: no cache hit — cache likely expired "
+                "(ephemeral ~5min) or breakpoint misaligned",
+            )
+
+        display_urls = [
+            (f"[{s.number}] {s.title}" if s.title else f"[{s.number}] {s.url}", s.url)
+            for s in session.sources
+            if s.url
+        ]
+        return ActionResult(
+            output=_format_followup_result(result, session),
+            success=True,
+            display_urls=display_urls or None,
+        )
+
+
+def _format_followup_result(result: Any, session: Any) -> str:
+    sources_lines = "\n".join(
+        f"[{s.number}] {s.url} - {s.title}" for s in session.sources
+    )
+    return (
+        f"<tool_result tool=\"research_followup\" status=\"complete\">\n"
+        f"<answer>\n{result.text}\n</answer>\n"
+        f"<sources>\n{sources_lines}\n</sources>\n"
+        f"<telemetry>\n"
+        f"followup={session.followup_count}/{session.max_followups} "
+        f"cache_read={result.cache_read_tokens} "
+        f"output_tokens={result.tokens_used}\n"
+        f"</telemetry>\n"
+        f"</tool_result>"
+    )
+
+
 def _build_cloud_backend(cfg: CloudLLMConfig | None) -> CloudBackend | None:
     """Construct an Anthropic-backed synth backend when /cloud is enabled and
     a key is on disk. Logs the reason on every None-return so a silent local

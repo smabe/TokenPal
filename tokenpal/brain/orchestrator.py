@@ -34,6 +34,7 @@ from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
 from tokenpal.brain.rage_detector import RageDetector, RageSignal
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
+from tokenpal.brain.research_followup import FollowupSession
 from tokenpal.brain.session_summarizer import SessionSummarizer
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
@@ -234,6 +235,7 @@ class Brain:
         self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
         self._research_queue: asyncio.Queue[str] = asyncio.Queue()
         self._refine_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._followup_queue: asyncio.Queue[str] = asyncio.Queue()
         # Physical-reaction events (overlay → brain). Items are "poke"/"shake".
         self._buddy_event_queue: asyncio.Queue[str] = asyncio.Queue()
         # Last time a buddy-reaction bubble was emitted — 5s cooldown so
@@ -289,6 +291,11 @@ class Brain:
         # Conversation session state
         self._conversation: ConversationSession | None = None
         self._conv_config = conversation or ConversationConfig()
+
+        # Cloud /research follow-up state. One active session per Brain —
+        # newer /research overwrites the slot. Expired lazily at read.
+        # See plans/shipped/smarter-buddy.md (Option 2: single-slot scoping).
+        self._active_followup_session: FollowupSession | None = None
 
         self._agent = agent_bridge or AgentBridge(config=AgentConfig())
         self._research = research_bridge or ResearchBridge(config=ResearchConfig())
@@ -574,6 +581,13 @@ class Brain:
                     except asyncio.QueueEmpty:
                         break
 
+                while not self._followup_queue.empty():
+                    try:
+                        followup_q = self._followup_queue.get_nowait()
+                        await self._handle_followup(followup_q)
+                    except asyncio.QueueEmpty:
+                        break
+
                 # Drain physical-reaction events (click/shake). Coalesce so
                 # a rapid click-burst produces at most one bubble per tick —
                 # the cooldown inside _generate_buddy_reaction enforces the
@@ -722,6 +736,11 @@ class Brain:
                 # Replace the no-op stub from action init with the real cb.
                 if current is None or getattr(current, "__name__", "") == "<lambda>":
                     action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
+            if hasattr(action, "_brain_ref") and getattr(action, "_brain_ref") is None:
+                # research_followup reads _active_followup_session at call
+                # time. Strong ref — Brain outlives its actions, no circular
+                # ref possible since actions are owned by Brain.
+                action._brain_ref = self  # type: ignore[attr-defined]
 
     def _proactive_paused(self) -> bool:
         """Pause proactive nudges during conversation, sensitive apps, or long tasks."""
@@ -1766,6 +1785,11 @@ class Brain:
     def submit_refine_question(self, follow_up: str) -> None:
         self._post_threadsafe(self._refine_queue, follow_up, "refine follow-up")
 
+    def submit_followup_question(self, question: str) -> None:
+        self._post_threadsafe(
+            self._followup_queue, question, "research followup",
+        )
+
     def on_buddy_poked(self) -> None:
         """Threadsafe enqueue from the overlay — the user clicked the buddy."""
         self._post_threadsafe(self._buddy_event_queue, "poke", "buddy poke")
@@ -2007,7 +2031,46 @@ class Brain:
             # Without this, "what about side sleepers?" hits an empty local
             # context and fumbles.
             self._inject_research_into_conversation(question, session)
+            self._maybe_stash_followup_session(session, cloud_mode=cloud_mode)
         return session
+
+    def _maybe_stash_followup_session(
+        self, session: ResearchSession, *, cloud_mode: str,
+    ) -> None:
+        """Build a FollowupSession after a successful cloud /research.
+
+        Overwrites any prior session — only one active at a time. Local-only
+        runs (no cloud prompt captured) clear the slot so stale state from a
+        previous cloud run doesn't shadow a fresh local answer.
+        """
+        cfg = self._research.config
+        if not cfg.followup_enabled or not session.cloud_prompt:
+            self._active_followup_session = None
+            return
+        mode = cloud_mode if cloud_mode in ("search", "deep") else "synth"
+        if mode == "synth":
+            # Synthesize is one-shot — no SDK message list exists. Reconstruct
+            # the pair so follow-ups have the same shape as deep/search mode.
+            messages: list[dict[str, Any]] = [
+                {"role": "user", "content": session.cloud_prompt},
+                {"role": "assistant", "content": session.cloud_answer_text},
+            ]
+        else:
+            messages = list(session.cloud_messages or [])
+        self._active_followup_session = FollowupSession(
+            mode=mode,  # type: ignore[arg-type]
+            model=session.cloud_model,
+            sources=list(session.sources),
+            messages=messages,
+            tools=list(session.cloud_tools or []),
+            ttl_s=cfg.followup_ttl_s,
+            max_followups=cfg.followup_max_per_session,
+        )
+        log.info(
+            "followup session stashed: mode=%s model=%s ttl=%ds cap=%d",
+            mode, session.cloud_model, cfg.followup_ttl_s,
+            cfg.followup_max_per_session,
+        )
 
     async def _handle_refine(self, follow_up: str) -> None:
         """Re-synthesize the most recent research against a follow-up.
@@ -2211,6 +2274,48 @@ class Brain:
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()
         self._inject_research_into_conversation(follow_up, fake_session)
+
+    async def _handle_followup(self, question: str) -> None:
+        """Run a /followup slash against the research_followup action.
+
+        Delegates to the registered action (same path the conversation LLM
+        uses for escalated follow-ups). The action handles TTL, cap, and
+        cloud-key gating — we just unwrap the <answer>...</answer> from its
+        tool_result XML for display.
+        """
+        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
+        action = self._actions.get("research_followup")
+        if action is None:
+            self._ui_callback(
+                "/followup: research_followup tool not registered. "
+                "Enable it in /tools and restart."
+            )
+            return
+
+        self._mode = BrainMode.RESEARCH
+        if self._status_callback:
+            self._status_callback("following up...")
+        log_cb(f"> followup: {question}")
+        try:
+            result = await action.execute(question=question)
+        except Exception:
+            log.exception("followup execute crashed")
+            self._ui_callback("/followup: crashed (check --verbose logs)")
+            return
+        finally:
+            self._mode = BrainMode.IDLE
+            self._push_status()
+
+        if result.success:
+            match = re.search(
+                r"<answer>\s*(.*?)\s*</answer>",
+                result.output, re.DOTALL,
+            )
+            rendered = match.group(1).strip() if match else result.output
+            self._ui_callback(rendered)
+        else:
+            self._ui_callback(result.output)
+        self._last_comment_time = time.monotonic()
 
     def _inject_research_into_conversation(
         self, question: str, session: ResearchSession

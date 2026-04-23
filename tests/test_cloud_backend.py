@@ -15,6 +15,7 @@ from tokenpal.llm.cloud_backend import (
     DEEP_MODE_MODELS,
     CloudBackend,
     CloudBackendError,
+    _apply_cache_breakpoint,
     _extract_text,
     _harden_schema_for_anthropic,
     _map_stop_reason,
@@ -22,12 +23,22 @@ from tokenpal.llm.cloud_backend import (
 
 
 def _fake_message(
-    text: str, stop_reason: str = "end_turn", output_tokens: int = 42,
+    text: str,
+    stop_reason: str = "end_turn",
+    output_tokens: int = 42,
+    *,
+    cache_read: int = 0,
+    cache_creation: int = 0,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         content=[SimpleNamespace(type="text", text=text)],
         stop_reason=stop_reason,
-        usage=SimpleNamespace(output_tokens=output_tokens, input_tokens=100),
+        usage=SimpleNamespace(
+            output_tokens=output_tokens,
+            input_tokens=100,
+            cache_read_input_tokens=cache_read,
+            cache_creation_input_tokens=cache_creation,
+        ),
     )
 
 
@@ -460,3 +471,226 @@ def test_research_deep_auth_error_surfaces_kind(
     with pytest.raises(CloudBackendError) as exc_info:
         b.research_deep("p")
     assert exc_info.value.kind == "auth"
+
+
+# ---------------------------------------------------------------------------
+# Follow-up cache-breakpoint helper + followup() end-to-end
+
+
+def test_apply_cache_breakpoint_on_string_content() -> None:
+    msgs = [
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": "answer"},
+    ]
+    out = _apply_cache_breakpoint(msgs)
+    # Original unchanged
+    assert msgs[1]["content"] == "answer"
+    # Assistant turn becomes a text block with cache_control
+    assert out[1]["content"] == [{
+        "type": "text",
+        "text": "answer",
+        "cache_control": {"type": "ephemeral"},
+    }]
+    # User turn untouched
+    assert out[0]["content"] == "prompt"
+
+
+def test_apply_cache_breakpoint_on_block_list_content() -> None:
+    msgs = [
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "tu_1", "name": "web_search", "input": {}},
+            {"type": "text", "text": "here's what i found"},
+        ]},
+    ]
+    out = _apply_cache_breakpoint(msgs)
+    # Last block got cache_control, earlier blocks untouched
+    assert out[1]["content"][0] == msgs[1]["content"][0]
+    assert out[1]["content"][1] == {
+        "type": "text",
+        "text": "here's what i found",
+        "cache_control": {"type": "ephemeral"},
+    }
+
+
+def test_apply_cache_breakpoint_skips_trailing_user_turn() -> None:
+    """If for some reason the last message is a user turn, we still target
+    the LAST ASSISTANT turn (walking backwards)."""
+    msgs = [
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": "answer"},
+        {"role": "user", "content": "followup"},
+    ]
+    out = _apply_cache_breakpoint(msgs)
+    # Assistant turn (idx 1) got cache_control, trailing user turn untouched
+    assert out[2] == msgs[2]
+    assert isinstance(out[1]["content"], list)
+    assert out[1]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_apply_cache_breakpoint_empty_is_safe() -> None:
+    assert _apply_cache_breakpoint([]) == []
+
+
+def test_apply_cache_breakpoint_no_assistant_turn() -> None:
+    """User-only history (shouldn't happen in practice) is a no-op passthrough."""
+    msgs = [{"role": "user", "content": "x"}]
+    out = _apply_cache_breakpoint(msgs)
+    assert out == msgs
+    # Shallow-copied, not aliased
+    assert out is not msgs
+
+
+def test_followup_synth_happy_path(fake_anthropic: dict[str, Any]) -> None:
+    fake_anthropic["client"] = _FakeClient(
+        result=_fake_message(
+            "follow-up answer", output_tokens=17, cache_read=2500,
+        ),
+    )
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    prior = [
+        {"role": "user", "content": "research prompt with [1] source text"},
+        {"role": "assistant", "content": "original synth answer"},
+    ]
+    result = b.followup(prior, [], "I already tried X, what else?")
+
+    assert result.text == "follow-up answer"
+    assert result.cache_read_tokens == 2500
+    assert result.tokens_used == 17
+    assert result.iterations == 0
+    # Messages list has grown: prior (2) + new user (1) + new assistant (1)
+    assert len(result.messages) == 4
+    assert result.messages[2] == {
+        "role": "user", "content": "I already tried X, what else?",
+    }
+
+
+def test_followup_sends_cache_control_on_prior_assistant(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("ok"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    prior = [
+        {"role": "user", "content": "p"},
+        {"role": "assistant", "content": "a"},
+    ]
+    b.followup(prior, [], "q")
+
+    sent = client.last_kwargs["messages"]
+    assert sent[0] == {"role": "user", "content": "p"}
+    assert sent[1]["role"] == "assistant"
+    assert sent[1]["content"] == [{
+        "type": "text",
+        "text": "a",
+        "cache_control": {"type": "ephemeral"},
+    }]
+    assert sent[2] == {"role": "user", "content": "q"}
+
+
+def test_followup_enable_cache_false_skips_breakpoint(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("ok"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    prior = [
+        {"role": "user", "content": "p"},
+        {"role": "assistant", "content": "a"},
+    ]
+    b.followup(prior, [], "q", enable_cache=False)
+
+    sent = client.last_kwargs["messages"]
+    # No cache_control wrapping — plain string content round-trips
+    assert sent[1] == {"role": "assistant", "content": "a"}
+
+
+def test_followup_forwards_tools_when_search_session(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("ok"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    prior = [
+        {"role": "user", "content": "p"},
+        {"role": "assistant", "content": [
+            {"type": "text", "text": "a"},
+        ]},
+    ]
+    tools = [{
+        "type": "web_search_20260209", "name": "web_search", "max_uses": 3,
+    }]
+    b.followup(prior, tools, "q")
+
+    assert client.last_kwargs["tools"] == tools
+
+
+def test_followup_omits_tools_for_synth_session(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    client = _FakeClient(result=_fake_message("ok"))
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-haiku-4-5")
+    b.followup(
+        [{"role": "user", "content": "p"}, {"role": "assistant", "content": "a"}],
+        [],  # synth: no tools
+        "q",
+    )
+
+    assert "tools" not in client.last_kwargs
+
+
+def test_followup_auth_error_raises_cloud_backend_error(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    import anthropic
+    err = anthropic.AuthenticationError.__new__(anthropic.AuthenticationError)
+    Exception.__init__(err, "bad key")
+    fake_anthropic["client"] = _FakeClient(raise_on_call=err)
+    b = CloudBackend(api_key="sk-ant-bad", model="claude-haiku-4-5")
+    with pytest.raises(CloudBackendError) as exc:
+        b.followup(
+            [{"role": "user", "content": "p"},
+             {"role": "assistant", "content": "a"}],
+            [], "q",
+        )
+    assert exc.value.kind == "auth"
+
+
+def test_followup_accumulates_cache_tokens_across_continuations(
+    fake_anthropic: dict[str, Any]
+) -> None:
+    """Pause-turn loop reused for followups — cache/output tokens should sum."""
+    responses = iter([
+        _fake_message(
+            "partial", stop_reason="pause_turn",
+            output_tokens=5, cache_read=1000,
+        ),
+        _fake_message(
+            "final", stop_reason="end_turn",
+            output_tokens=10, cache_read=0, cache_creation=0,
+        ),
+    ])
+
+    class _MultiClient:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.messages = SimpleNamespace(create=self._create)
+
+        def _create(self, **_kwargs: Any) -> Any:
+            self.calls += 1
+            return next(responses)
+
+    client = _MultiClient()
+    fake_anthropic["client"] = client
+    b = CloudBackend(api_key="sk-ant-test", model="claude-sonnet-4-6")
+    result = b.followup(
+        [{"role": "user", "content": "p"},
+         {"role": "assistant", "content": "a"}],
+        [{"type": "web_search_20260209", "name": "web_search", "max_uses": 3}],
+        "q",
+    )
+    assert client.calls == 2
+    assert result.iterations == 1
+    assert result.cache_read_tokens == 1000
+    assert result.tokens_used == 15

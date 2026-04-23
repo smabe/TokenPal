@@ -96,6 +96,15 @@ class ResearchSession:
     # Surfaced in telemetry as `tried=<backends>` so empty-result runs show
     # whether routing happened (e.g. `mode=none tried=hn,duckduckgo sources=0`).
     backends_tried: list[str] = field(default_factory=list)
+    # Cloud-mode metadata for follow-up persistence (smarter-buddy). Populated
+    # only when a cloud backend handled synth or ran in deep/search mode;
+    # orchestrator snapshots these into a FollowupSession post-run. Empty /
+    # None on local-only runs.
+    cloud_prompt: str = ""
+    cloud_answer_text: str = ""
+    cloud_model: str = ""
+    cloud_messages: list[dict[str, Any]] | None = None
+    cloud_tools: list[dict[str, Any]] | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -315,7 +324,9 @@ class ResearchRunner:
 
         self._set_status("researching: synthesizing")
         try:
-            result, raw_text, used = await self._synthesize(question, session.sources)
+            result, raw_text, used = await self._synthesize(
+                question, session.sources, session=session,
+            )
         except Exception:
             log.exception("Research synthesizer failed")
             session.stopped_reason = ResearchStopReason.CRASHED
@@ -659,10 +670,37 @@ class ResearchRunner:
             backend=hit.backend,
         )
 
+    def _stash_cloud_result(
+        self,
+        session: ResearchSession,
+        *,
+        prompt: str,
+        text: str,
+        messages: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Snapshot cloud-call state onto the session for follow-up replay.
+
+        Assumes ``self._cloud_backend is not None`` — callers only hit this
+        on the cloud-success branch.
+        """
+        assert self._cloud_backend is not None
+        session.cloud_prompt = prompt
+        session.cloud_answer_text = text
+        session.cloud_model = self._cloud_backend.model
+        if messages is not None:
+            session.cloud_messages = messages
+        if tools is not None:
+            session.cloud_tools = tools
+
     # ---- Stage 4: synthesizer --------------------------------------------
 
     async def _synthesize(
-        self, question: str, sources: list[Source]
+        self,
+        question: str,
+        sources: list[Source],
+        *,
+        session: ResearchSession | None = None,
     ) -> tuple[SynthResult | None, str, int]:
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
@@ -700,6 +738,10 @@ class ResearchRunner:
                 self._log(f"  synth: cloud ({self._cloud_backend.model})")
                 log.info("research synth: cloud returned %d tokens in %.1fs",
                          response.tokens_used, response.latency_ms / 1000.0)
+                if session is not None:
+                    self._stash_cloud_result(
+                        session, prompt=prompt, text=response.text,
+                    )
             except CloudBackendError as e:
                 self._log(f"  synth: cloud failed ({e.kind}), falling back to local")
                 log.warning("cloud synth failed (%s): %s", e.kind, e)
@@ -801,6 +843,13 @@ class ResearchRunner:
             return session
 
         session.tokens_used = deep.tokens_used
+        self._stash_cloud_result(
+            session,
+            prompt=prompt,
+            text=deep.text,
+            messages=deep.messages,
+            tools=deep.tools,
+        )
         self._log(
             f"  synth: {label} ({self._cloud_backend.model}, "
             f"{deep.iterations} continuation{'s' if deep.iterations != 1 else ''}, "
