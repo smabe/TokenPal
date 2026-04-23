@@ -450,6 +450,21 @@ but still run correctly. A follow-up with
 `usage.cache_read_input_tokens == 0` logs a warning so cost-watch can
 distinguish a stale cache from a misaligned breakpoint.
 
+**Minimum prefix size.** Anthropic silently declines to cache prefixes
+below a model-specific token floor (Sonnet ~1024, Haiku ~2048 — observed,
+not strictly documented). A short synth-mode prompt + short assistant
+answer (≤ ~1700 tokens combined) will return `cache_creation=0` on the
+first follow-up with no error. Caching activates naturally once the
+history grows past the floor (usually by followup #2 on realistic
+research output). The telemetry warning kicks in either way so the user
+knows they paid full price.
+
+Live verification: `scripts/verify_followup_live.py` exercises the full
+path against the real Anthropic API (Sonnet recommended, costs < $0.05
+per run). Followup #3 on a realistic Immich research question reads
+~2600 cached tokens and costs ~$0.012 — reference output for the done
+criterion.
+
 ### Cost math
 
 Reference run (synth mode, Haiku 4.5):
