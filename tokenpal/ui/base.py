@@ -159,8 +159,15 @@ class AbstractOverlay(abc.ABC):
         self,
         state: Any,
         on_result: Callable[[Any], None],
+        on_open_subdialog: Callable[[str], None] | None = None,
     ) -> bool:
-        """Open the /options umbrella modal. Returns True if supported."""
+        """Open the /options umbrella modal. Returns True if supported.
+
+        ``on_open_subdialog`` receives a ``NavigateTo`` string
+        (``"cloud" | "voice" | "senses" | "tools"``) when the user clicks
+        a launcher button from inside Options. Overlays that support
+        non-modal child windows can use this to spawn a sibling window
+        without closing Options. Ignored by overlays that don't."""
         return False
 
     def open_voice_modal(

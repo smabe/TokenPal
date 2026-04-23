@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -62,7 +63,7 @@ class CloudDialog(QDialog, _OneShotCallback):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Cloud LLM")
-        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(520, 660)
         self._state = state
         self._on_result = on_result

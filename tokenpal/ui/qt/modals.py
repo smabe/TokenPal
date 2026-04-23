@@ -107,7 +107,7 @@ class SelectionDialog(QDialog, _OneShotCallback):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(460, 520)
         self._on_save = on_save
         self._fired = False

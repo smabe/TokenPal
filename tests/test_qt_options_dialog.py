@@ -102,13 +102,19 @@ def test_wifi_apply_dismisses_with_set_wifi_label(qapp: QApplication) -> None:
     assert captured[0].set_wifi_label == "office"
 
 
-def test_launcher_button_sets_navigate_to(qapp: QApplication) -> None:
+def test_launcher_button_invokes_on_open_subdialog(qapp: QApplication) -> None:
     for target in ("cloud", "senses", "tools", "voice"):
-        captured: list[OptionsModalResult | None] = []
-        dlg = OptionsDialog(_state(), captured.append)
+        launched: list[str] = []
+        result_captured: list[OptionsModalResult | None] = []
+        dlg = OptionsDialog(
+            _state(),
+            result_captured.append,
+            on_open_subdialog=launched.append,
+        )
         dlg._on_launch(target)
-        assert captured[0] is not None
-        assert captured[0].navigate_to == target
+        assert launched == [target]
+        # Launcher must not fire on_result — Options stays open.
+        assert result_captured == []
 
 
 def test_selecting_other_server_tracks_pending_pick(qapp: QApplication) -> None:
@@ -191,19 +197,23 @@ def test_empty_wifi_apply_is_noop(qapp: QApplication) -> None:
     assert captured == []
 
 
-def test_launcher_discards_unsaved_max_persisted_edit(
+def test_launcher_preserves_unsaved_max_persisted_edit(
     qapp: QApplication,
 ) -> None:
-    """Clicking a launcher button should navigate with the state's
-    original max_persisted, not the user's in-progress edit — Save is
-    the only path that commits an edited value."""
-    captured: list[OptionsModalResult | None] = []
-    dlg = OptionsDialog(_state(), captured.append)
+    """Non-modal Options keeps pending edits live across sub-dialog
+    launches. The user's in-progress max_persisted edit must still be
+    in the field when Save is eventually clicked."""
+    result_captured: list[OptionsModalResult | None] = []
+    dlg = OptionsDialog(
+        _state(), result_captured.append, on_open_subdialog=lambda _t: None,
+    )
     dlg._max_persisted_input.setText("9")
     dlg._on_launch("cloud")
-    assert captured[0] is not None
-    assert captured[0].max_persisted == _state().max_persisted
-    assert captured[0].navigate_to == "cloud"
+    assert result_captured == []
+    assert dlg._max_persisted_input.text() == "9"
+    dlg._on_save()
+    assert result_captured[0] is not None
+    assert result_captured[0].max_persisted == 9
 
 
 def test_qt_overlay_open_options_modal_returns_true(qapp: QApplication) -> None:

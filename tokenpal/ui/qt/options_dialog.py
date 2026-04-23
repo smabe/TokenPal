@@ -10,8 +10,9 @@ app-layer dispatcher is untouched. Sections:
 - Custom server URL
 - Weather zip code (immediate Apply → dismiss with ``set_zip``)
 - Wifi label (immediate Apply → dismiss with ``set_wifi_label``)
-- Launcher buttons (Cloud / Senses / Tools / Voice → dismiss with
-  ``navigate_to`` so the app re-opens the relevant modal)
+- Launcher buttons (Cloud / Senses / Tools / Voice → invoke
+  ``on_open_subdialog`` so the overlay opens the target as a sibling
+  window without closing this one; pending picks stay pending)
 - Save / Cancel
 
 Async ``/v1/models`` probing for non-active servers is parked — the
@@ -83,14 +84,16 @@ class OptionsDialog(QDialog, _OneShotCallback):
         on_result: Callable[[OptionsModalResult | None], None],
         parent: QWidget | None = None,
         on_opacity_preview: Callable[[float], None] | None = None,
+        on_open_subdialog: Callable[[NavigateTo], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Options")
-        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(560, 640)
         self._state = state
         self._on_result = on_result
         self._on_opacity_preview = on_opacity_preview
+        self._on_open_subdialog = on_open_subdialog
         self._initial_opacity = clamp_background_opacity(
             state.chat_history_opacity,
         )
@@ -342,7 +345,8 @@ class OptionsDialog(QDialog, _OneShotCallback):
     def _build_launchers(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Settings shortcuts"))
         parent.addWidget(_section_help(
-            "Open another settings screen (this modal closes first).",
+            "Open another settings window alongside this one. "
+            "Pending picks here stay pending until you hit Save.",
         ))
         row = QHBoxLayout()
         for label, target in (
@@ -495,15 +499,8 @@ class OptionsDialog(QDialog, _OneShotCallback):
 
     def _on_launch(self, target: str) -> None:
         nav: NavigateTo = target  # type: ignore[assignment]
-        self._deliver(
-            self._on_result,
-            OptionsModalResult(
-                max_persisted=self._state.max_persisted,
-                clear_history=False,
-                navigate_to=nav,
-            ),
-        )
-        self.accept()
+        if self._on_open_subdialog is not None:
+            self._on_open_subdialog(nav)
 
     # --- Result assembly ------------------------------------------------
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -64,7 +65,7 @@ class VoiceDialog(QDialog, _OneShotCallback):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Voice")
-        self.setModal(True)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(520, 620)
         self._state = state
         self._on_result = on_result

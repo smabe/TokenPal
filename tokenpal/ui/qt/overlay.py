@@ -20,7 +20,7 @@ from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from tokenpal.config.chatlog_writer import clamp_font_size
 from tokenpal.config.schema import FontConfig
@@ -130,6 +130,12 @@ class QtOverlay(AbstractOverlay):
         self._dock: ChatDock | None = None
         self._history: ChatHistoryWindow | None = None
         self._tray: BuddyTrayIcon | None = None
+        # Live non-modal dialog instances — keep one of each on screen at
+        # a time; repeat slash commands focus the existing window.
+        self._options_dialog: OptionsDialog | None = None
+        self._cloud_dialog: CloudDialog | None = None
+        self._voice_dialog: VoiceDialog | None = None
+        self._selection_dialog: SelectionDialog | None = None
         self._hide_bubble_timer: QTimer | None = None
         self._env_provider: Callable[[], EnvironmentSnapshot] | None = None
 
@@ -435,14 +441,37 @@ class QtOverlay(AbstractOverlay):
         self._post(lambda: self._do_open_confirm_modal(title, body, on_result))
         return True
 
+    def _open_singleton_dialog(
+        self, attr: str, factory: Callable[[], QDialog],
+    ) -> None:
+        """Focus the existing dialog held at ``self.<attr>`` if one is
+        already on screen; otherwise build one via ``factory``, wire it
+        up to clear ``self.<attr>`` on close, and focus it."""
+        existing: QDialog | None = getattr(self, attr)
+        if existing is not None:
+            _focus_dialog(existing)
+            return
+        dialog = factory()
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        # ``finished`` fires synchronously inside accept()/reject() before
+        # the deferred-delete event, so the ref is clear in time for a
+        # rapid reopen in the same event-loop tick.
+        dialog.finished.connect(lambda _=0: setattr(self, attr, None))
+        setattr(self, attr, dialog)
+        _focus_dialog(dialog)
+
     def _do_open_selection_modal(
         self,
         title: str,
         groups: list[SelectionGroup],
         on_save: Callable[[dict[str, list[str]] | None], None],
     ) -> None:
-        dialog = SelectionDialog(title, groups, on_save, parent=self._history)
-        _focus_dialog(dialog)
+        self._open_singleton_dialog(
+            "_selection_dialog",
+            lambda: SelectionDialog(
+                title, groups, on_save, parent=self._history,
+            ),
+        )
 
     def _do_open_confirm_modal(
         self,
@@ -454,9 +483,14 @@ class QtOverlay(AbstractOverlay):
         _focus_dialog(dialog)
 
     def open_options_modal(
-        self, state: Any, on_result: Callable[[Any], None],
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+        on_open_subdialog: Callable[[str], None] | None = None,
     ) -> bool:
-        self._post(lambda: self._do_open_options_modal(state, on_result))
+        self._post(lambda: self._do_open_options_modal(
+            state, on_result, on_open_subdialog,
+        ))
         return True
 
     def set_chat_history_opacity(self, opacity: float) -> None:
@@ -520,13 +554,19 @@ class QtOverlay(AbstractOverlay):
             self._chat_font_persist_callback(self._chat_font)
 
     def _do_open_options_modal(
-        self, state: Any, on_result: Callable[[Any], None],
+        self,
+        state: Any,
+        on_result: Callable[[Any], None],
+        on_open_subdialog: Callable[[str], None] | None,
     ) -> None:
-        dialog = OptionsDialog(
-            state, on_result, parent=self._history,
-            on_opacity_preview=self.set_chat_history_opacity,
+        self._open_singleton_dialog(
+            "_options_dialog",
+            lambda: OptionsDialog(
+                state, on_result, parent=self._history,
+                on_opacity_preview=self.set_chat_history_opacity,
+                on_open_subdialog=on_open_subdialog,
+            ),
         )
-        _focus_dialog(dialog)
 
     def open_cloud_modal(
         self, state: Any, on_result: Callable[[Any], None],
@@ -537,8 +577,10 @@ class QtOverlay(AbstractOverlay):
     def _do_open_cloud_modal(
         self, state: Any, on_result: Callable[[Any], None],
     ) -> None:
-        dialog = CloudDialog(state, on_result, parent=self._history)
-        _focus_dialog(dialog)
+        self._open_singleton_dialog(
+            "_cloud_dialog",
+            lambda: CloudDialog(state, on_result, parent=self._history),
+        )
 
     def open_voice_modal(
         self, state: Any, on_result: Callable[[Any], None],
@@ -549,8 +591,10 @@ class QtOverlay(AbstractOverlay):
     def _do_open_voice_modal(
         self, state: Any, on_result: Callable[[Any], None],
     ) -> None:
-        dialog = VoiceDialog(state, on_result, parent=self._history)
-        _focus_dialog(dialog)
+        self._open_singleton_dialog(
+            "_voice_dialog",
+            lambda: VoiceDialog(state, on_result, parent=self._history),
+        )
 
     # --- Callback registration -------------------------------------------
 

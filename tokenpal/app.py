@@ -667,25 +667,29 @@ def main() -> None:
             bubble_font=config.ui.bubble_font,
         )
 
-        def on_save(result: OptionsModalResult | None) -> None:
-            if result is None:
-                return
-
-            nav = result.navigate_to
-            if nav == "cloud":
+        def on_open_subdialog(target: str) -> None:
+            if target == "cloud":
                 _open_cloud_modal()
-                return
-            if nav == "senses":
+            elif target == "senses":
                 flag_fields = [
                     f.name for f in dataclasses.fields(config.senses)
                 ]
                 _open_senses_modal(flag_fields)
-                return
-            if nav == "tools":
+            elif target == "tools":
                 _open_tools_modal()
-                return
-            if nav == "voice":
+            elif target == "voice":
                 _open_voice_modal()
+
+        def on_save(result: OptionsModalResult | None) -> None:
+            if result is None:
+                return
+
+            # Textual's Options still returns ``navigate_to`` on its
+            # launcher buttons (it runs one modal at a time). Qt uses
+            # ``on_open_subdialog`` instead and leaves this field None.
+            nav = result.navigate_to
+            if nav is not None:
+                on_open_subdialog(nav)
                 return
 
             if result.switch_server_to:
@@ -785,7 +789,9 @@ def main() -> None:
                 overlay.clear_log()
                 overlay.log_buddy_message("/options: chat history cleared.")
 
-        return overlay.open_options_modal(state, on_save)
+        return overlay.open_options_modal(
+            state, on_save, on_open_subdialog=on_open_subdialog,
+        )
 
     def _cmd_options(_args: str) -> CommandResult:
         if _open_options_modal():

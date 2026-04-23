@@ -1773,8 +1773,13 @@ class TextualOverlay(AbstractOverlay):
         self,
         state: Any,
         on_result: Callable[[Any], None],
+        on_open_subdialog: Callable[[str], None] | None = None,
     ) -> bool:
-        """Open the /options umbrella modal. Result is OptionsModalResult or None."""
+        """Open the /options umbrella modal. Result is OptionsModalResult or None.
+
+        ``on_open_subdialog`` is accepted for interface parity with the Qt
+        overlay but ignored here: Textual launches sub-modals via the
+        existing ``navigate_to`` field on the result payload."""
         if not (self._app and self._is_running):
             return False
         self._post(OpenOptionsModal(state, on_result))
