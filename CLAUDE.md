@@ -41,6 +41,7 @@ Load the relevant doc on demand rather than reading all of them.
 - `tokenpal --validate` — full preflight: Python version, platform deps, git, inference engine, model, config, senses, macOS permissions
 - `tokenpal --verbose` — show debug logs in terminal
 - `tokenpal --skip-welcome` -- bypass first-run wizard
+- `tokenpal --overlay {auto|qt|textual|console|tkinter}` -- override `[ui] overlay` from config at launch (e.g. `--overlay textual` for rich TUI in the terminal without editing config.toml)
 - `scripts/download-model.ps1` -- interactive GGUF picker for llamacpp path (Windows). Downloads, updates config + bat.
 - `pytest` -- run tests (asyncio_mode=auto)
 - `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)

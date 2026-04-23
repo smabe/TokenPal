@@ -157,6 +157,8 @@ def main() -> None:
     llm = resolve_backend(llm_config)
 
     ui_config = dataclasses.asdict(config.ui)
+    if getattr(args, "overlay", None):
+        ui_config["overlay"] = args.overlay
     overlay = resolve_overlay(ui_config)
 
     # Load voice profile if configured

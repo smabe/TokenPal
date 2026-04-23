@@ -57,6 +57,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--skip-welcome", action="store_true",
         help="skip the first-run welcome wizard",
     )
+    parser.add_argument(
+        "--overlay", choices=("auto", "qt", "textual", "console", "tkinter"),
+        default=None, metavar="NAME",
+        help=(
+            "override [ui] overlay from config. qt=desktop window, "
+            "textual=rich TUI in terminal, console=ANSI-only terminal"
+        ),
+    )
     return parser.parse_args(argv)
 
 
