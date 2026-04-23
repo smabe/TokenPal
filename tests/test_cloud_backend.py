@@ -541,6 +541,71 @@ def test_apply_cache_breakpoint_no_assistant_turn() -> None:
     assert out is not msgs
 
 
+def test_apply_cache_breakpoint_strips_existing_markers() -> None:
+    """Multi-turn followups must keep exactly ONE cache_control per request.
+
+    Anthropic caps at 4 cache_control blocks per request; without the strip,
+    each followup adds one and followup #5 400s. The right behavior is:
+    only the LAST assistant turn carries the breakpoint, earlier cached
+    prefixes are still served from whatever entries prior requests wrote.
+    """
+    msgs = [
+        # Turn 1: prior assistant had cache_control from an earlier followup
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": [{
+            "type": "text", "text": "original",
+            "cache_control": {"type": "ephemeral"},
+        }]},
+        # Turn 2: followup round trip, no cache_control on response
+        {"role": "user", "content": "followup1"},
+        {"role": "assistant", "content": [{
+            "type": "text", "text": "followup1_answer",
+            "cache_control": {"type": "ephemeral"},  # carried from prior round
+        }]},
+    ]
+    out = _apply_cache_breakpoint(msgs)
+    # Count cache_control markers across all messages
+    cc_count = sum(
+        1 for m in out if isinstance(m.get("content"), list)
+        for b in m["content"]
+        if isinstance(b, dict) and "cache_control" in b
+    )
+    assert cc_count == 1, f"expected exactly 1 cache_control, got {cc_count}"
+    # And it must be on the latest assistant turn
+    assert out[-1]["role"] == "assistant"
+    assert out[-1]["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    # Original turn 1 assistant turn has no cache_control anymore
+    assert all(
+        "cache_control" not in b
+        for b in out[1]["content"] if isinstance(b, dict)
+    )
+
+
+def test_apply_cache_breakpoint_stays_within_4_limit_over_many_followups() -> None:
+    """Simulate 6 round trips — the per-request count must stay at 1 every time."""
+    msgs: list[dict[str, Any]] = [
+        {"role": "user", "content": "prompt"},
+        {"role": "assistant", "content": "original answer"},
+    ]
+    for i in range(6):
+        sent = _apply_cache_breakpoint(msgs)
+        cc_count = sum(
+            1 for m in sent if isinstance(m.get("content"), list)
+            for b in m["content"]
+            if isinstance(b, dict) and "cache_control" in b
+        )
+        assert cc_count == 1, (
+            f"round {i}: expected 1 cache_control, got {cc_count}"
+        )
+        # Simulate round-trip: server appends a new assistant response, then
+        # we append the new user turn ourselves for the next iteration.
+        msgs = [*sent, {"role": "assistant", "content": f"answer {i}"}]
+        msgs.append({"role": "user", "content": f"followup {i}"})
+        # The "sent" version is what gets stashed as session.messages —
+        # but in the real code path, the API-returned assistant turn is also
+        # appended. Reproduce that layering so we actually exercise the strip.
+
+
 def test_followup_synth_happy_path(fake_anthropic: dict[str, Any]) -> None:
     fake_anthropic["client"] = _FakeClient(
         result=_fake_message(

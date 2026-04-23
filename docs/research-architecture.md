@@ -450,14 +450,41 @@ but still run correctly. A follow-up with
 `usage.cache_read_input_tokens == 0` logs a warning so cost-watch can
 distinguish a stale cache from a misaligned breakpoint.
 
-**Minimum prefix size.** Anthropic silently declines to cache prefixes
-below a model-specific token floor (Sonnet ~1024, Haiku ~2048 — observed,
-not strictly documented). A short synth-mode prompt + short assistant
-answer (≤ ~1700 tokens combined) will return `cache_creation=0` on the
-first follow-up with no error. Caching activates naturally once the
-history grows past the floor (usually by followup #2 on realistic
-research output). The telemetry warning kicks in either way so the user
-knows they paid full price.
+**Minimum prefix size (hard floor, silent skip).** Per Anthropic's
+prompt-caching docs, the prefix up to and including the `cache_control`
+block must hit a model-specific minimum or the cache write silently
+no-ops (no error, `cache_creation_input_tokens=0`):
+
+| Model | Minimum cacheable prefix |
+|-------|--------------------------|
+| Claude Opus 4.5 / 4.6 / 4.7 | 4096 tokens |
+| Claude Sonnet 4.5 | 1024 tokens |
+| Claude Sonnet 4.6 | 2048 tokens |
+| Claude Haiku 4.5 | 4096 tokens |
+
+In practice: synth-mode followups on a short Haiku research answer
+often fall below 4096 tokens on followup #1 and skip caching. By
+followup #2, the accumulated history usually crosses the line. Our
+telemetry warning catches both the below-threshold case and the
+stale-cache (>5min) case — operators can distinguish by the
+`cache_creation_input_tokens` value on the PREVIOUS followup.
+
+**Breakpoint accounting (max 4/request).** Anthropic caps at 4
+`cache_control` blocks per request. `_apply_cache_breakpoint` strips any
+pre-existing markers from the message history before adding exactly one
+on the latest assistant turn, so each follow-up sends exactly 1
+breakpoint — no accumulation. Without the strip, followup #5 on a
+`max_followups=5` session would 400 with too-many-breakpoints.
+
+**Thinking + cache interaction.** On Sonnet/Opus with adaptive thinking,
+follow-ups are non-tool-result user turns, which causes Anthropic to
+strip cached thinking blocks from context. The follow-up still works,
+but thinking tokens re-bill each time.
+
+**Ephemeral TTL.** Default is 5 minutes. Follow-ups within that window
+hit the cache; those between 5-15m within TTL miss the cache but still
+run correctly. We don't use the 1-hour TTL option (2× base input price)
+— not worth it for a 15-min follow-up window.
 
 Live verification: `scripts/verify_followup_live.py` exercises the full
 path against the real Anthropic API (Sonnet recommended, costs < $0.05

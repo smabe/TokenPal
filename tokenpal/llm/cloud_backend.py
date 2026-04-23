@@ -519,12 +519,21 @@ class CloudBackend:
 def _apply_cache_breakpoint(
     messages: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return a shallow copy of ``messages`` with a ``cache_control: ephemeral``
-    block on the last content block of the last assistant turn.
+    """Return a shallow copy of ``messages`` with exactly ONE
+    ``cache_control: ephemeral`` on the last content block of the last
+    assistant turn. Strips any pre-existing cache_control markers first.
+
+    Why strip: session.messages accumulates the exact payload we sent on the
+    prior follow-up — including its cache_control. If we only ADD a new
+    breakpoint, every follow-up adds one more, hitting Anthropic's hard
+    limit of 4 cache_control blocks per request at followup #5 and 400'ing.
+    The right behavior is: only the LAST assistant turn carries the
+    breakpoint; previous turns are cached via prefix-matching against
+    earlier requests' cache writes, not by carrying the marker forward.
 
     Anthropic caches everything UP TO AND INCLUDING the cache_control block,
-    so placing it on the tail of the prior assistant turn maximizes the cached
-    prefix (all prior user/assistant exchanges).
+    so placing it on the tail of the most recent assistant turn maximizes
+    the cached prefix.
 
     Synth-mode content is stashed as a plain string — wrap it into a single
     text block so cache_control can attach. Deep/search-mode content is
@@ -533,7 +542,7 @@ def _apply_cache_breakpoint(
     """
     if not messages:
         return list(messages)
-    out = [dict(m) for m in messages]
+    out = [_strip_cache_control(m) for m in messages]
     for idx in range(len(out) - 1, -1, -1):
         if out[idx].get("role") != "assistant":
             continue
@@ -558,6 +567,35 @@ def _apply_cache_breakpoint(
             new_content[-1] = last_dict
             out[idx]["content"] = new_content
             break
+    return out
+
+
+def _strip_cache_control(message: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow copy of ``message`` with any ``cache_control`` fields
+    removed from its content blocks. String content passes through unchanged.
+    SDK pydantic blocks are returned as dicts via ``model_dump()``.
+    """
+    out = dict(message)
+    content = out.get("content")
+    if not isinstance(content, list):
+        return out
+    new_content: list[Any] = []
+    for block in content:
+        if isinstance(block, dict):
+            if "cache_control" in block:
+                block = {k: v for k, v in block.items() if k != "cache_control"}
+            new_content.append(block)
+            continue
+        if hasattr(block, "model_dump"):
+            dumped = block.model_dump()
+            if "cache_control" in dumped:
+                dumped = {
+                    k: v for k, v in dumped.items() if k != "cache_control"
+                }
+            new_content.append(dumped)
+            continue
+        new_content.append(block)
+    out["content"] = new_content
     return out
 
 
