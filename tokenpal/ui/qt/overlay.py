@@ -151,6 +151,9 @@ class QtOverlay(AbstractOverlay):
         self._chat_font_persist_callback: (
             Callable[[FontConfig], None] | None
         ) = None
+        self._ui_state_persist_callback: (
+            Callable[[bool, bool], None] | None
+        ) = None
 
         # Pre-setup buffers. The brain may call any adapter method before
         # setup() runs; stash the payload and drain on mount.
@@ -265,6 +268,7 @@ class QtOverlay(AbstractOverlay):
                 self._history.activateWindow()
                 if self._dock is not None:
                     self._dock.focus_input()
+            self._persist_ui_state()
 
         def _toggle_chat() -> None:
             # Funnel through _do_toggle_chat so the tray and the slash
@@ -306,26 +310,33 @@ class QtOverlay(AbstractOverlay):
     def run_loop(self) -> None:
         if self._app is None:
             raise RuntimeError("QtOverlay.setup() must run before run_loop()")
-        if self._buddy is not None:
+        if self._buddy is not None and self._buddy_user_visible:
             self._buddy.show()
             # NSWindow collectionBehavior can only be set once the
-            # native window actually exists — i.e. after show().
+            # native window actually exists: after show().
             apply_macos_stay_visible(self._buddy)
-        if self._dock is not None:
-            # Position before show so it doesn't flash at (0, 0).
-            self._reposition_dock()
-            self._dock.show()
-            apply_macos_stay_visible(self._dock)
-            # The buddy's native window hasn't finished mapping on the
-            # first show — geometry() reports stale pre-map values, so
-            # the dock lands centered on the buddy instead of below him.
-            # Re-run once the event loop has turned.
-            QTimer.singleShot(0, self._reposition_dock)
         if self._history is not None:
-            self._history.hide()
-            if self._tray is not None:
-                self._tray.set_chat_visible(False)
+            if self._history_user_visible:
+                self._history.show()
+                apply_macos_stay_visible(self._history)
+                self._history.raise_()
+                self._history.activateWindow()
+            else:
+                self._history.hide()
+        if self._dock is not None:
+            # Pre-position so the dock doesn't flash at (0, 0) when
+            # _update_dock_placement decides to float it.
+            self._reposition_dock()
+            # The buddy's native window hasn't finished mapping on the
+            # first show, so geometry() reports stale pre-map values;
+            # re-run once the event loop has turned.
+            QTimer.singleShot(0, self._reposition_dock)
+        # _update_dock_placement handles the dock's float/embed/hide
+        # transition based on the restored visibility flags.
+        self._update_dock_placement()
         if self._tray is not None:
+            self._tray.set_buddy_visible(self._buddy_user_visible)
+            self._tray.set_chat_visible(self._history_user_visible)
             self._tray.show()
         self._app.exec()
 
@@ -640,6 +651,38 @@ class QtOverlay(AbstractOverlay):
     ) -> None:
         self._chat_font_persist_callback = persist
 
+    def set_ui_state_persist_callback(
+        self, persist: Callable[[bool, bool], None],
+    ) -> None:
+        """Register a callback invoked on every visibility toggle.
+
+        Args are ``(buddy_visible, chat_log_visible)``. The callback
+        runs synchronously on the Qt main thread, so keep it cheap:
+        app.py uses it to write a small JSON file.
+        """
+        self._ui_state_persist_callback = persist
+
+    def restore_visibility_state(
+        self, *, buddy_visible: bool, chat_log_visible: bool,
+    ) -> None:
+        """Override the defaults before ``run_loop`` decides what to show.
+
+        Must be called after ``setup()`` (flags are created there) and
+        before ``run_loop()`` (which consumes them). Calling mid-run
+        won't reparent widgets on its own.
+        """
+        self._buddy_user_visible = bool(buddy_visible)
+        self._history_user_visible = bool(chat_log_visible)
+
+    def _persist_ui_state(self) -> None:
+        cb = self._ui_state_persist_callback
+        if cb is None:
+            return
+        try:
+            cb(self._buddy_user_visible, self._history_user_visible)
+        except Exception:
+            log.exception("ui_state persist callback failed")
+
     def set_environment_provider(
         self, provider: Callable[[], EnvironmentSnapshot] | None,
     ) -> None:
@@ -727,6 +770,7 @@ class QtOverlay(AbstractOverlay):
         self._update_dock_placement()
         if new_visible and self._dock is not None:
             self._dock.focus_input()
+        self._persist_ui_state()
 
     def _on_user_submit(self, text: str) -> None:
         # Called on the Qt main thread — safe to touch widgets.

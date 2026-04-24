@@ -54,6 +54,7 @@ from tokenpal.config.senses_writer import (
     set_ssid_label,
 )
 from tokenpal.config.tools_writer import set_enabled_tools
+from tokenpal.config.ui_state import load_ui_state, save_ui_state
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.registry import discover_backends, resolve_backend
@@ -206,6 +207,26 @@ def main() -> None:
             config.ui.chat_font = new_cfg
 
         overlay.set_chat_font_persist_callback(_persist_chat_font_bump)
+
+    # Restore the buddy/chat-log show-hide state from the last session so
+    # a user who closed with only the chat log open reopens the same way.
+    if hasattr(overlay, "restore_visibility_state"):
+        ui_state = load_ui_state(data_dir)
+        overlay.restore_visibility_state(
+            buddy_visible=ui_state["buddy_visible"],
+            chat_log_visible=ui_state["chat_log_visible"],
+        )
+
+        def _persist_ui_state(buddy_visible: bool, chat_log_visible: bool) -> None:
+            save_ui_state(
+                data_dir,
+                {
+                    "buddy_visible": buddy_visible,
+                    "chat_log_visible": chat_log_visible,
+                },
+            )
+
+        overlay.set_ui_state_persist_callback(_persist_ui_state)
 
     def _agent_log(
         text: str, *, markup: bool = False, url: str | None = None,
