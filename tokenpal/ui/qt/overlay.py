@@ -244,6 +244,12 @@ class QtOverlay(AbstractOverlay):
                 self._buddy.show()
             else:
                 self._buddy.hide()
+                # A bubble already painted on screen would linger as a
+                # detached top-level window after the buddy vanishes.
+                if self._hide_bubble_timer is not None:
+                    self._hide_bubble_timer.stop()
+                if self._bubble is not None:
+                    self._bubble.hide_bubble()
             if self._tray is not None:
                 self._tray.set_buddy_visible(new_visible)
             self._update_dock_placement()
@@ -652,11 +658,16 @@ class QtOverlay(AbstractOverlay):
     def _do_show_bubble(self, bubble: SpeechBubble) -> None:
         if self._bubble is None:
             return
-        self._bubble.show_text(bubble.text, typing=not bubble.persistent)
-        self._reposition_bubble()
-        if self._hide_bubble_timer is not None and not bubble.persistent:
-            self._hide_bubble_timer.start(_BUBBLE_HIDE_DELAY_MS)
         speaker = self._voice_name or self._buddy_name
+        # Chat log still records the utterance even when the buddy
+        # window is hidden: users who only have the chat log open
+        # should still see what the buddy said. Only the on-screen
+        # bubble is gated on buddy visibility.
+        if self._buddy_user_visible:
+            self._bubble.show_text(bubble.text, typing=not bubble.persistent)
+            self._reposition_bubble()
+            if self._hide_bubble_timer is not None and not bubble.persistent:
+                self._hide_bubble_timer.start(_BUBBLE_HIDE_DELAY_MS)
         self._do_log(time.time(), speaker, bubble.text, None, persist=True)
 
     def _hide_bubble_now(self) -> None:
