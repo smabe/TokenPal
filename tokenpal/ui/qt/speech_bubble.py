@@ -7,6 +7,8 @@ and long ones don't dump a wall of text.
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
@@ -58,11 +60,17 @@ class SpeechBubble(QWidget):
         self._wrapped_cache: list[str] = []
         self._wrapped_cache_key: tuple[str, int] = ("", 0)
 
-        self.setWindowFlags(
+        flags = (
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool,
         )
+        # Mirror buddy_window: Qt.Tool on macOS maps to an NSWindow
+        # utility-panel that auto-hides on app deactivate, so the bubble
+        # would vanish whenever the user clicked away. Off-darwin Tool is
+        # the right "no taskbar entry" hint.
+        if sys.platform != "darwin":
+            flags |= Qt.WindowType.Tool
+        self.setWindowFlags(flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 

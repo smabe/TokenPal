@@ -47,7 +47,7 @@ from tokenpal.ui.selection_modal import SelectionGroup
 
 log = logging.getLogger(__name__)
 
-_BUBBLE_HIDE_DELAY_MS = 6500  # how long a bubble lingers before auto-hide
+_BUBBLE_HIDE_DELAY_MS = 15000  # how long a bubble lingers before auto-hide
 _BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
 _DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
 _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
@@ -300,6 +300,7 @@ class QtOverlay(AbstractOverlay):
         self._hide_bubble_timer = QTimer(self._bridge)
         self._hide_bubble_timer.setSingleShot(True)
         self._hide_bubble_timer.timeout.connect(self._hide_bubble_now)
+        self._bubble_stay_visible_applied = False
 
         # Replay any adapter calls that landed before we had widgets.
         for fn in self._pending_post:
@@ -728,6 +729,13 @@ class QtOverlay(AbstractOverlay):
         # bubble is gated on buddy visibility.
         if self._buddy_user_visible:
             self._bubble.show_text(bubble.text, typing=not bubble.persistent)
+            # Same NSWindow collectionBehavior treatment the buddy gets:
+            # the native window only exists after the first show(), so we
+            # defer this past construction. One-shot — collectionBehavior
+            # persists across hide/show.
+            if not self._bubble_stay_visible_applied:
+                apply_macos_stay_visible(self._bubble)
+                self._bubble_stay_visible_applied = True
             self._reposition_bubble()
             if self._hide_bubble_timer is not None and not bubble.persistent:
                 self._hide_bubble_timer.start(_BUBBLE_HIDE_DELAY_MS)
