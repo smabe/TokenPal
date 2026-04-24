@@ -57,6 +57,15 @@ _COM_Y_FRACTION = 0.30
 # below any visually noticeable snap.
 _UNSTABLE_EPS = 0.015
 
+# Center-of-torso "deadzone" — grabs here keep the head as pivot and
+# rigidly translate the buddy instead of pivoting around the grab point.
+# Without this, a click near the COM gives a tiny lever arm and the body
+# spins unpredictably around the cursor. Fractions of art bounding box.
+_DEADZONE_X_MIN = 0.20
+_DEADZONE_X_MAX = 0.80
+_DEADZONE_Y_MIN = 0.20
+_DEADZONE_Y_MAX = 0.85
+
 # Enable an on-screen HUD + file log of pivot/theta/velocity by setting
 # TOKENPAL_PHYSICS_DEBUG=1 in the environment before launch. Stays off
 # by default so normal use has no visible overlay.
@@ -172,6 +181,11 @@ class BuddyWindow(QWidget):
         self._move_to_pivot()
 
         self._drag_active = False
+        # None = normal grab (cursor IS the pivot). Tuple = deadzone
+        # grab: offset added to cursor to place the pivot on the head
+        # while the grabbed torso point stays under the cursor, and
+        # rotation is locked so the body translates rigidly.
+        self._rigid_drag_offset: tuple[float, float] | None = None
         self._fling_samples: deque[tuple[float, QPointF]] = deque(
             maxlen=_FLING_SAMPLE_MAX,
         )
@@ -353,7 +367,10 @@ class BuddyWindow(QWidget):
         now = time.monotonic()
         dt = now - self._last_tick_ts
         self._last_tick_ts = now
-        self._sim.tick(min(dt, 1.0 / 30.0))  # clamp dt to survive stalls
+        if self._rigid_drag_offset is None:
+            self._sim.tick(min(dt, 1.0 / 30.0))  # clamp dt to survive stalls
+        # Rigid drag: θ was zeroed at drag start and snap_pivot keeps
+        # the sim's velocity state quiescent — nothing to tick.
         self._move_to_pivot()
         # Rotation changed → repaint even if the widget didn't move.
         self.update()
@@ -401,16 +418,42 @@ class BuddyWindow(QWidget):
         cursor_global: QPointF,
     ) -> None:
         """Switch the pivot to the grabbed art pixel while preserving
-        the buddy's current visual pose. The new pivot in world coords
-        is the cursor position."""
-        self._reconfigure_pivot(
-            new_pivot_art=(art_pos.x(), art_pos.y()),
-            new_pivot_world=(cursor_global.x(), cursor_global.y()),
-        )
+        the buddy's current visual pose. Deadzone grabs take the rigid
+        path instead (see ``_DEADZONE_*``)."""
+        if self._in_deadzone(art_pos):
+            head_world = self.head_world_position()
+            self._reconfigure_pivot(
+                new_pivot_art=(self._art_w / 2.0, 0.0),
+                new_pivot_world=(head_world.x(), head_world.y()),
+            )
+            self._sim.reset_angle(theta=0.0, theta_dot=0.0)
+            self._rigid_drag_offset = (
+                head_world.x() - cursor_global.x(),
+                head_world.y() - cursor_global.y(),
+            )
+        else:
+            self._reconfigure_pivot(
+                new_pivot_art=(art_pos.x(), art_pos.y()),
+                new_pivot_world=(cursor_global.x(), cursor_global.y()),
+            )
+            self._rigid_drag_offset = None
         self._drag_active = True
         self._fling_samples.clear()
         self._fling_samples.append((time.monotonic(), cursor_global))
         self._wake_timer()
+
+    def _in_deadzone(self, art_pos: QPointF) -> bool:
+        """True when ``art_pos`` lands in the torso deadzone. Computed
+        as fractions of the art bounding box so it scales with font
+        size / art variant."""
+        if self._art_w <= 0 or self._art_h <= 0:
+            return False
+        fx = art_pos.x() / self._art_w
+        fy = art_pos.y() / self._art_h
+        return (
+            _DEADZONE_X_MIN <= fx <= _DEADZONE_X_MAX
+            and _DEADZONE_Y_MIN <= fy <= _DEADZONE_Y_MAX
+        )
 
     def _reconfigure_pivot(
         self,
@@ -453,7 +496,14 @@ class BuddyWindow(QWidget):
             return
         cursor = event.globalPosition()
         now = time.monotonic()
-        self._sim.set_pivot(cursor.x(), cursor.y())
+        if self._rigid_drag_offset is not None:
+            # snap (not set) so the sim's velocity state stays zeroed —
+            # otherwise release hands the pendulum the whole drag delta
+            # as a fling impulse on the first post-rigid tick.
+            ox, oy = self._rigid_drag_offset
+            self._sim.snap_pivot(cursor.x() + ox, cursor.y() + oy)
+        else:
+            self._sim.set_pivot(cursor.x(), cursor.y())
         self._fling_samples.append((now, cursor))
         # Pop-left any samples older than the fling window. O(k) where
         # k is the number of expired entries — bounded by the maxlen cap
@@ -467,7 +517,10 @@ class BuddyWindow(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or not self._drag_active:
             return
         self._drag_active = False
-        self._inject_fling_impulse()
+        was_rigid = self._rigid_drag_offset is not None
+        self._rigid_drag_offset = None
+        if not was_rigid:
+            self._inject_fling_impulse()
         self._fling_samples.clear()
         self._maybe_edge_dock()
         # Shift the pivot back to the head so gravity pulls the buddy
