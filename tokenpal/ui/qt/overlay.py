@@ -247,6 +247,18 @@ class QtOverlay(AbstractOverlay):
             if self._tray is not None:
                 self._tray.set_buddy_visible(new_visible)
             self._update_dock_placement()
+            # When buddy hides while history is already open the dock
+            # reparents into the history window. The history NSWindow
+            # must be activated or the embedded QLineEdit can't receive
+            # key events.
+            if (
+                not new_visible
+                and self._history_user_visible
+                and self._history is not None
+            ):
+                self._history.activateWindow()
+                if self._dock is not None:
+                    self._dock.focus_input()
 
         def _toggle_chat() -> None:
             # Funnel through _do_toggle_chat so the tray and the slash
@@ -696,6 +708,7 @@ class QtOverlay(AbstractOverlay):
             self._history.show()
             apply_macos_stay_visible(self._history)
             self._history.raise_()
+            self._history.activateWindow()
         else:
             self._history.hide()
         if self._tray is not None:
@@ -753,10 +766,20 @@ class QtOverlay(AbstractOverlay):
             self._dock.setAttribute(
                 Qt.WidgetAttribute.WA_TranslucentBackground, False,
             )
+            # The floating dock sets WA_ShowWithoutActivating so clicking
+            # the pill never activates the app. Once embedded in the
+            # history window, we *do* want activation: otherwise the
+            # frameless NSWindow that wraps the history never becomes key
+            # and the QLineEdit silently drops every keystroke.
+            self._dock.setAttribute(
+                Qt.WidgetAttribute.WA_ShowWithoutActivating, False,
+            )
             self._dock.setWindowFlags(Qt.WindowType.Widget)
             self._history.embed_dock(self._dock)
             self._dock.show()
             self._dock_docked = True
+            self._history.activateWindow()
+            self._dock.focus_input()
             return
 
         # floating
@@ -765,6 +788,9 @@ class QtOverlay(AbstractOverlay):
         self._dock.setWindowFlags(transparent_window_flags())
         self._dock.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground, True,
+        )
+        self._dock.setAttribute(
+            Qt.WidgetAttribute.WA_ShowWithoutActivating, True,
         )
         self._dock.restore_floating_size()
         self._reposition_dock()
