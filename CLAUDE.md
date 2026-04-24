@@ -65,6 +65,9 @@ Load the relevant doc on demand rather than reading all of them.
 - `config.toml` is gitignored -- each machine has its own
 - Windows + RDNA 4 (gfx1201): Ollama's Vulkan backend produces wrong numerics on dense models; ROCm backend can't enumerate the card. Use `[llm] inference_engine = "llamacpp"` with lemonade-sdk's llama.cpp-rocm build. See `docs/amd-dgpu-setup.md`
 
+## UI / Qt Conventions
+- When a Qt change involves painting, translucency, or custom widget rendering, verify the approach actually paints on screen before declaring done. Stylesheet approaches can be silently blocked by `WA_TranslucentBackground` and similar flags — reach for `paintEvent` when stylesheets mysteriously don't render.
+
 ## Code Style
 - Python 3.12+, strict mypy, ruff for linting
 - abc.ABC for abstractions, dataclasses for data, ClassVar for registry metadata
