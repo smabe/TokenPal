@@ -31,7 +31,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from tokenpal.config.chatlog_writer import clamp_background_opacity
+from tokenpal.config.chatlog_writer import (
+    DEFAULT_BACKGROUND_COLOR,
+    DEFAULT_FONT_COLOR,
+    clamp_background_opacity,
+    normalize_hex_color,
+)
 from tokenpal.ui.chat_format import format_chat_ts
 from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
@@ -229,12 +234,10 @@ class ChatHistoryWindow(QWidget):
         self._log.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._log.viewport().setAutoFillBackground(False)
         self._log.setFrameShape(QTextBrowser.Shape.NoFrame)
-        self._log.setStyleSheet(
-            "QTextBrowser { background: transparent; "
-            "color: #ffffff; padding: 8px; }"
-            + glass_scrollbar_stylesheet()
-        )
+        self._font_color: str = DEFAULT_FONT_COLOR
+        self._apply_log_stylesheet()
         self._background_opacity: float = 0.0
+        self._background_color: QColor = QColor(DEFAULT_BACKGROUND_COLOR)
         self._background_brush = QBrush(QColor(0, 0, 0, 0))
         # Symmetric glow rather than a directional drop shadow: offset
         # (0, 0) with a short blur radius gives a dense halo wrapping
@@ -271,9 +274,38 @@ class ChatHistoryWindow(QWidget):
 
     def set_background_opacity(self, opacity: float) -> None:
         self._background_opacity = clamp_background_opacity(opacity)
-        alpha = int(round(self._background_opacity * 255))
-        self._background_brush = QBrush(QColor(0, 0, 0, alpha))
+        self._rebuild_background_brush()
+
+    def set_background_color(self, hex_color: str) -> None:
+        normalized = normalize_hex_color(
+            hex_color, fallback=DEFAULT_BACKGROUND_COLOR,
+        )
+        if QColor(normalized) == self._background_color:
+            return
+        self._background_color = QColor(normalized)
+        self._rebuild_background_brush()
+
+    def set_font_color(self, hex_color: str) -> None:
+        normalized = normalize_hex_color(
+            hex_color, fallback=DEFAULT_FONT_COLOR,
+        )
+        if normalized == self._font_color:
+            return
+        self._font_color = normalized
+        self._apply_log_stylesheet()
+
+    def _rebuild_background_brush(self) -> None:
+        color = QColor(self._background_color)
+        color.setAlpha(int(round(self._background_opacity * 255)))
+        self._background_brush = QBrush(color)
         self.update()
+
+    def _apply_log_stylesheet(self) -> None:
+        self._log.setStyleSheet(
+            f"QTextBrowser {{ background: transparent; "
+            f"color: {self._font_color}; padding: 8px; }}"
+            + glass_scrollbar_stylesheet()
+        )
 
     def paintEvent(self, event: QPaintEvent) -> None:
         if self._background_opacity > 0.0:

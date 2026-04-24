@@ -28,9 +28,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QIntValidator
+from PySide6.QtGui import QColor, QIntValidator
 from PySide6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QFontComboBox,
@@ -48,6 +49,8 @@ from PySide6.QtWidgets import (
 )
 
 from tokenpal.config.chatlog_writer import (
+    DEFAULT_BACKGROUND_COLOR,
+    DEFAULT_FONT_COLOR,
     MAX_FONT_SIZE,
     MAX_PERSISTED,
     MIN_FONT_SIZE,
@@ -55,6 +58,7 @@ from tokenpal.config.chatlog_writer import (
     clamp_background_opacity,
     clamp_font_size,
     clamp_max_persisted,
+    normalize_hex_color,
 )
 from tokenpal.config.schema import FontConfig
 from tokenpal.ui.options_modal import (
@@ -85,6 +89,8 @@ class OptionsDialog(QDialog, _OneShotCallback):
         on_result: Callable[[OptionsModalResult | None], None],
         parent: QWidget | None = None,
         on_opacity_preview: Callable[[float], None] | None = None,
+        on_background_color_preview: Callable[[str], None] | None = None,
+        on_font_color_preview: Callable[[str], None] | None = None,
         on_open_subdialog: Callable[[NavigateTo], None] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -94,10 +100,21 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._state = state
         self._on_result = on_result
         self._on_opacity_preview = on_opacity_preview
+        self._on_background_color_preview = on_background_color_preview
+        self._on_font_color_preview = on_font_color_preview
         self._on_open_subdialog = on_open_subdialog
         self._initial_opacity = clamp_background_opacity(
             state.chat_history_opacity,
         )
+        self._initial_background_color = normalize_hex_color(
+            state.chat_history_background_color,
+            fallback=DEFAULT_BACKGROUND_COLOR,
+        )
+        self._initial_font_color = normalize_hex_color(
+            state.chat_history_font_color, fallback=DEFAULT_FONT_COLOR,
+        )
+        self._current_background_color = self._initial_background_color
+        self._current_font_color = self._initial_font_color
         self._fired = False
         self._callback_name = "OptionsDialog"
 
@@ -177,6 +194,32 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._opacity_slider.setValue(initial_pct)
         self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
         parent.addWidget(self._opacity_slider)
+
+        bg_row = QHBoxLayout()
+        bg_row.setContentsMargins(0, 0, 0, 0)
+        bg_row.addWidget(QLabel("Background color"))
+        self._bg_color_swatch = _make_swatch_button(
+            self._initial_background_color,
+        )
+        self._bg_color_swatch.clicked.connect(self._on_pick_background_color)
+        bg_row.addWidget(self._bg_color_swatch)
+        bg_row.addStretch(1)
+        bg_widget = QWidget()
+        bg_widget.setLayout(bg_row)
+        parent.addWidget(bg_widget)
+
+        fg_row = QHBoxLayout()
+        fg_row.setContentsMargins(0, 0, 0, 0)
+        fg_row.addWidget(QLabel("Log text color"))
+        self._font_color_swatch = _make_swatch_button(
+            self._initial_font_color,
+        )
+        self._font_color_swatch.clicked.connect(self._on_pick_font_color)
+        fg_row.addWidget(self._font_color_swatch)
+        fg_row.addStretch(1)
+        fg_widget = QWidget()
+        fg_widget.setLayout(fg_row)
+        parent.addWidget(fg_widget)
 
     def _build_font_group(
         self, parent: QVBoxLayout, title: str, initial: FontConfig,
@@ -455,6 +498,84 @@ class OptionsDialog(QDialog, _OneShotCallback):
                 clamp_background_opacity(value / 100.0),
             )
 
+    def _on_pick_background_color(self) -> None:
+        self._run_color_picker(
+            title="Chat background color",
+            initial=self._current_background_color,
+            preview=self._on_background_color_preview,
+            on_commit=self._commit_background_color,
+            revert_to=self._current_background_color,
+        )
+
+    def _on_pick_font_color(self) -> None:
+        self._run_color_picker(
+            title="Chat log text color",
+            initial=self._current_font_color,
+            preview=self._on_font_color_preview,
+            on_commit=self._commit_font_color,
+            revert_to=self._current_font_color,
+        )
+
+    def _run_color_picker(
+        self,
+        *,
+        title: str,
+        initial: str,
+        preview: Callable[[str], None] | None,
+        on_commit: Callable[[str], None],
+        revert_to: str,
+    ) -> None:
+        """Open ``QColorDialog`` non-modal-to-the-app but modal-to-parent,
+        streaming live hex to ``preview`` as the user drags. Commits the
+        final pick on OK; restores ``revert_to`` on Cancel so the history
+        window snaps back to the pre-picker state."""
+        dialog = QColorDialog(QColor(initial), self)
+        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
+
+        def on_live(color: QColor) -> None:
+            if not color.isValid():
+                return
+            if preview is not None:
+                preview(color.name())
+
+        dialog.currentColorChanged.connect(on_live)
+        if dialog.exec() == QColorDialog.DialogCode.Accepted:
+            picked = dialog.selectedColor()
+            if picked.isValid():
+                on_commit(picked.name())
+                return
+        if preview is not None:
+            preview(revert_to)
+
+    def _commit_background_color(self, hex_color: str) -> None:
+        normalized = normalize_hex_color(
+            hex_color, fallback=self._current_background_color,
+        )
+        self._current_background_color = normalized
+        _paint_swatch(self._bg_color_swatch, normalized)
+        if self._on_background_color_preview is not None:
+            self._on_background_color_preview(normalized)
+
+    def _commit_font_color(self, hex_color: str) -> None:
+        normalized = normalize_hex_color(
+            hex_color, fallback=self._current_font_color,
+        )
+        self._current_font_color = normalized
+        _paint_swatch(self._font_color_swatch, normalized)
+        if self._on_font_color_preview is not None:
+            self._on_font_color_preview(normalized)
+
+    def _revert_preview(self) -> None:
+        """Restore the history window to the state it had before this
+        dialog opened. Called on Cancel / Esc / close so an abandoned
+        preview doesn't leak across the Save boundary."""
+        if self._on_opacity_preview is not None:
+            self._on_opacity_preview(self._initial_opacity)
+        if self._on_background_color_preview is not None:
+            self._on_background_color_preview(self._initial_background_color)
+        if self._on_font_color_preview is not None:
+            self._on_font_color_preview(self._initial_font_color)
+
     def _on_apply_custom_server(self) -> None:
         url = self._custom_server_input.text().strip()
         if not url:
@@ -471,8 +592,7 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self.accept()
 
     def _on_cancel(self) -> None:
-        if self._on_opacity_preview is not None:
-            self._on_opacity_preview(self._initial_opacity)
+        self._revert_preview()
         self._deliver(self._on_result, None)
         self.reject()
 
@@ -525,6 +645,16 @@ class OptionsDialog(QDialog, _OneShotCallback):
             switch_server_to=self._pending_server,
             switch_model_to=self._pending_model,
             set_chat_history_opacity=self._read_opacity(),
+            set_chat_history_background_color=(
+                self._current_background_color
+                if self._current_background_color != self._initial_background_color
+                else None
+            ),
+            set_chat_history_font_color=(
+                self._current_font_color
+                if self._current_font_color != self._initial_font_color
+                else None
+            ),
             set_chat_font=self._read_font_if_changed(self._chat_font_widgets),
             set_bubble_font=self._read_font_if_changed(self._bubble_font_widgets),
         )
@@ -579,6 +709,36 @@ class _FontGroupWidgets:
             italic=self.italic.isChecked(),
             underline=self.underline.isChecked(),
         )
+
+
+def _make_swatch_button(initial_color: str) -> QPushButton:
+    """Build a small color-swatch button whose fill reflects the current
+    color. Clicking it is wired separately by the caller."""
+    btn = QPushButton()
+    btn.setFixedSize(48, 22)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    _paint_swatch(btn, initial_color)
+    return btn
+
+
+def _paint_swatch(btn: QPushButton, hex_color: str) -> None:
+    btn.setText(hex_color)
+    btn.setStyleSheet(
+        f"QPushButton {{ background: {hex_color}; "
+        f"color: {_contrast_text_color(hex_color)}; "
+        f"border: 1px solid #555; border-radius: 4px; "
+        f"padding: 1px 4px; font-size: 10px; }}"
+    )
+
+
+def _contrast_text_color(hex_color: str) -> str:
+    """Pick black or white for the swatch label so the hex string stays
+    readable against the swatch fill. Simple luminance threshold."""
+    c = QColor(hex_color)
+    if not c.isValid():
+        return "#ffffff"
+    luminance = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+    return "#000000" if luminance > 140 else "#ffffff"
 
 
 def _section_header(text: str) -> QLabel:

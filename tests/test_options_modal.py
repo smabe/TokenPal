@@ -13,9 +13,14 @@ from typing import Any
 import pytest
 
 from tokenpal.config.chatlog_writer import (
+    DEFAULT_BACKGROUND_COLOR,
+    DEFAULT_FONT_COLOR,
     MAX_PERSISTED,
     MIN_PERSISTED,
     clamp_max_persisted,
+    normalize_hex_color,
+    set_background_color,
+    set_font_color,
     set_max_persisted,
 )
 from tokenpal.ui.options_modal import (
@@ -251,3 +256,71 @@ def test_set_max_persisted_writes_clamped_value(
 
     set_max_persisted(-5)
     assert captured["data"] == {"chat_log": {"max_persisted": MIN_PERSISTED}}
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("#000000", "#000000"),
+    ("#FFFFFF", "#ffffff"),
+    ("#AbCdEf", "#abcdef"),
+    ("#fff", "#000000"),        # short form rejected
+    ("000000", "#000000"),      # missing hash rejected
+    ("#xxxxxx", "#000000"),     # non-hex rejected
+    ("", "#000000"),
+    ("garbage", "#000000"),
+])
+def test_normalize_hex_color_accepts_rrggbb(
+    value: str, expected: str,
+) -> None:
+    assert normalize_hex_color(value, fallback="#000000") == expected
+
+
+def test_normalize_hex_color_uses_supplied_fallback() -> None:
+    assert normalize_hex_color("nope", fallback="#abcdef") == "#abcdef"
+
+
+def test_set_background_color_writes_normalized_hex(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_update_config(mutate, **_kwargs):  # type: ignore[no-untyped-def]
+        data: dict[str, Any] = {}
+        mutate(data)
+        captured["data"] = data
+        return tmp_path / "config.toml"
+
+    monkeypatch.setattr(
+        "tokenpal.config.chatlog_writer.update_config", fake_update_config,
+    )
+
+    set_background_color("#AABBCC")
+    assert captured["data"] == {"chat_log": {"background_color": "#aabbcc"}}
+
+    set_background_color("garbage")
+    assert captured["data"] == {
+        "chat_log": {"background_color": DEFAULT_BACKGROUND_COLOR},
+    }
+
+
+def test_set_font_color_writes_normalized_hex(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_update_config(mutate, **_kwargs):  # type: ignore[no-untyped-def]
+        data: dict[str, Any] = {}
+        mutate(data)
+        captured["data"] = data
+        return tmp_path / "config.toml"
+
+    monkeypatch.setattr(
+        "tokenpal.config.chatlog_writer.update_config", fake_update_config,
+    )
+
+    set_font_color("#112233")
+    assert captured["data"] == {"chat_log": {"font_color": "#112233"}}
+
+    set_font_color("")
+    assert captured["data"] == {
+        "chat_log": {"font_color": DEFAULT_FONT_COLOR},
+    }

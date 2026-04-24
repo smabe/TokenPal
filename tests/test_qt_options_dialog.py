@@ -242,3 +242,77 @@ def test_qt_overlay_open_options_modal_returns_true(qapp: QApplication) -> None:
         assert handled is True
     finally:
         overlay.teardown()
+
+
+def test_commit_background_color_fires_preview_and_updates_swatch(
+    qapp: QApplication,
+) -> None:
+    previews: list[str] = []
+    dlg = OptionsDialog(
+        _state(), lambda _r: None,
+        on_background_color_preview=previews.append,
+    )
+    dlg._commit_background_color("#123456")
+    assert previews == ["#123456"]
+    assert dlg._current_background_color == "#123456"
+    assert "#123456" in dlg._bg_color_swatch.styleSheet()
+
+
+def test_commit_font_color_fires_preview_and_normalizes(
+    qapp: QApplication,
+) -> None:
+    previews: list[str] = []
+    dlg = OptionsDialog(
+        _state(), lambda _r: None,
+        on_font_color_preview=previews.append,
+    )
+    dlg._commit_font_color("#AbCdEf")
+    assert previews == ["#abcdef"]
+    assert dlg._current_font_color == "#abcdef"
+
+
+def test_save_emits_color_changes_only_when_differing(
+    qapp: QApplication,
+) -> None:
+    captured: list[OptionsModalResult | None] = []
+    dlg = OptionsDialog(_state(), captured.append)
+    # No interaction → both color fields remain None.
+    dlg._on_save()
+    assert captured[0] is not None
+    assert captured[0].set_chat_history_background_color is None
+    assert captured[0].set_chat_history_font_color is None
+
+
+def test_save_emits_color_changes_after_commit(qapp: QApplication) -> None:
+    captured: list[OptionsModalResult | None] = []
+    dlg = OptionsDialog(_state(), captured.append)
+    dlg._commit_background_color("#223344")
+    dlg._commit_font_color("#eeffaa")
+    dlg._on_save()
+    assert captured[0] is not None
+    assert captured[0].set_chat_history_background_color == "#223344"
+    assert captured[0].set_chat_history_font_color == "#eeffaa"
+
+
+def test_cancel_reverts_opacity_and_colors(qapp: QApplication) -> None:
+    opacity_previews: list[float] = []
+    bg_previews: list[str] = []
+    fg_previews: list[str] = []
+    state = _state()
+    dlg = OptionsDialog(
+        state, lambda _r: None,
+        on_opacity_preview=opacity_previews.append,
+        on_background_color_preview=bg_previews.append,
+        on_font_color_preview=fg_previews.append,
+    )
+    dlg._commit_background_color("#ff0000")
+    dlg._commit_font_color("#00ff00")
+    dlg._on_opacity_changed(40)
+    # The preview lists captured the user's mid-edit values.
+    assert bg_previews[-1] == "#ff0000"
+    assert fg_previews[-1] == "#00ff00"
+    dlg._on_cancel()
+    # Cancel must revert all three to their initial values.
+    assert opacity_previews[-1] == pytest.approx(state.chat_history_opacity)
+    assert bg_previews[-1] == state.chat_history_background_color
+    assert fg_previews[-1] == state.chat_history_font_color

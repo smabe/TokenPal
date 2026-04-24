@@ -451,8 +451,11 @@ class ChatLogConfig:
     persist: bool = True
     max_persisted: int = 200
     hydrate_on_start: int = 100
-    # 0.0 = fully transparent (legacy behavior), 1.0 = solid dark panel.
+    # 0.0 = fully transparent (legacy behavior), 1.0 = solid panel at
+    # background_color. Default color is black, log text is white.
     background_opacity: float = 0.0
+    background_color: str = "#000000"
+    font_color: str = "#ffffff"
 
 
 @dataclass

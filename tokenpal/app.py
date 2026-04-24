@@ -686,6 +686,8 @@ def main() -> None:
             weather_label=config.weather.location_label,
             current_wifi_label="",
             chat_history_opacity=cl.background_opacity,
+            chat_history_background_color=cl.background_color,
+            chat_history_font_color=cl.font_color,
             chat_font=config.ui.chat_font,
             bubble_font=config.ui.bubble_font,
         )
@@ -750,9 +752,14 @@ def main() -> None:
 
             # Navigation was None — apply field edits.
             from tokenpal.config.chatlog_writer import (
+                DEFAULT_BACKGROUND_COLOR,
+                DEFAULT_FONT_COLOR,
                 clamp_background_opacity,
                 clamp_max_persisted,
+                normalize_hex_color,
+                set_background_color,
                 set_background_opacity,
+                set_font_color,
                 set_max_persisted,
             )
 
@@ -773,6 +780,52 @@ def main() -> None:
                         overlay.log_buddy_message(
                             f"/options: could not write config: {e}",
                         )
+
+            def _apply_color_change(
+                picked: str | None,
+                *,
+                default: str,
+                current: str,
+                attr: str,
+                writer: Callable[[str], Path],
+                live_setter: Callable[[str], None],
+                label: str,
+            ) -> None:
+                if picked is None:
+                    return
+                new_val = normalize_hex_color(picked, fallback=default)
+                if new_val == current:
+                    return
+                try:
+                    writer(new_val)
+                    setattr(cl, attr, new_val)
+                    live_setter(new_val)
+                    overlay.log_buddy_message(
+                        f"/options: {label} = {new_val}.",
+                    )
+                except OSError as e:
+                    overlay.log_buddy_message(
+                        f"/options: could not write config: {e}",
+                    )
+
+            _apply_color_change(
+                result.set_chat_history_background_color,
+                default=DEFAULT_BACKGROUND_COLOR,
+                current=cl.background_color,
+                attr="background_color",
+                writer=set_background_color,
+                live_setter=overlay.set_chat_history_background_color,
+                label="chat background color",
+            )
+            _apply_color_change(
+                result.set_chat_history_font_color,
+                default=DEFAULT_FONT_COLOR,
+                current=cl.font_color,
+                attr="font_color",
+                writer=set_font_color,
+                live_setter=overlay.set_chat_history_font_color,
+                label="chat text color",
+            )
 
             if result.set_chat_font is not None:
                 _apply_font_change(
@@ -1538,6 +1591,8 @@ def main() -> None:
     # Chat-log persistence: write-through on every buddy/user line, plus a
     # clear hook for Ctrl+L. MemoryStore holds the cap so the hot path
     # doesn't pay a config lookup or SELECT COUNT per insert.
+    overlay.set_chat_history_background_color(config.chat_log.background_color)
+    overlay.set_chat_history_font_color(config.chat_log.font_color)
     if config.chat_log.background_opacity > 0.0:
         overlay.set_chat_history_opacity(config.chat_log.background_opacity)
 

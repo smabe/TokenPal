@@ -11,6 +11,11 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPainter, QPaintEvent
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.config.chatlog_writer import (
+    DEFAULT_BACKGROUND_COLOR,
+    DEFAULT_FONT_COLOR,
+    normalize_hex_color,
+)
 from tokenpal.config.schema import FontConfig
 from tokenpal.ui.qt._text_fx import qt_font_from_config
 
@@ -23,8 +28,10 @@ _BUBBLE_MAX_WIDTH = 360
 _BUBBLE_WRAP_SLACK = 28
 _BUBBLE_RADIUS = 10
 
-_BG = QColor(30, 30, 46, 232)
-_FG = QColor("#ffffff")
+# Bubble bg keeps a fixed alpha so it stays readable even when the chat
+# history panel is set to fully transparent. Only the RGB channels track
+# the user's chat_log background_color pick.
+_BUBBLE_BG_ALPHA = 232
 
 
 class SpeechBubble(QWidget):
@@ -36,6 +43,9 @@ class SpeechBubble(QWidget):
         font_size: int = 13,
     ) -> None:
         super().__init__()
+        self._bg_color = QColor(DEFAULT_BACKGROUND_COLOR)
+        self._bg_color.setAlpha(_BUBBLE_BG_ALPHA)
+        self._fg_color = QColor(DEFAULT_FONT_COLOR)
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         # Must apply to the widget itself, not just the painter, so
@@ -78,6 +88,27 @@ class SpeechBubble(QWidget):
     def hide_bubble(self) -> None:
         self._timer.stop()
         self.hide()
+
+    def set_background_color(self, hex_color: str) -> None:
+        """Update the bubble fill RGB. Alpha stays at ``_BUBBLE_BG_ALPHA``
+        so a fully-transparent chat history doesn't erase the bubble."""
+        color = QColor(
+            normalize_hex_color(hex_color, fallback=DEFAULT_BACKGROUND_COLOR),
+        )
+        color.setAlpha(_BUBBLE_BG_ALPHA)
+        if color == self._bg_color:
+            return
+        self._bg_color = color
+        self.update()
+
+    def set_font_color(self, hex_color: str) -> None:
+        color = QColor(
+            normalize_hex_color(hex_color, fallback=DEFAULT_FONT_COLOR),
+        )
+        if color == self._fg_color:
+            return
+        self._fg_color = color
+        self.update()
 
     def apply_font_config(
         self,
@@ -157,12 +188,12 @@ class SpeechBubble(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(_BG)
+        painter.setBrush(self._bg_color)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawRoundedRect(self.rect(), _BUBBLE_RADIUS, _BUBBLE_RADIUS)
 
         painter.setFont(self._font)
-        painter.setPen(_FG)
+        painter.setPen(self._fg_color)
         fm = self.fontMetrics()
         y = _BUBBLE_PADDING + fm.ascent()
         for line in self._wrap_lines(self._visible_text, fm):

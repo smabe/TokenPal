@@ -72,6 +72,8 @@ class OptionsModalState:
     weather_label: str = ""
     current_wifi_label: str = ""
     chat_history_opacity: float = 0.0
+    chat_history_background_color: str = "#000000"
+    chat_history_font_color: str = "#ffffff"
     chat_font: FontConfig = field(default_factory=FontConfig)
     bubble_font: FontConfig = field(default_factory=FontConfig)
 
@@ -95,6 +97,8 @@ class OptionsModalResult:
     set_zip: str | None = None
     set_wifi_label: str | None = None
     set_chat_history_opacity: float | None = None
+    set_chat_history_background_color: str | None = None
+    set_chat_history_font_color: str | None = None
     set_chat_font: FontConfig | None = None
     set_bubble_font: FontConfig | None = None
 

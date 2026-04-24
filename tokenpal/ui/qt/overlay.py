@@ -528,6 +528,22 @@ class QtOverlay(AbstractOverlay):
                 self._history.set_background_opacity(opacity)
         self._post(apply)
 
+    def set_chat_history_background_color(self, hex_color: str) -> None:
+        def apply() -> None:
+            if self._history is not None:
+                self._history.set_background_color(hex_color)
+            if self._bubble is not None:
+                self._bubble.set_background_color(hex_color)
+        self._post(apply)
+
+    def set_chat_history_font_color(self, hex_color: str) -> None:
+        def apply() -> None:
+            if self._history is not None:
+                self._history.set_font_color(hex_color)
+            if self._bubble is not None:
+                self._bubble.set_font_color(hex_color)
+        self._post(apply)
+
     def set_chat_font(self, cfg: FontConfig) -> None:
         self._chat_font = cfg
         self._post(self._apply_chat_font_live)
@@ -593,6 +609,10 @@ class QtOverlay(AbstractOverlay):
             lambda: OptionsDialog(
                 state, on_result, parent=self._history,
                 on_opacity_preview=self.set_chat_history_opacity,
+                on_background_color_preview=(
+                    self.set_chat_history_background_color
+                ),
+                on_font_color_preview=self.set_chat_history_font_color,
                 on_open_subdialog=on_open_subdialog,
             ),
         )

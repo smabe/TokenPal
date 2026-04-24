@@ -8,6 +8,7 @@ Font writers mirror the same pattern.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,10 @@ MIN_PERSISTED = 0
 MAX_PERSISTED = 5000
 MIN_FONT_SIZE = 8
 MAX_FONT_SIZE = 48
+
+DEFAULT_BACKGROUND_COLOR = "#000000"
+DEFAULT_FONT_COLOR = "#ffffff"
+_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def clamp_max_persisted(n: int) -> int:
@@ -47,6 +52,37 @@ def set_background_opacity(x: float) -> Path:
 
     def mutate(data: dict[str, Any]) -> None:
         data.setdefault("chat_log", {})["background_opacity"] = clamped
+
+    return update_config(mutate)
+
+
+def normalize_hex_color(s: str, *, fallback: str) -> str:
+    """Return ``s`` as a lowercase ``#rrggbb`` string if it matches that shape,
+    otherwise ``fallback``. Hand-edited config.toml typos should degrade to
+    the default rather than crash the UI."""
+    if isinstance(s, str) and _HEX_COLOR_RE.match(s):
+        return s.lower()
+    return fallback
+
+
+def set_background_color(s: str) -> Path:
+    """Upsert [chat_log] background_color = "#rrggbb". Falls back to default
+    on invalid input."""
+    normalized = normalize_hex_color(s, fallback=DEFAULT_BACKGROUND_COLOR)
+
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("chat_log", {})["background_color"] = normalized
+
+    return update_config(mutate)
+
+
+def set_font_color(s: str) -> Path:
+    """Upsert [chat_log] font_color = "#rrggbb". Falls back to default on
+    invalid input."""
+    normalized = normalize_hex_color(s, fallback=DEFAULT_FONT_COLOR)
+
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("chat_log", {})["font_color"] = normalized
 
     return update_config(mutate)
 
