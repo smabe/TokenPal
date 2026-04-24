@@ -15,6 +15,11 @@ fi
 
 source "$VENV/bin/activate"
 
+HOOKS_MARKER="$VENV/.tokenpal-hooks-installed"
+if [ ! -f "$HOOKS_MARKER" ] && [ -x "$SCRIPT_DIR/scripts/install-hooks.sh" ]; then
+    bash "$SCRIPT_DIR/scripts/install-hooks.sh" >/dev/null 2>&1 && touch "$HOOKS_MARKER" || true
+fi
+
 needs_sync=0
 if [ "${TOKENPAL_FORCE_SYNC:-0}" = "1" ]; then
     needs_sync=1
