@@ -46,8 +46,8 @@ satisfies the full surface — the brain never needs `hasattr` gates.
 PySide6. It owns:
 
 - `BuddyWindow` (`qt/buddy_window.py`) — frameless / translucent /
-  always-on-top QWidget, spring-pendulum drag physics (see below),
-  edge-dock on release.
+  always-on-top QWidget, rigid-pendulum drag physics pivoted at the
+  cursor's grab point (see below), edge-dock on release.
 - `SpeechBubble` (`qt/speech_bubble.py`) — frameless bubble with
   per-character typing animation. Line wrap cached on text + width
   so the 30ms paint tick doesn't re-wrap every frame.
@@ -119,38 +119,85 @@ on mount via `_bridge.dispatch.emit(fn)` so nothing silently drops.
   and double-invokes your callback. `_OneShotCallback` exists only
   as belt-and-suspenders in case that pattern leaks back.
 
-## Dangle physics
+## Pendulum drag physics
 
-The buddy hangs from an anchor via a damped spring-pendulum.
-Pure-Python simulator at `tokenpal/ui/qt/physics.py:DangleSimulator`
-(no Qt imports, fully unit-testable).
+The buddy is a rigid pendulum pivoted at whatever pixel on the art the
+cursor grabbed. Grab the head and he dangles normally; grab a foot and
+he dangles upside-down from it (COM is head-heavy, at `y = 30 %` of
+the art so the inversion feels right); grab anywhere in between and
+he swings around that point. Pure-Python simulator at
+`tokenpal/ui/qt/physics.py:PendulumSimulator` (no Qt imports, fully
+unit-testable). Semi-implicit Euler at 60 Hz.
 
-State: `(pos, vel)`, anchor `a`, semi-implicit Euler at 60 Hz.
+State: `θ` (rad, signed so Qt's `painter.rotate(+deg)` renders CW in
+screen, making feet sweep left), `θ_dot`, plus EMA-smoothed pivot
+velocity / acceleration and a cursor-position history deque for
+circular-motion detection.
 
-- `F_spring = -k * (pos - a)` — Hooke.
-- `F_gravity = (0, +g)` — gravitational droop, so rest sits at
-  `anchor + (0, g*m/k)` below the anchor (~7 px at defaults).
-- `F_damping = -c * vel` — ζ ≈ 0.45, settles from hard displacement
-  within ~1.5 s.
+ODE:
 
-Drag moves the **anchor**, not the body — the spring pulls the body
-along, which is what makes the motion feel connected by string.
-Release carries the last ~80 ms of cursor velocity into the body as
-an impulse so flicking sends him swinging. The simulator auto-sleeps
-when `|vel| < 1 px/s` and the body is within 0.5 px of rest for 10
-ticks; `BuddyWindow` stops its 60 Hz timer when the sim sleeps and
-wakes it on drag / impulse / anchor change so a resting buddy burns
-no CPU.
+```
+θ'' = −spin_fade · gravity · sin(θ)/L                       # restoring
+      + spin_fade · drag · (vₓ·cosθ − vᵧ·sinθ)/(L·m)         # wind-drag
+      + spin_fade · yank · (aₓ·cosθ − aᵧ·sinθ)/L             # yank impulse
+      − (damping + drag/m) · damp_factor · θ'                # friction
+      + coupling · ω_cursor_smoothed                         # circle drive
+```
+
+- **Gravity**: restores θ→0 at rest. Signed by Qt's rotation convention.
+- **Wind-drag** (velocity-based forcing): constant-speed cursor drag
+  produces a steady tilt; replaces the old acceleration-only model that
+  let body drift back to vertical whenever cursor reached constant
+  velocity.
+- **Yank** (acceleration-based pseudo-force): impulsive kick on rapid
+  cursor direction changes — the "whip" effect.
+- **Damping**: `(damping + drag/m) · damp_factor · θ'`. `damp_factor`
+  scales from 1 at rest down to `spin_damping_floor` at the angular
+  speed cap so sustained twirls don't bleed energy.
+- **Circular coupling**: `_cursor_angular_rate()` estimates the cursor's
+  signed angular velocity around the running mean of its last 24
+  samples (~0.4 s window) via a swept-area cross-product — exactly 0
+  for linear / stationary motion, non-zero only for curved paths. The
+  raw rate is EMA-smoothed so hand-jitter on a real circle doesn't
+  sag coupling drive. Pure additive torque (NOT a PID on `ω_cursor −
+  θ_dot`) so it only accelerates body in the cursor's direction and
+  never brakes existing momentum.
+- **`spin_fade`** (`1 − |θ_dot| / spin_lockout_rate`, clamped to
+  `[0, 1]`): fades gravity + wind-drag + yank out as body spin grows.
+  Keeps orbit clean (no sine-wave ω variation at the top), full force
+  at rest so buddy settles cleanly. Damping stays active but its own
+  `damp_factor` takes over at high ω.
+
+Grabbing (`BuddyWindow._begin_drag` / `_reconfigure_pivot`) swaps
+`_pivot_art` to the clicked art pixel while preserving visual pose:
+`theta_visual = θ + angle_of_com_offset` is captured, pivot changes,
+new θ is solved to match the same render rotation. Angles landing
+within ~0.9° of the ±π inverted-equilibrium get nudged off so gravity
+can take over (`_UNSTABLE_EPS`). On release, `_re_pivot_to_neutral()`
+does the same swap back to the head — but with `pivot_world` set to
+the head's current world position rather than the mouse release, so
+the body's world geometry doesn't shift. Gravity then walks him
+upright from his current orientation without a visual pop.
+
+The simulator auto-sleeps when `|θ_dot| < settle_speed`, `|θ| <
+settle_angle`, and the pivot is stationary for 15 consecutive ticks.
+`BuddyWindow` stops its 60 Hz timer when the sim sleeps and wakes it
+on drag / impulse / pivot change so a resting buddy burns no CPU.
+
+**Debug HUD + log**: set `TOKENPAL_PHYSICS_DEBUG=1` before launch.
+Adds a magenta crosshair at the pivot, text overlay with θ / ω /
+cursor coords / L / state, and a 20 Hz trace to `/tmp/tokenpal-
+physics.log` in space-delimited key=value format for analysis.
 
 **Never block the physics timer thread**. The 16 ms QTimer slot does
-one `sim.tick(dt)` + one `self.move(...)` and returns. If you need
-to do more work, marshal it elsewhere.
+one `sim.tick(dt)` + one `self.move(...)` + one `self.update()` and
+returns. If you need to do more work, marshal it elsewhere.
 
 ## Edge-dock
 
 `BuddyWindow._maybe_edge_dock` runs once on mouse release. If the
-anchor ends up within 20 px of the screen edge under it (via
-`QGuiApplication.screenAt(anchor)`, multi-monitor-safe), the anchor
+pivot ends up within 20 px of the screen edge under it (via
+`QGuiApplication.screenAt(pivot)`, multi-monitor-safe), the pivot
 snaps to the edge. Tuning lives in `_EDGE_DOCK_THRESHOLD`.
 
 ## Platform notes
@@ -251,7 +298,11 @@ voice-frame test matrix covers it end-to-end.
 
 ## Tests
 
-- `tests/test_qt_physics.py` — 12 tests for the simulator in isolation.
+- `tests/test_qt_physics.py` — 23 tests for both simulators in
+  isolation: legacy `DangleSimulator` + the active `PendulumSimulator`
+  (rest + settle, cursor-direction tilt signs, angular-speed clamp,
+  angular-impulse decay, long-integration stability, unstable-equilibrium
+  handling).
 - `tests/test_qt_shell.py` — shell boots, frameless flags set, tray
   menu has Toggle + Quit.
 - `tests/test_qt_overlay.py` — every brain-invoked method end-to-end,
