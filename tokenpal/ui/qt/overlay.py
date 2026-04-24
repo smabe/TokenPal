@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar
 
-from PySide6.QtCore import QObject, QPointF, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QDialog
 
 from tokenpal.config.chatlog_writer import clamp_font_size
@@ -38,12 +38,18 @@ from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.platform import (
     apply_macos_accessory_mode,
+    apply_macos_click_through,
     apply_macos_stay_visible,
     warn_wayland_limitations,
 )
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
 from tokenpal.ui.qt.tray import BuddyTrayIcon
 from tokenpal.ui.qt.voice_dialog import VoiceDialog
+from tokenpal.ui.qt.weather import (
+    BuddyRainOverlay,
+    SkyWindow,
+    WeatherSim,
+)
 from tokenpal.ui.registry import register_overlay
 from tokenpal.ui.selection_modal import SelectionGroup
 
@@ -137,6 +143,9 @@ class QtOverlay(AbstractOverlay):
         self._dock: ChatDock | None = None
         self._history: ChatHistoryWindow | None = None
         self._tray: BuddyTrayIcon | None = None
+        self._weather_sim: WeatherSim | None = None
+        self._sky_window: SkyWindow | None = None
+        self._buddy_rain_overlay: BuddyRainOverlay | None = None
         # Live non-modal dialog instances — keep one of each on screen at
         # a time; repeat slash commands focus the existing window.
         self._options_dialog: OptionsDialog | None = None
@@ -250,6 +259,31 @@ class QtOverlay(AbstractOverlay):
         )
         self._apply_chat_font_live()
 
+        # Weather overlay — sky + buddy-rain overlay + shared sim. The
+        # sim reads the already-wired ``_env_provider`` and the buddy's
+        # rotated art rect. ``SkyWindow`` owns the 30 Hz tick; we wire
+        # the rain overlay to re-anchor on every ``position_changed``.
+        self._weather_sim = WeatherSim(
+            env_provider=self._env_provider_for_sim,
+            buddy_rect_provider=self._buddy_world_rect_for_sim,
+            buddy_art_hit=self._buddy_art_hit_for_sim,
+            cell_px=10.0,
+        )
+        self._buddy_rain_overlay = BuddyRainOverlay(
+            self._weather_sim,
+            font_family=self._font_family,
+            font_size=max(self._font_size - 2, 8),
+            buddy_rect_provider=self._buddy_world_rect_for_sim,
+        )
+        self._sky_window = SkyWindow(
+            self._weather_sim,
+            font_family=self._font_family,
+            font_size=self._font_size,
+            overlay_update_hook=self._buddy_rain_overlay.update,
+            buddy_rect_provider=self._buddy_world_rect_for_sim,
+        )
+        self._buddy.position_changed.connect(self._reanchor_weather)
+
         def _toggle_buddy() -> None:
             if self._buddy is None:
                 return
@@ -257,6 +291,15 @@ class QtOverlay(AbstractOverlay):
             self._buddy_user_visible = new_visible
             if new_visible:
                 self._buddy.show()
+                if self._sky_window is not None:
+                    self._sky_window.show()
+                    apply_macos_stay_visible(self._sky_window)
+                    apply_macos_click_through(self._sky_window)
+                    self._sky_window.reanchor()
+                if self._buddy_rain_overlay is not None:
+                    self._buddy_rain_overlay.show()
+                    apply_macos_click_through(self._buddy_rain_overlay)
+                    self._buddy_rain_overlay.reanchor()
             else:
                 self._buddy.hide()
                 # A bubble already painted on screen would linger as a
@@ -265,6 +308,10 @@ class QtOverlay(AbstractOverlay):
                     self._hide_bubble_timer.stop()
                 if self._bubble is not None:
                     self._bubble.hide_bubble()
+                if self._sky_window is not None:
+                    self._sky_window.hide()
+                if self._buddy_rain_overlay is not None:
+                    self._buddy_rain_overlay.hide()
             if self._tray is not None:
                 self._tray.set_buddy_visible(new_visible)
             self._update_dock_placement()
@@ -328,6 +375,25 @@ class QtOverlay(AbstractOverlay):
             # NSWindow collectionBehavior can only be set once the
             # native window actually exists: after show().
             apply_macos_stay_visible(self._buddy)
+        if self._sky_window is not None and self._buddy_user_visible:
+            self._sky_window.show()
+            apply_macos_stay_visible(self._sky_window)
+            # NSWindow.setIgnoresMouseEvents is the native click-through
+            # toggle — Qt's ``WA_TransparentForMouseEvents`` alone isn't
+            # enough on macOS; the NSWindow still swallows clicks.
+            apply_macos_click_through(self._sky_window)
+            self._sky_window.start()
+            # The buddy's ``position_changed`` signal only fires while the
+            # physics tick is running. A stationary buddy never emits
+            # after show, so the sky's own __init__ reanchor ran against
+            # a pre-mapped buddy rect. Force one now (and once later so
+            # the native window has finished sizing on macOS).
+            self._sky_window.reanchor()
+            if self._buddy_rain_overlay is not None:
+                self._buddy_rain_overlay.show()
+                apply_macos_click_through(self._buddy_rain_overlay)
+                self._buddy_rain_overlay.reanchor()
+            QTimer.singleShot(150, self._reanchor_weather)
         if self._history is not None:
             if self._history_user_visible:
                 self._history.show()
@@ -360,6 +426,15 @@ class QtOverlay(AbstractOverlay):
     def teardown(self) -> None:
         if self._hide_bubble_timer is not None:
             self._hide_bubble_timer.stop()
+        # Weather teardown order: stop the tick BEFORE deleteLater so the
+        # timer can't fire a callback into a half-deleted widget.
+        if self._sky_window is not None:
+            self._sky_window.stop()
+            self._sky_window.hide()
+            self._sky_window.deleteLater()
+        if self._buddy_rain_overlay is not None:
+            self._buddy_rain_overlay.hide()
+            self._buddy_rain_overlay.deleteLater()
         if self._bubble is not None:
             self._bubble.hide()
             self._bubble.deleteLater()
@@ -723,9 +798,77 @@ class QtOverlay(AbstractOverlay):
     def set_environment_provider(
         self, provider: Callable[[], EnvironmentSnapshot] | None,
     ) -> None:
-        # Phase 4 will add the particle overlay that consumes this; for
-        # now just stash the reference so the wiring is in place.
         self._env_provider = provider
+
+    def force_weather(
+        self,
+        *,
+        weather_code: int | None = None,
+        hour: int | None = None,
+        clear: bool = False,
+    ) -> None:
+        """Dev override for the /weather slash command — pipes through to
+        ``WeatherSim.set_override`` on the Qt thread."""
+        def apply() -> None:
+            if self._weather_sim is None:
+                return
+            self._weather_sim.set_override(
+                weather_code=weather_code, hour=hour, clear=clear,
+            )
+        self._post(apply)
+
+    def _env_provider_for_sim(self) -> EnvironmentSnapshot | None:
+        """Weather sim calls this from the Qt thread at 30 Hz. Guards
+        against a pre-mount call (provider not yet set) and exceptions
+        from the brain so a transient error can't kill the Qt tick."""
+        prov = self._env_provider
+        if prov is None:
+            return None
+        try:
+            return prov()
+        except Exception:
+            log.exception("env provider raised — suppressing for this tick")
+            return None
+
+    def _buddy_world_rect_for_sim(self) -> QRectF | None:
+        if self._buddy is None:
+            return None
+        r = self._buddy.buddy_occlusion_rect_world()
+        if r.width() <= 0 or r.height() <= 0:
+            return None
+        return QRectF(r)
+
+    def _buddy_art_hit_for_sim(self, world_point: QPointF) -> bool:
+        """Tight art-frame AABB hit-test. The sim already passed the
+        coarse world-rect filter; here we invert the buddy's paint
+        transform and check the tight untransformed art rect."""
+        if self._buddy is None:
+            return False
+        art_point = self._buddy.world_to_art(world_point)
+        if art_point is None:
+            return False
+        bounds = self._buddy.art_bounds()
+        return (
+            0.0 <= art_point.x() <= bounds.width()
+            and 0.0 <= art_point.y() <= bounds.height()
+        )
+
+    def _reanchor_weather(self) -> None:
+        """Slot for ``BuddyWindow.position_changed``. Re-anchor is O(1)
+        and idempotent (see each widget's ``reanchor``), safe to call
+        from a 60 Hz signal. Also drop accumulated shoulder-snow if the
+        buddy is being dragged so the dust doesn't float mid-air."""
+        if self._sky_window is not None:
+            self._sky_window.reanchor()
+        if self._buddy_rain_overlay is None:
+            return
+        self._buddy_rain_overlay.reanchor()
+        if (
+            self._buddy is not None
+            and self._weather_sim is not None
+            and self._buddy.is_dragging()
+        ):
+            self._weather_sim.clear_buddy_accum()
 
     # --- UI-thread implementations --------------------------------------
 

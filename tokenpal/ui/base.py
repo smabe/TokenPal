@@ -117,6 +117,17 @@ class AbstractOverlay(abc.ABC):
         can pull weather/idle/sensitive state for its own render loop.
         Optional — overlays without a particle/physics layer no-op."""
 
+    def force_weather(
+        self,
+        *,
+        weather_code: int | None = None,
+        hour: int | None = None,
+        clear: bool = False,
+    ) -> None:
+        """Dev override for the ``/weather`` slash command — lets a user
+        cycle through weather states without waiting for the real data.
+        Optional — overlays without a weather layer no-op."""
+
     def set_chat_persist_callback(
         self,
         persist: Callable[[str, str, str | None], None],

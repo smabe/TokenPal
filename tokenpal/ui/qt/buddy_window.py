@@ -367,6 +367,57 @@ class BuddyWindow(QWidget):
         than drifting in screen axes when the body tilts."""
         return self._art_point_world(ax, ay)
 
+    def buddy_occlusion_rect_world(self) -> QRect:
+        """Axis-aligned screen-space bounding box of the rotated art.
+
+        Same 4-corners-through-``_build_transform`` approach as
+        ``_update_click_mask`` (line 413) and
+        ``speech_bubble.py:265-292``. Consumers (weather overlay) use
+        this to size a follower widget that covers the buddy's current
+        footprint regardless of rotation. Returned in integer global
+        screen coords; padded by 1 px for antialiasing slack.
+        """
+        widget_pos = self.pos()
+        t = self._build_transform()
+        corners = (
+            t.map(QPointF(0.0, 0.0)),
+            t.map(QPointF(float(self._art_w), 0.0)),
+            t.map(QPointF(0.0, float(self._art_h))),
+            t.map(QPointF(float(self._art_w), float(self._art_h))),
+        )
+        xs = [widget_pos.x() + p.x() for p in corners]
+        ys = [widget_pos.y() + p.y() for p in corners]
+        x = int(math.floor(min(xs))) - 1
+        y = int(math.floor(min(ys))) - 1
+        x2 = int(math.ceil(max(xs))) + 1
+        y2 = int(math.ceil(max(ys))) + 1
+        return QRect(x, y, max(x2 - x, 1), max(y2 - y, 1))
+
+    def world_to_art(self, world_point: QPointF) -> QPointF | None:
+        """Inverse of ``_art_point_world``. Maps a global screen point
+        into art-frame coords via ``_build_transform().inverted()``.
+        Returns ``None`` if the transform is non-invertible (shouldn't
+        happen for our ops but the API demands the check)."""
+        widget_pos = self.pos()
+        local = QPointF(
+            world_point.x() - widget_pos.x(),
+            world_point.y() - widget_pos.y(),
+        )
+        inv, ok = self._build_transform().inverted()
+        if not ok:
+            return None
+        return inv.map(local)
+
+    def art_bounds(self) -> QRect:
+        """Tight art-frame AABB: ``(0, 0) → (art_w, art_h)``. Exposed so
+        weather rain can hit-test a world point by mapping it to
+        art-frame via ``world_to_art`` and comparing against this box
+        (plan: pin the buddy-contact math to art-frame, not world OBB)."""
+        return QRect(0, 0, self._art_w, self._art_h)
+
+    def is_dragging(self) -> bool:
+        return self._drag_active
+
     def needs_rotated_followers(self) -> bool:
         """True when followers should render their rotated/mock form.
 

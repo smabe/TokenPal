@@ -1548,7 +1548,54 @@ def main() -> None:
             return CommandResult("/math: result too large")
         return CommandResult(f"{expr} = {result}")
 
+    def _cmd_weather(args: str) -> CommandResult:
+        """Dev override for the weather overlay. Lets you cycle through
+        states without waiting on the real sense data.
+
+        Usage: /weather [clear|cloudy|overcast|drizzle|rain|storm|snow
+                        |night|day|off|<wmo_code>]
+        """
+        kind_to_code = {
+            "clear": 0,
+            "sun": 0,
+            "partly": 2,
+            "cloudy": 2,
+            "overcast": 3,
+            "fog": 45,
+            "drizzle": 53,
+            "rain": 65,
+            "storm": 95,
+            "thunder": 95,
+            "snow": 75,
+        }
+        token = args.strip().lower()
+        if not token:
+            return CommandResult(
+                "Usage: /weather [clear|cloudy|overcast|drizzle|rain|"
+                "storm|snow|night|day|off|<wmo_code>]"
+            )
+        if token in ("off", "real", "reset"):
+            overlay.force_weather(clear=True)
+            return CommandResult("/weather: override cleared, using real data.")
+        if token == "night":
+            overlay.force_weather(hour=23)
+            return CommandResult("/weather: forced hour 23 (night).")
+        if token == "day":
+            overlay.force_weather(hour=12)
+            return CommandResult("/weather: forced hour 12 (day).")
+        if token in kind_to_code:
+            code = kind_to_code[token]
+            overlay.force_weather(weather_code=code)
+            return CommandResult(f"/weather: forced {token} (WMO {code}).")
+        try:
+            code = int(token)
+        except ValueError:
+            return CommandResult(f"/weather: unknown '{token}'.")
+        overlay.force_weather(weather_code=code)
+        return CommandResult(f"/weather: forced WMO {code}.")
+
     dispatcher.register("ask", _cmd_ask)
+    dispatcher.register("weather", _cmd_weather)
     dispatcher.register("gh", _cmd_gh)
     dispatcher.register("math", _cmd_math)
     dispatcher.register("senses", _cmd_senses)

@@ -100,6 +100,45 @@ def apply_macos_stay_visible(window: object) -> None:
         log.exception("macOS stay-visible collection behavior failed")
 
 
+def apply_macos_click_through(window: object) -> None:
+    """Make a frameless transparent NSWindow pass mouse events through to
+    whatever's underneath, system-wide.
+
+    Qt's ``WA_TransparentForMouseEvents`` only prevents Qt itself from
+    delivering events to the widget — the underlying NSWindow still
+    swallows the click at the AppKit layer, so a click over the window
+    never reaches the app below. Calling
+    ``-[NSWindow setIgnoresMouseEvents:YES]`` fixes this at the native
+    level.
+
+    **Must be called after ``show()``** — the NSView has no attached
+    NSWindow until the native window is mapped. Same constraint as
+    ``apply_macos_stay_visible``.
+
+    No-op off macOS or when pyobjc isn't installed.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import objc  # noqa: PLC0415
+    except ImportError:
+        log.debug(
+            "pyobjc not installed — click-through weather overlay can't "
+            "be enabled; clicks over the sun/moon will not fall through.",
+        )
+        return
+    try:
+        view_id = int(window.winId())  # type: ignore[attr-defined]
+        view = objc.objc_object(c_void_p=view_id)
+        ns_window = view.window()
+        if ns_window is None:
+            log.debug("NSView has no window yet; call show() first")
+            return
+        ns_window.setIgnoresMouseEvents_(True)
+    except Exception:
+        log.exception("macOS click-through NSWindow setup failed")
+
+
 def warn_wayland_limitations() -> None:
     """One-time INFO log that ``WindowStaysOnTopHint`` is advisory
     under Wayland — some compositors honor it, many don't. The buddy
