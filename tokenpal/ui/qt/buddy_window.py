@@ -21,7 +21,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, QPointF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -31,6 +31,8 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QRegion,
+    QShowEvent,
     QTransform,
 )
 from PySide6.QtWidgets import QWidget
@@ -65,6 +67,12 @@ _DEADZONE_X_MIN = 0.20
 _DEADZONE_X_MAX = 0.80
 _DEADZONE_Y_MIN = 0.20
 _DEADZONE_Y_MAX = 0.85
+
+# Thresholds below which followers (bubble, dock) revert to their
+# unrotated/interactive form. ~0.6° or ~0.1 rad/s — anything less is
+# visually indistinguishable from rest and shouldn't trigger a swap.
+_FOLLOWER_ROTATION_EPS = 0.01
+_FOLLOWER_OMEGA_EPS = 0.1
 
 # Enable an on-screen HUD + file log of pivot/theta/velocity by setting
 # TOKENPAL_PHYSICS_DEBUG=1 in the environment before launch. Stays off
@@ -208,6 +216,15 @@ class BuddyWindow(QWidget):
     ) -> None:
         self._on_right_click = handler
 
+    def showEvent(self, event: QShowEvent) -> None:
+        """Apply the click-through mask once the native window has been
+        mapped. Calling ``setMask`` in ``__init__`` (before show) was
+        leaving the widget with a stuck region on macOS — pointer hits
+        were being ignored for seconds after launch until some later
+        event (voice frame load, tick) re-applied a fresh mask."""
+        super().showEvent(event)
+        self._update_click_mask()
+
     def set_frame(self, lines: list[str]) -> None:
         self._frame_lines = list(lines)
         # Reset pivot to top-center when the art changes underfoot — old
@@ -217,6 +234,7 @@ class BuddyWindow(QWidget):
         self._recompute_geometry()
         self._sim.set_length(self._pendulum_length(self._pivot_art))
         self._move_to_pivot()
+        self._update_click_mask()
         self.update()
 
     # --- Geometry --------------------------------------------------------
@@ -316,17 +334,13 @@ class BuddyWindow(QWidget):
         new_x = int(px) - self._pivot_widget[0]
         new_y = int(py) - self._pivot_widget[1]
         old_pos = self.pos()
-        if new_x == old_pos.x() and new_y == old_pos.y():
-            # Still need to notify the bubble when *rotation* changes
-            # at a fixed pivot (body swinging but window not moving),
-            # because head_world_position drifts with θ even if the
-            # widget rect doesn't. Emit unconditionally while the
-            # sim is active; skip only when it's asleep.
-            if self._sim.sleeping:
-                return
-            self.position_changed.emit()
-            return
-        self.move(new_x, new_y)
+        if new_x != old_pos.x() or new_y != old_pos.y():
+            self.move(new_x, new_y)
+        # Always emit while the tick timer is running. Followers need
+        # the "now at rest" update on the settle tick to swap their
+        # rotated/mock form back to the interactive one — and the
+        # tick timer stops immediately after this, so there's no
+        # later signal to rely on.
         self.position_changed.emit()
 
     def head_world_position(self) -> QPointF:
@@ -339,6 +353,33 @@ class BuddyWindow(QWidget):
         """Rotated foot-anchor (bottom-center of the original art) in
         global screen coords. The chat dock hangs under this."""
         return self._art_point_world(self._art_w / 2.0, float(self._art_h))
+
+    def body_angle(self) -> float:
+        """Total rotation applied to the body in the world frame, in
+        radians. Followers (bubble, dock mock) use this to rotate with
+        the buddy so they stay rigidly attached during a swing."""
+        return self._sim.theta + self._angle_of_com_offset()
+
+    def art_frame_point_world(self, ax: float, ay: float) -> QPointF:
+        """Map an art-frame coord (may be outside the art bounds) to
+        its world position under the current body rotation. Followers
+        anchor with a body-aligned offset so they trail the pose rather
+        than drifting in screen axes when the body tilts."""
+        return self._art_point_world(ax, ay)
+
+    def needs_rotated_followers(self) -> bool:
+        """True when followers should render their rotated/mock form.
+
+        Checks body angle and angular velocity directly rather than
+        ``sim.sleeping`` — during a rigid-drag the tick is skipped and
+        ``sleeping`` goes stale, but θ and ω are held at zero so this
+        predicate correctly reports "upright" and the followers stay
+        in their interactive (unrotated) form.
+        """
+        return (
+            abs(self.body_angle()) > _FOLLOWER_ROTATION_EPS
+            or abs(self._sim.theta_dot) > _FOLLOWER_OMEGA_EPS
+        )
 
     def _art_point_world(self, ax: float, ay: float) -> QPointF:
         widget_pos = self.pos()
@@ -361,6 +402,35 @@ class BuddyWindow(QWidget):
         t.translate(-self._pivot_art[0], -self._pivot_art[1])
         return t
 
+    def _update_click_mask(self) -> None:
+        """Restrict clickable area to the axis-aligned bounding box of
+        the rotated art. The widget rect is a rotation-padded square
+        that's much larger than the art itself; without a mask, the
+        transparent padding intercepts clicks and starves the chat dock
+        underneath (``event.ignore()`` on a top-level Qt window doesn't
+        fall through to sibling windows on macOS).
+        """
+        t = self._build_transform()
+        corners = (
+            t.map(QPointF(0.0, 0.0)),
+            t.map(QPointF(float(self._art_w), 0.0)),
+            t.map(QPointF(0.0, float(self._art_h))),
+            t.map(QPointF(float(self._art_w), float(self._art_h))),
+        )
+        xs = [p.x() for p in corners]
+        ys = [p.y() for p in corners]
+        # Pad by a pixel so antialiased glyph edges at the rotation-
+        # bounding corners stay inside the mask. No clamp to widget
+        # size: on macOS ``self.width()`` can report zero during the
+        # show cycle before the native window's backing store is sized,
+        # which collapses the mask to 1×1 and makes the buddy
+        # uninteractive. Qt clips regions that extend past the widget.
+        x = int(math.floor(min(xs))) - 1
+        y = int(math.floor(min(ys))) - 1
+        x2 = int(math.ceil(max(xs))) + 1
+        y2 = int(math.ceil(max(ys))) + 1
+        self.setMask(QRegion(QRect(x, y, max(x2 - x, 1), max(y2 - y, 1))))
+
     # --- Tick / timer ---------------------------------------------------
 
     def _on_tick(self) -> None:
@@ -372,6 +442,7 @@ class BuddyWindow(QWidget):
         # Rigid drag: θ was zeroed at drag start and snap_pivot keeps
         # the sim's velocity state quiescent — nothing to tick.
         self._move_to_pivot()
+        self._update_click_mask()
         # Rotation changed → repaint even if the widget didn't move.
         self.update()
         if _PHYSICS_DEBUG:

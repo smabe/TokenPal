@@ -14,12 +14,13 @@ buffered and drained in setup().
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Callable
 from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QPointF, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QDialog
 
 from tokenpal.config.chatlog_writer import clamp_font_size
@@ -32,6 +33,7 @@ from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
 from tokenpal.ui.qt.cloud_dialog import CloudDialog
+from tokenpal.ui.qt.dock_mock import DockMock
 from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
 from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.platform import (
@@ -51,6 +53,11 @@ _BUBBLE_HIDE_DELAY_MS = 15000  # how long a bubble lingers before auto-hide
 _BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
 _DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
 _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
+# Park position for the real ``ChatDock`` while the swing-mock is up.
+# Off-screen but alive — hiding the NSWindow instead was breaking the
+# QLineEdit focus chain on macOS.
+_DOCK_PARK_X = -20000
+_DOCK_PARK_Y = -20000
 
 
 def _to_font_config(raw: Any) -> FontConfig:
@@ -225,6 +232,11 @@ class QtOverlay(AbstractOverlay):
             on_submit=self._on_user_submit,
             on_zoom=self._handle_chat_zoom,
         )
+        # Painted stand-in used while the buddy is mid-swing. The real
+        # dock is hidden and this mock shows a rotated snapshot. See
+        # ``_reposition_dock`` for the swap logic.
+        self._dock_mock = DockMock()
+        self._dock_mock_active = False
         self._dock_docked: bool = False
         # User-intent visibility tracked separately from Qt's isVisible()
         # — macOS auto-hides frameless translucent windows on app
@@ -330,8 +342,12 @@ class QtOverlay(AbstractOverlay):
             self._reposition_dock()
             # The buddy's native window hasn't finished mapping on the
             # first show, so geometry() reports stale pre-map values;
-            # re-run once the event loop has turned.
+            # re-run once the event loop has turned, and again after a
+            # short delay to cover the case where voice frames have
+            # just been loaded and the resulting widget resize hasn't
+            # propagated to ``pos()`` yet.
             QTimer.singleShot(0, self._reposition_dock)
+            QTimer.singleShot(150, self._reposition_dock)
         # _update_dock_placement handles the dock's float/embed/hide
         # transition based on the restored visibility flags.
         self._update_dock_placement()
@@ -718,6 +734,12 @@ class QtOverlay(AbstractOverlay):
             return
         self._buddy.set_frame(list(frame.lines))
         self._reposition_bubble()
+        # Voice frames may change the art bounding box (→ widget resize
+        # → new foot_world_position). The buddy's position_changed
+        # signal covers most of the anchor churn, but on macOS
+        # ``pos()`` can lag a tick right after a resize, so also push
+        # the update directly here.
+        self._reposition_dock()
 
     def _do_show_bubble(self, bubble: SpeechBubble) -> None:
         if self._bubble is None:
@@ -897,36 +919,71 @@ class QtOverlay(AbstractOverlay):
         y = max(avail.top(), min(y, avail.bottom() - h + 1))
         return x, y
 
-    def _reposition_dock(self) -> None:
-        """Anchor the floating input+status strip below the buddy's feet.
+    def _body_aligned_offset(
+        self, angle: float, dx: float, dy: float,
+    ) -> tuple[float, float]:
+        """Rotate an art-frame offset ``(dx, dy)`` by ``angle`` so the
+        follower trails the body's pose instead of drifting in screen
+        axes as the buddy tilts. θ=0 is upright; positive θ rotates the
+        +y axis toward the left in screen coords (matches the physics
+        sim's convention)."""
+        s = math.sin(angle)
+        c = math.cos(angle)
+        return (dx * c - dy * s, dx * s + dy * c)
 
-        ``foot_world_position`` returns the rotated bottom-center of
-        the art, so the dock trails behind swings instead of staying
-        pinned to the static widget rect (which is now padded generously
-        to accommodate rotation).
+    def _reposition_dock(self) -> None:
+        """Anchor the input+status strip below the buddy's feet.
+
+        While the body is upright, the real ``ChatDock`` tracks the
+        rotated foot position. While the body is rotating, the mock is
+        painted on top at the same anchor and the real dock is parked
+        off-screen. Parking (rather than hiding) keeps the NSWindow
+        alive and its activation chain intact, so the ``QLineEdit``
+        cleanly reclaims focus once the mock goes away.
 
         No-op when the dock is embedded in the history window — the
         history's layout owns positioning then.
         """
         if self._buddy is None or self._dock is None or self._dock_docked:
             return
+        angle = self._buddy.body_angle()
         foot = self._buddy.foot_world_position()
+        ox, oy = self._body_aligned_offset(angle, 0.0, float(_DOCK_OFFSET_Y))
+        anchor_x = foot.x() + ox
+        anchor_y = foot.y() + oy
         w, h = self._dock.width(), self._dock.height()
-        x = int(foot.x()) - w // 2
-        y = int(foot.y()) + _DOCK_OFFSET_Y
-        self._dock.move(*self._clamp_to_buddy_screen(x, y, w, h))
+
+        if self._buddy.needs_rotated_followers():
+            if not self._dock_mock_active:
+                self._dock_mock.set_source(self._dock.grab())
+                self._dock.move(_DOCK_PARK_X, _DOCK_PARK_Y)
+                self._dock_mock.show()
+                self._dock_mock_active = True
+            self._dock_mock.set_pose(QPointF(anchor_x, anchor_y), angle)
+        else:
+            if self._dock_mock_active:
+                self._dock_mock.hide()
+                self._dock_mock_active = False
+            x = int(anchor_x) - w // 2
+            y = int(anchor_y)
+            self._dock.move(*self._clamp_to_buddy_screen(x, y, w, h))
 
     def _reposition_bubble(self) -> None:
-        """Anchor the speech bubble above the buddy's rotated head, so it
-        follows upside-down grabs and mid-swing poses. Bubble itself
-        stays upright — only its world anchor moves."""
+        """Anchor the speech bubble above the buddy's rotated head.
+
+        The bubble rotates with the body: its tail (bottom-center)
+        stays glued to the head-plus-hover-offset point in world
+        coords, and the bubble content itself rotates by ``body_angle``
+        so it swings naturally with him.
+        """
         if self._buddy is None or self._bubble is None:
             return
+        angle = self._buddy.body_angle()
         head = self._buddy.head_world_position()
-        w, h = self._bubble.width(), self._bubble.height()
-        x = int(head.x()) - w // 2
-        y = int(head.y()) - h - _BUBBLE_HOVER_OFFSET_Y
-        self._bubble.move(*self._clamp_to_buddy_screen(x, y, w, h))
+        ox, oy = self._body_aligned_offset(
+            angle, 0.0, -float(_BUBBLE_HOVER_OFFSET_Y),
+        )
+        self._bubble.set_pose(QPointF(head.x() + ox, head.y() + oy), angle)
 
     def _popup_tray_menu(self, global_pos: object) -> None:
         if self._tray is None:
