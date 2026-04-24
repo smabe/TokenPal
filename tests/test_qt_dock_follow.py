@@ -37,7 +37,7 @@ def test_dock_repositions_when_buddy_moves(qapp: QApplication) -> None:
         _pump(qapp, ms=30)
         before = (overlay._dock.x(), overlay._dock.y())
 
-        overlay._buddy._sim.set_anchor(1100.0, 600.0)
+        overlay._buddy._sim.set_pivot(1100.0, 600.0)
         overlay._buddy._wake_timer()
         _pump(qapp, ms=150)
 
@@ -56,12 +56,15 @@ def test_dock_sits_below_buddy(qapp: QApplication) -> None:
     try:
         assert overlay._dock is not None
         assert overlay._buddy is not None
-        buddy_geom = overlay._buddy.geometry()
+        foot = overlay._buddy.foot_world_position()
         overlay._reposition_dock()
         _pump(qapp, ms=20)
-        # Dock's top must be at or below the buddy's bottom.
-        assert overlay._dock.y() >= buddy_geom.bottom(), (
-            "dock should hang below the buddy, not cover its feet"
+        # Dock's top must be at or below the buddy's actual feet. The
+        # widget rect now includes rotation padding that extends well
+        # past the art, so we compare against foot_world_position
+        # rather than geometry().bottom().
+        assert overlay._dock.y() >= int(foot.y()), (
+            "dock should hang below the buddy's feet, not cover them"
         )
     finally:
         overlay.teardown()

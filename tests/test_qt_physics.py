@@ -18,6 +18,8 @@ import pytest
 
 from tokenpal.ui.qt.physics import (
     DangleSimulator,
+    PendulumConfig,
+    PendulumSimulator,
     PhysicsConfig,
     run_until_settled,
 )
@@ -147,3 +149,136 @@ def test_run_until_settled_raises_when_budget_exceeded() -> None:
     )
     with pytest.raises(RuntimeError, match="did not settle"):
         run_until_settled(sim, max_ticks=5)
+
+
+# -----------------------------------------------------------------------------
+# PendulumSimulator tests — the rigid-pendulum model BuddyWindow uses.
+# -----------------------------------------------------------------------------
+
+
+def _tick_pendulum(sim: PendulumSimulator, ticks: int, dt: float = 1.0 / 60.0) -> None:
+    for _ in range(ticks):
+        sim.tick(dt)
+
+
+def test_pendulum_starts_at_rest_and_stays_put_when_pivot_is_stationary() -> None:
+    sim = PendulumSimulator(pivot=(100.0, 100.0), length=150.0)
+    _tick_pendulum(sim, 30)
+    assert sim.theta == pytest.approx(0.0, abs=1e-3)
+    assert sim.theta_dot == pytest.approx(0.0, abs=1e-3)
+    assert sim.sleeping
+
+
+def test_pendulum_sleeps_after_a_swing_and_resists_further_ticks() -> None:
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
+    sim.apply_angular_impulse(5.0)
+    ticks = run_until_settled(sim, max_ticks=600)
+    assert sim.sleeping
+    assert sim.theta == pytest.approx(0.0, abs=1e-3)
+    # Further ticks must not wake it.
+    theta_before = sim.theta
+    _tick_pendulum(sim, 100)
+    assert sim.theta == theta_before
+    # Underdamped tuning should show at least one visible oscillation, so
+    # 20 ticks (1/3s) isn't enough and 600 ticks is plenty.
+    assert 20 < ticks < 600
+
+
+def test_pivot_moving_right_makes_feet_trail_left() -> None:
+    """Drive the pivot rightward; check theta trends positive, which in
+    render terms (Qt rotate CW = feet-left for a top-pivot) means the
+    buddy's feet are trailing left behind the cursor."""
+    dt = 1.0 / 60.0
+    sim = PendulumSimulator(
+        pivot=(0.0, 0.0),
+        length=150.0,
+        config=PendulumConfig(damping=2.0),
+    )
+    px = 0.0
+    vx = 0.0
+    for _ in range(15):  # 0.25 s
+        vx += 6000.0 * dt
+        px += vx * dt
+        sim.set_pivot(px, 0.0)
+        sim.tick(dt)
+    assert sim.theta > 0.1, f"expected feet to trail left; theta={sim.theta}"
+
+
+def test_pivot_moving_left_makes_feet_trail_right() -> None:
+    dt = 1.0 / 60.0
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
+    px = 0.0
+    vx = 0.0
+    for _ in range(15):
+        vx -= 6000.0 * dt
+        px += vx * dt
+        sim.set_pivot(px, 0.0)
+        sim.tick(dt)
+    assert sim.theta < -0.1, f"expected feet to trail right; theta={sim.theta}"
+
+
+def test_angular_impulse_decays_toward_zero() -> None:
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
+    sim.apply_angular_impulse(4.0)
+    peak = 0.0
+    for _ in range(60):  # 1 s
+        sim.tick(1.0 / 60.0)
+        peak = max(peak, abs(sim.theta))
+    assert peak > 0.05, "impulse should produce a visible swing"
+    # After another 3s of damped motion, amplitude should be well below peak.
+    for _ in range(180):
+        sim.tick(1.0 / 60.0)
+    assert abs(sim.theta) < peak * 0.1 or sim.sleeping
+
+
+def test_set_pivot_is_noop_when_same_point() -> None:
+    sim = PendulumSimulator(pivot=(50.0, 50.0), length=100.0)
+    run_until_settled(sim)
+    assert sim.sleeping
+    sim.set_pivot(50.0, 50.0)  # identical — should not wake
+    assert sim.sleeping
+
+
+def test_set_pivot_wakes_sleeping_sim() -> None:
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=100.0)
+    run_until_settled(sim)
+    assert sim.sleeping
+    sim.set_pivot(100.0, 0.0)
+    assert not sim.sleeping
+
+
+def test_pendulum_clamps_angular_speed() -> None:
+    cfg = PendulumConfig(max_angular_speed=3.0)
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=100.0, config=cfg)
+    sim.apply_angular_impulse(100.0)
+    assert abs(sim.theta_dot) <= cfg.max_angular_speed
+
+
+def test_pendulum_ignores_non_positive_dt() -> None:
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=100.0)
+    sim.apply_angular_impulse(1.0)
+    sim.tick(0.0)
+    sim.tick(-0.1)
+    # Angular velocity shouldn't have been integrated away by bogus ticks.
+    assert sim.theta_dot == pytest.approx(1.0)
+
+
+def test_pendulum_min_length_floor() -> None:
+    cfg = PendulumConfig(min_length=20.0)
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=1.0, config=cfg)
+    assert sim.length == 20.0
+    sim.set_length(5.0)
+    assert sim.length == 20.0
+    sim.set_length(100.0)
+    assert sim.length == 100.0
+
+
+def test_pendulum_stable_over_long_integration() -> None:
+    """Integrate 100s at 60Hz with constant pivot — theta shouldn't explode."""
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
+    sim.apply_angular_impulse(2.0)
+    for _ in range(6000):
+        sim.tick(1.0 / 60.0)
+    assert math.isfinite(sim.theta)
+    assert math.isfinite(sim.theta_dot)
+    assert abs(sim.theta) < 0.01

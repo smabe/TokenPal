@@ -898,26 +898,34 @@ class QtOverlay(AbstractOverlay):
         return x, y
 
     def _reposition_dock(self) -> None:
-        """Anchor the floating input+status strip below the buddy.
+        """Anchor the floating input+status strip below the buddy's feet.
+
+        ``foot_world_position`` returns the rotated bottom-center of
+        the art, so the dock trails behind swings instead of staying
+        pinned to the static widget rect (which is now padded generously
+        to accommodate rotation).
 
         No-op when the dock is embedded in the history window — the
         history's layout owns positioning then.
         """
         if self._buddy is None or self._dock is None or self._dock_docked:
             return
-        geom = self._buddy.geometry()
+        foot = self._buddy.foot_world_position()
         w, h = self._dock.width(), self._dock.height()
-        x = geom.x() + (geom.width() - w) // 2
-        y = geom.bottom() + _DOCK_OFFSET_Y
+        x = int(foot.x()) - w // 2
+        y = int(foot.y()) + _DOCK_OFFSET_Y
         self._dock.move(*self._clamp_to_buddy_screen(x, y, w, h))
 
     def _reposition_bubble(self) -> None:
+        """Anchor the speech bubble above the buddy's rotated head, so it
+        follows upside-down grabs and mid-swing poses. Bubble itself
+        stays upright — only its world anchor moves."""
         if self._buddy is None or self._bubble is None:
             return
-        geom = self._buddy.geometry()
+        head = self._buddy.head_world_position()
         w, h = self._bubble.width(), self._bubble.height()
-        x = geom.x() + (geom.width() - w) // 2
-        y = geom.y() - h - _BUBBLE_HOVER_OFFSET_Y
+        x = int(head.x()) - w // 2
+        y = int(head.y()) - h - _BUBBLE_HOVER_OFFSET_Y
         self._bubble.move(*self._clamp_to_buddy_screen(x, y, w, h))
 
     def _popup_tray_menu(self, global_pos: object) -> None:

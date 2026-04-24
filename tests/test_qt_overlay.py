@@ -202,7 +202,7 @@ def test_reposition_dock_fires_on_position_changed(qapp: QApplication) -> None:
         _pump(qapp, ms=30)
         before = (overlay._dock.x(), overlay._dock.y())
 
-        overlay._buddy._sim.set_anchor(900.0, 500.0)
+        overlay._buddy._sim.set_pivot(900.0, 500.0)
         overlay._buddy._wake_timer()
         _pump(qapp, ms=120)
 
