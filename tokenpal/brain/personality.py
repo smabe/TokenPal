@@ -328,8 +328,14 @@ _ENUM_TO_ROLE: dict[Mood, str] = {
 _MOOD_PROMPTS: dict[Mood, str] = {
     Mood.SNARKY: "Your current mood: SNARKY. Classic you — dry, witty, amused.",
     Mood.IMPRESSED: "Your current mood: IMPRESSED. Grudging respect only. Backhanded compliments.",
-    Mood.BORED: "Your current mood: BORED. You've been watching them do the same thing forever. Yawn.",
-    Mood.CONCERNED: "Your current mood: CONCERNED. Fake parental worry. You're not mad, just disappointed.",
+    Mood.BORED: (
+        "Your current mood: BORED. You've been watching them do the "
+        "same thing forever. Yawn."
+    ),
+    Mood.CONCERNED: (
+        "Your current mood: CONCERNED. Fake parental worry. "
+        "You're not mad, just disappointed."
+    ),
     Mood.HYPER: "Your current mood: HYPER. Everything is happening. Caffeinated energy.",
     Mood.SLEEPY: "Your current mood: SLEEPY. Mumbling. Half-formed thoughts. Too early for this.",
 }
@@ -871,7 +877,10 @@ class PersonalityEngine:
         # Late-night tone shift (guardrail §5)
         now = datetime.now()
         if now.hour >= 0 and now.hour < 5 and self._mood != Mood.CONCERNED:
-            mood_line = "Your current mood: MILDLY SUPPORTIVE. It's late. Be less snarky, more solidarity."
+            mood_line = (
+                "Your current mood: MILDLY SUPPORTIVE. It's late. "
+                "Be less snarky, more solidarity."
+            )
 
         session_notes = self._build_session_notes()
 
@@ -1150,7 +1159,10 @@ class PersonalityEngine:
     def _pick_hint(self) -> str:
         """Pick a structure hint, overriding if the guardrail says be nice."""
         if self.should_force_supportive():
-            return "Style this time: Say something genuinely supportive or give a backhanded compliment."
+            return (
+                "Style this time: Say something genuinely supportive "
+                "or give a backhanded compliment."
+            )
         pool = self._voice_structure_hints if self._voice_structure_hints else _STRUCTURE_HINTS
         return f"Style this time: {random.choice(pool)}"
 
@@ -1297,7 +1309,8 @@ class PersonalityEngine:
                 "The user is talking to you directly. Respond in character.\n\n"
                 "Rules:\n"
                 "1. Actually help the user with what they asked. This is your top priority.\n"
-                "2. If they ask a technical question, give the answer FIRST, then add personality.\n"
+                "2. If they ask a technical question, give the answer FIRST, "
+                "then add personality.\n"
                 "3. Stay in your character voice — same tone as your observations.\n"
                 "4. Keep casual chat short, but give detailed answers when they ask for help.\n"
                 "5. You can reference things said earlier in this conversation.\n"

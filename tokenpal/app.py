@@ -135,7 +135,10 @@ def main() -> None:
         memory.record_session_start()
 
     # Resolve implementations for this platform + config
-    sense_flags = {f.name: getattr(config.senses, f.name) for f in dataclasses.fields(config.senses)}
+    sense_flags = {
+        f.name: getattr(config.senses, f.name)
+        for f in dataclasses.fields(config.senses)
+    }
     sense_configs: dict[str, dict[str, Any]] = {}
     if memory:
         sense_configs["productivity"] = {"memory_store": memory}
@@ -235,11 +238,11 @@ def main() -> None:
             log.info("ui: %s (url=%s)", text, url)
         else:
             log.info("ui: %s", text)
-        overlay.schedule_callback(
-            lambda t=text, m=markup, u=url: overlay.log_buddy_message(
-                t, markup=m, url=u,
-            )
-        )
+
+        def _emit() -> None:
+            overlay.log_buddy_message(text, markup=markup, url=url)
+
+        overlay.schedule_callback(_emit)
 
     async def _agent_confirm(tool_name: str, args: dict[str, Any]) -> bool:
         from tokenpal.brain.agent import fmt_args
@@ -274,11 +277,11 @@ def main() -> None:
         ui_callback=lambda text: _overlay_show(overlay, text),
         personality=personality,
         status_callback=lambda text: overlay.schedule_callback(
-            lambda t=text: overlay.update_status(t)
+            lambda: overlay.update_status(text)
         ),
         mood_callback=(
             lambda role: overlay.schedule_callback(
-                lambda r=role: overlay.set_mood(r)
+                lambda: overlay.set_mood(role)
             )
         ),
         memory=memory,
@@ -558,6 +561,7 @@ def main() -> None:
                         "Failed to persist visited server %s", llm.api_url,
                     )
 
+            assert brain._loop is not None, "brain loop not started"
             asyncio.run_coroutine_threadsafe(
                 _setup_then_remember(), brain._loop,
             )
@@ -933,9 +937,11 @@ def main() -> None:
 
             raw = f"/ask -> {_esc(result.title[:200])}\n{_esc(result.text[:500])}"
             src = result.source_url
-            overlay.schedule_callback(
-                lambda r=raw, u=src: overlay.log_buddy_message(r, markup=True, url=u)
-            )
+
+            def _log_ask() -> None:
+                overlay.log_buddy_message(raw, markup=True, url=src)
+
+            overlay.schedule_callback(_log_ask)
 
             # Wrap untrusted text in delimiters — basic prompt-injection mitigation.
             backend_name = result.backend.replace('"', "")
@@ -1408,8 +1414,8 @@ def main() -> None:
                     "Usage: /idle_tools roll <rule_name> (forces a fire "
                     "bypassing predicates + cooldowns)"
                 )
-            rule = rule_by_name(target)
-            if rule is None:
+            roll_rule = rule_by_name(target)
+            if roll_rule is None:
                 return CommandResult(
                     f"Unknown idle rule '{target}'. Try /idle_tools list."
                 )
@@ -1425,10 +1431,10 @@ def main() -> None:
                         time_since_last_comment_s=9999.0,
                         consent_web_fetches=has_consent(Category.WEB_FETCHES),
                     )
-                    result = await brain._idle_tools.force_fire(rule.name, ctx)
+                    result = await brain._idle_tools.force_fire(roll_rule.name, ctx)
                     if result is None:
                         overlay.log_buddy_message(
-                            f"/idle_tools: {rule.name} fired but tool returned nothing."
+                            f"/idle_tools: {roll_rule.name} fired but tool returned nothing."
                         )
                         return
                     await brain._generate_tool_riff(
@@ -1436,6 +1442,7 @@ def main() -> None:
                     )
 
                 try:
+                    assert brain._loop is not None, "brain loop not started"
                     asyncio.run_coroutine_threadsafe(
                         _go(), brain._loop,
                     ).result(timeout=30)
@@ -1478,7 +1485,12 @@ def main() -> None:
                         f"Labeled current wifi as '{label}' in {path.name}. "
                         f"Restart TokenPal to apply.{hint}"
                     )
-            overlay.schedule_callback(lambda m=msg: overlay.log_buddy_message(m))
+            wifi_msg = msg
+
+            def _log_wifi() -> None:
+                overlay.log_buddy_message(wifi_msg)
+
+            overlay.schedule_callback(_log_wifi)
 
         threading.Thread(target=_run_wifi, daemon=True, name="wifi-cmd").start()
         return CommandResult(f"Labeling current wifi as '{label}'...")
@@ -1718,7 +1730,10 @@ def _handle_gh_command(subcmd: str, extra: str) -> CommandResult:
             )
             if out.returncode != 0:
                 return CommandResult("", error=out.stderr.strip() or "git log failed")
-            return CommandResult(out.stdout.strip() or "", error="No commits found." if not out.stdout.strip() else None)
+            stdout = out.stdout.strip()
+            return CommandResult(
+                stdout or "", error="No commits found." if not stdout else None,
+            )
         except Exception as e:
             return CommandResult("", error=f"git log failed: {e}")
 
@@ -1733,7 +1748,10 @@ def _handle_gh_command(subcmd: str, extra: str) -> CommandResult:
         )
         if out.returncode != 0:
             return CommandResult("", error=out.stderr.strip() or f"gh {gh_cmd} list failed")
-        return CommandResult(out.stdout.strip() or "", error=f"No open {subcmd}." if not out.stdout.strip() else None)
+        stdout = out.stdout.strip()
+        return CommandResult(
+            stdout or "", error=f"No open {subcmd}." if not stdout else None,
+        )
     except Exception as e:
         return CommandResult("", error=f"gh failed: {e}")
 

@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from tokenpal.config.loader import load_config
+from tokenpal.config.schema import TokenPalConfig
 
 # Terminal colors (no dependency needed)
 _BOLD = "\033[1m"
@@ -82,7 +83,7 @@ def run_check(config_path: Path | None = None) -> int:
     return asyncio.run(_check(config_path))
 
 
-async def _check_inference(config: object) -> int:
+async def _check_inference(config: TokenPalConfig) -> int:
     """Check inference-engine connectivity and model availability. Returns problem count."""
     problems = 0
     api_url = config.llm.api_url
@@ -111,7 +112,7 @@ async def _check_inference(config: object) -> int:
     return problems
 
 
-def _check_senses(config: object) -> int:
+def _check_senses(config: TokenPalConfig) -> int:
     """Discover and check senses. Returns problem count."""
     from tokenpal.senses.registry import discover_senses, resolve_senses
 
@@ -137,7 +138,7 @@ def _check_senses(config: object) -> int:
     return problems
 
 
-def _check_actions(config: object) -> None:
+def _check_actions(config: TokenPalConfig) -> None:
     """Discover and check actions."""
     from tokenpal.actions.registry import discover_actions, resolve_actions
 
@@ -165,7 +166,7 @@ def _check_actions(config: object) -> None:
         print(f"  {_WARN} No actions enabled")
 
 
-def _check_utility_wedges(config: object) -> None:
+def _check_utility_wedges(config: TokenPalConfig) -> None:
     """Report on the session handoff / intent / EOD / rage / git-nudge
     features. Informational only; none of these raise validation problems.
     See plans/shipped/buddy-utility-wedges.md.
@@ -204,7 +205,7 @@ def _check_utility_wedges(config: object) -> None:
         print(f"  {_WARN} Proactive git nudge off")
 
 
-def _check_cloud_llm(config: object) -> None:
+def _check_cloud_llm(config: TokenPalConfig) -> None:
     """Report the cloud-LLM opt-in state. Informational only."""
     from tokenpal.config.secrets import fingerprint, get_cloud_key
 

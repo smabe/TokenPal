@@ -45,7 +45,10 @@ def resolve_backend(config: dict[str, Any]) -> AbstractLLMBackend:
         raise RuntimeError(f"Unknown LLM backend '{backend_name}'. Available: {available}")
 
     if plat not in cls.platforms:
-        log.warning("Backend '%s' not officially supported on %s, trying anyway", backend_name, plat)
+        log.warning(
+            "Backend '%s' not officially supported on %s, trying anyway",
+            backend_name, plat,
+        )
 
     log.info("Using LLM backend: %s (%s)", cls.__name__, backend_name)
     return cls(config)

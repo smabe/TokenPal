@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import tkinter as tk
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble, render_buddy_with_bubble
+from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.registry import register_overlay
 from tokenpal.util.platform import current_platform

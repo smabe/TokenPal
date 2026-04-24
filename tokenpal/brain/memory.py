@@ -287,9 +287,13 @@ class MemoryStore:
         data_json = json.dumps(data) if data else None
         with self._lock:
             self._conn.execute(
-                "INSERT INTO observations (timestamp, sense_name, event_type, summary, data_json, session_id) "
+                "INSERT INTO observations "
+                "(timestamp, sense_name, event_type, summary, data_json, session_id) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (time.time(), sense_name, event_type, summary, data_json, self._session_id),
+                (
+                    time.time(), sense_name, event_type, summary, data_json,
+                    self._session_id,
+                ),
             )
             self._conn.commit()
 

@@ -29,13 +29,12 @@ from rich.text import Text
 from tokenpal.config.toml_writer import update_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
-    FANDOM_NAMES,
     VoiceProfile,
+    attach_visual_tells,
     franchise_from_source,
     list_profiles,
     load_profile,
     make_profile,
-    attach_visual_tells,
     parse_catchphrases,
     parse_visual_tells,
     save_profile,
@@ -106,7 +105,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
     try:
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
-            text = data["choices"][0]["message"]["content"].strip()
+            text = str(data["choices"][0]["message"]["content"]).strip()
             return text.strip("\"'").strip()
     except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError) as e:
         print(f"  Warning: Ollama call failed ({e})", file=sys.stderr)
@@ -396,7 +395,7 @@ _TALKING_MOUTH: dict[str, str] = {
 
 # Safe fallback when LLM classification fails (network error, persistent
 # bad JSON, etc.). Neutral grey humanoid.
-_DEFAULT_CLASSIFICATION: dict = {
+_DEFAULT_CLASSIFICATION: dict[str, Any] = {
     "skeleton": "humanoid_tall",
     "palette": {
         "hair": "#888888",
@@ -417,7 +416,7 @@ _DEFAULT_CLASSIFICATION: dict = {
 
 def _generate_ascii_art(
     character: str, persona: str, source: str = "",
-) -> tuple[list[str], list[str], list[str], dict]:
+) -> tuple[list[str], list[str], list[str], dict[str, Any]]:
     """Classify the character + pick a palette, then render 3 frames.
 
     Tries the cloud classifier first when ``cfg.cloud_llm.enabled`` and a
@@ -454,7 +453,7 @@ def _generate_ascii_art(
 
 def _classify_via_cloud(
     character: str, persona: str, source: str = "",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Route classification through CloudBackend when the user opted in.
 
     Returns None when cloud is disabled, no key is stored, the SDK isn't
@@ -591,7 +590,7 @@ def _build_classifier_prompt(
 
 def _classify_character_for_skeleton(
     character: str, persona: str, source: str = "",
-) -> dict | None:
+) -> dict[str, Any] | None:
     """Ask the local LLM for a skeleton + palette + face glyphs as JSON.
 
     Retries once at a lower temperature. Returns None on persistent
@@ -606,7 +605,7 @@ def _classify_character_for_skeleton(
     return None
 
 
-def _parse_classification_json(text: str) -> dict | None:
+def _parse_classification_json(text: str) -> dict[str, Any] | None:
     """Extract + validate a classification JSON blob from LLM output.
 
     Tolerates surrounding prose. Returns None if the blob is missing,
@@ -670,7 +669,7 @@ def _parse_classification_json(text: str) -> dict | None:
 
 
 def _render_skeleton_frames(
-    classification: dict,
+    classification: dict[str, Any],
 ) -> tuple[list[str], list[str], list[str]]:
     """Render idle / idle_alt / talking from a validated classification."""
     skeleton = classification["skeleton"]
@@ -703,7 +702,7 @@ _MOOD_EYE_OVERRIDES: dict[str, str] = {
 
 
 def _render_mood_frames(
-    classification: dict,
+    classification: dict[str, Any],
     mood_roles: dict[str, str],
 ) -> dict[str, dict[str, list[str]]]:
     """Render idle/idle_alt/talking triples per non-default mood role.
@@ -1237,7 +1236,7 @@ def _cmd_activate() -> None:
     print("Saved voices:\n")
     for i, (slug, character, count) in enumerate(profiles, 1):
         print(f"  {i}) {character} ({count} lines)")
-    print(f"  0) Default TokenPal (no voice)")
+    print("  0) Default TokenPal (no voice)")
 
     try:
         choice = input(f"\nSelect voice [0-{len(profiles)}]: ").strip()
@@ -1278,7 +1277,10 @@ def _cmd_extract(args: argparse.Namespace) -> None:
         text = fetch_all_transcripts(args.wiki, max_pages=args.max_pages)
         if not text:
             print("Error: no transcripts found. Check the wiki name.", file=sys.stderr)
-            print(f"  Try: https://{args.wiki}.fandom.com/wiki/Category:Transcripts", file=sys.stderr)
+            print(
+                f"  Try: https://{args.wiki}.fandom.com/wiki/Category:Transcripts",
+                file=sys.stderr,
+            )
             sys.exit(1)
 
         lines = extract_lines_from_text(text, character=character)

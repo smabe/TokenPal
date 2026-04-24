@@ -32,9 +32,9 @@ class HttpBackend(AbstractLLMBackend):
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
-        self._api_url = config.get("api_url", "http://localhost:11434/v1")
-        self._primary_url = self._api_url  # remember the configured URL for retry
-        self._model_name = config.get("model_name", "phi3:mini")
+        self._api_url: str = config.get("api_url", "http://localhost:11434/v1")
+        self._primary_url: str = self._api_url  # remember the configured URL for retry
+        self._model_name: str = config.get("model_name", "phi3:mini")
         self._temperature = config.get("temperature", 0.8)
         self._disable_reasoning = config.get("disable_reasoning", True)
         self._inference_engine: InferenceEngine = config.get("inference_engine", "ollama")

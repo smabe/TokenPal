@@ -86,6 +86,9 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # Cocoa mocks in Qt-adjacent test files.
 "tokenpal/ui/qt/*.py" = ["N802"]
 "tests/test_qt_platform.py" = ["N802"]
+# Embeds bash + PowerShell installer scripts as triple-quoted strings;
+# their lines are bound by shell syntax, not Python's 100-char line limit.
+"tokenpal/tools/remote_train.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"

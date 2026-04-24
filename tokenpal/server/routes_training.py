@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request
 
+from tokenpal.server.job_store import AbstractJobStore
 from tokenpal.server.models import TrainingJob, TrainRequest, TrainResponse
 from tokenpal.server.worker import submit_training_job
 
@@ -36,7 +37,7 @@ async def start_training(req: TrainRequest, request: Request) -> TrainResponse:
 @router.get("/train/{job_id}")
 async def get_training_status(job_id: str, request: Request) -> TrainingJob:
     """Poll the status of a training job."""
-    store = request.app.state.job_store
+    store: AbstractJobStore = request.app.state.job_store
     job = store.get(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")

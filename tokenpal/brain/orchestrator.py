@@ -1,4 +1,7 @@
-"""The Brain — central orchestrator that polls senses, feeds the LLM, and decides when to comment."""
+"""The Brain — central orchestrator.
+
+Polls senses, feeds the LLM, and decides when to comment.
+"""
 
 from __future__ import annotations
 
@@ -522,7 +525,10 @@ class Brain:
             today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
             epoch = today.timestamp()
             with self._memory._lock:
-                row = self._memory._conn.execute(
+                conn = self._memory._conn
+                if conn is None:
+                    return True
+                row = conn.execute(
                     "SELECT COUNT(*) FROM observations "
                     "WHERE event_type = 'session_start' AND timestamp >= ? "
                     "AND session_id != ?",
@@ -720,27 +726,30 @@ class Brain:
         """
         for action in self._actions.values():
             if hasattr(action, "_scheduler") and getattr(action, "_scheduler") is None:
-                action._scheduler = self._proactive  # type: ignore[attr-defined]
+                action._scheduler = self._proactive
             if hasattr(action, "_memory") and getattr(action, "_memory") is None:
-                action._memory = self._memory  # type: ignore[attr-defined]
+                action._memory = self._memory
             if hasattr(action, "_llm") and getattr(action, "_llm") is None:
-                action._llm = self._llm  # type: ignore[attr-defined]
+                action._llm = self._llm
             if hasattr(action, "_research_config") and getattr(action, "_research_config") is None:
-                action._research_config = self._research.config  # type: ignore[attr-defined]
+                action._research_config = self._research.config
             if hasattr(action, "_cloud_config") and getattr(action, "_cloud_config") is None:
-                action._cloud_config = self._research.cloud_config  # type: ignore[attr-defined]
-            if hasattr(action, "_cloud_search_config") and getattr(action, "_cloud_search_config") is None:
-                action._cloud_search_config = self._research.cloud_search_config  # type: ignore[attr-defined]
+                action._cloud_config = self._research.cloud_config
+            if (
+                hasattr(action, "_cloud_search_config")
+                and getattr(action, "_cloud_search_config") is None
+            ):
+                action._cloud_search_config = self._research.cloud_search_config
             if hasattr(action, "_ui_callback"):
                 current = getattr(action, "_ui_callback", None)
                 # Replace the no-op stub from action init with the real cb.
                 if current is None or getattr(current, "__name__", "") == "<lambda>":
-                    action._ui_callback = self._ui_callback  # type: ignore[attr-defined]
+                    action._ui_callback = self._ui_callback
             if hasattr(action, "_brain_ref") and getattr(action, "_brain_ref") is None:
                 # research_followup reads _active_followup_session at call
                 # time. Strong ref — Brain outlives its actions, no circular
                 # ref possible since actions are owned by Brain.
-                action._brain_ref = self  # type: ignore[attr-defined]
+                action._brain_ref = self
 
     def _proactive_paused(self) -> bool:
         """Pause proactive nudges during conversation, sensitive apps, or long tasks."""
@@ -891,7 +900,11 @@ class Brain:
         if len(self._comment_timestamps) >= _MAX_COMMENTS_PER_WINDOW:
             return False
 
-        chance = _FREEFORM_CHANCE_RICH if self._personality.has_rich_voice else self._FREEFORM_CHANCE
+        chance = (
+            _FREEFORM_CHANCE_RICH
+            if self._personality.has_rich_voice
+            else self._FREEFORM_CHANCE
+        )
         if random.random() >= chance:
             return False
 

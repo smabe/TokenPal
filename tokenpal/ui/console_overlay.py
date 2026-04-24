@@ -250,9 +250,9 @@ class ConsoleOverlay(AbstractOverlay):
             else:
                 self._handle_char(ch)
         elif _HAS_MSVCRT:
-            if not msvcrt.kbhit():
+            if not msvcrt.kbhit():  # type: ignore[attr-defined]
                 return
-            ch = msvcrt.getwch()
+            ch = msvcrt.getwch()  # type: ignore[attr-defined]
             if ch.isprintable() or ch in ("\r", "\n", "\x08"):
                 self._handle_char(ch)
 

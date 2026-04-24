@@ -132,7 +132,7 @@ class GitSense(AbstractSense):
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
             return stdout.decode().strip() if proc.returncode == 0 else ""
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if proc:
                 proc.kill()
             return ""
@@ -149,7 +149,7 @@ class GitSense(AbstractSense):
             )
             await asyncio.wait_for(proc.wait(), timeout=5)
             return proc.returncode != 0
-        except asyncio.TimeoutError:
+        except TimeoutError:
             if proc:
                 proc.kill()
             return False

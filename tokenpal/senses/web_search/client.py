@@ -19,7 +19,7 @@ import urllib.request
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
 BackendName = Literal["duckduckgo", "wikipedia", "brave", "tavily", "hn", "stackexchange"]
 
@@ -50,6 +50,8 @@ class SearchResult:
 
 
 class SearchBackend(ABC):
+    backend_name: ClassVar[BackendName]
+
     @abstractmethod
     def search(self, query: str) -> SearchResult | None: ...
 
@@ -104,7 +106,8 @@ def _ddg_lite_fetch_body(query: str) -> str | None:
             headers={"User-Agent": _USER_AGENT},
         )
         with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_S) as resp:
-            return resp.read(_MAX_HTML_BYTES).decode("utf-8", errors="replace")
+            body: str = resp.read(_MAX_HTML_BYTES).decode("utf-8", errors="replace")
+            return body
     except Exception as e:  # noqa: BLE001
         log.debug("DDG lite fetch failed: %s", e)
         return None

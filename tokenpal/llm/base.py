@@ -70,12 +70,12 @@ class AbstractLLMBackend(abc.ABC):
     @property
     def model_name(self) -> str:
         """Current model name."""
-        return self._config.get("model_name", "unknown")
+        return str(self._config.get("model_name", "unknown"))
 
     @property
     def api_url(self) -> str:
         """Current API endpoint URL."""
-        return self._config.get("api_url", "unknown")
+        return str(self._config.get("api_url", "unknown"))
 
     @property
     def is_reachable(self) -> bool:

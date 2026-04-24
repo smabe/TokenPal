@@ -208,7 +208,10 @@ def _extract_trafilatura(html: str, url: str) -> str:
         import trafilatura
     except ImportError:
         return ""
-    for mode in ({"favor_precision": True}, {"favor_recall": True}, {}):
+    modes: list[dict[str, Any]] = [
+        {"favor_precision": True}, {"favor_recall": True}, {},
+    ]
+    for mode in modes:
         try:
             extracted = trafilatura.extract(
                 html,

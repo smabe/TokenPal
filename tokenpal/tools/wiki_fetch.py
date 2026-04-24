@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Iterator
+from typing import Any
 
 # Fandom wiki API endpoint pattern
 _API_URL = "https://{wiki}.fandom.com/api.php"
@@ -23,14 +22,15 @@ _RE_L_TEMPLATE = re.compile(r"\{\{L\|([^|]+)\|(.+)\}\}")
 _RE_DIALOGUE = re.compile(r"^([A-Za-z][A-Za-z .'\-&,]{0,40}):\s+(.+)")
 
 
-def _api_get(wiki: str, params: dict) -> dict:
+def _api_get(wiki: str, params: dict[str, Any]) -> dict[str, Any]:
     """Make a GET request to the Fandom MediaWiki API."""
     params["format"] = "json"
     query = urllib.parse.urlencode(params)
     url = f"{_API_URL.format(wiki=wiki)}?{query}"
     req = urllib.request.Request(url, headers={"User-Agent": "TokenPal/1.0"})
     with urllib.request.urlopen(req, timeout=15) as resp:
-        return json.loads(resp.read())
+        result: dict[str, Any] = json.loads(resp.read())
+        return result
 
 
 def list_transcript_pages(wiki: str, limit: int = 500) -> list[str]:
@@ -66,7 +66,8 @@ def fetch_transcript_wikitext(wiki: str, page_title: str) -> str | None:
             "page": page_title,
             "prop": "wikitext",
         })
-        return data.get("parse", {}).get("wikitext", {}).get("*")
+        wikitext = data.get("parse", {}).get("wikitext", {}).get("*")
+        return str(wikitext) if wikitext is not None else None
     except (urllib.error.URLError, KeyError):
         return None
 

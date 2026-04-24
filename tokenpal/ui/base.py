@@ -22,6 +22,7 @@ import abc
 from collections.abc import Callable
 from typing import Any, ClassVar
 
+from tokenpal.config.schema import FontConfig
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
@@ -123,6 +124,25 @@ class AbstractOverlay(abc.ABC):
     ) -> None:
         """Wire chat-log write-through. Optional — overlays without a
         persisted chat log no-op."""
+
+    def set_ui_state_persist_callback(
+        self, persist: Callable[[bool, bool], None],
+    ) -> None:
+        """Wire visibility-state write-through. Args are
+        ``(buddy_visible, chat_log_visible)``. Optional — overlays without
+        per-window toggles no-op."""
+
+    def set_chat_history_background_color(self, hex_color: str) -> None:
+        """Recolor the chat history panel background. Optional."""
+
+    def set_chat_history_font_color(self, hex_color: str) -> None:
+        """Recolor the chat history panel text. Optional."""
+
+    def set_chat_font(self, cfg: FontConfig) -> None:
+        """Set the chat history font live. Optional."""
+
+    def set_bubble_font(self, cfg: FontConfig) -> None:
+        """Set the speech-bubble font live. Optional."""
 
     def open_selection_modal(
         self,

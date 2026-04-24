@@ -236,7 +236,7 @@ def _run_messages_loop(
     while True:
         try:
             msg = client.messages.create(
-                messages=messages,  # type: ignore[arg-type]
+                messages=messages,
                 **base_kwargs,
             )
         except APIError as e:

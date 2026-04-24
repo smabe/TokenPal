@@ -62,8 +62,11 @@ _BUBBLE_HOLD_PER_CHAR_S = 0.05
 
 
 class ShowSpeech(Message):
+    # Attribute is `speech` not `bubble`: textual.Message.bubble is a
+    # ClassVar[bool] that controls DOM propagation, so reusing the name
+    # both shadows the framework attribute and confuses mypy.
     def __init__(self, bubble: SpeechBubble) -> None:
-        self.bubble = bubble
+        self.speech = bubble
         super().__init__()
 
 
@@ -587,7 +590,7 @@ class ParticleSky(Widget):
         """
         try:
             panel = self.parent
-            if panel is None:
+            if not isinstance(panel, Widget):
                 return 0
             return int(self.region.y - panel.region.y)
         except Exception:
@@ -599,7 +602,7 @@ class ParticleSky(Widget):
         try:
             buddy = self._get_buddy()
             panel = self.parent
-            if panel is None:
+            if not isinstance(panel, Widget):
                 return 0.0, 0.0
             top = float(buddy.region.y - panel.region.y)
             return top, top + float(buddy.region.height)
@@ -1160,11 +1163,11 @@ class TokenPalApp(App[None]):
             return
         stage.force_release()
 
-    def push_screen(self, screen: Any, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+    def push_screen(self, screen: Any, *args: Any, **kwargs: Any) -> Any:
         self._release_buddy_stage_capture()
         return super().push_screen(screen, *args, **kwargs)
 
-    def pop_screen(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+    def pop_screen(self, *args: Any, **kwargs: Any) -> Any:
         self._release_buddy_stage_capture()
         return super().pop_screen(*args, **kwargs)
 
@@ -1395,20 +1398,20 @@ class TokenPalApp(App[None]):
     # --- Message handlers (all run on app thread) ---
 
     def on_show_speech(self, message: ShowSpeech) -> None:
-        self._log_buddy(message.bubble.text)
-        variant = self._choose_bubble_variant(message.bubble)
+        self._log_buddy(message.speech.text)
+        variant = self._choose_bubble_variant(message.speech)
         if variant is None:
-            self._pending_bubble = message.bubble
+            self._pending_bubble = message.speech
             return
         speech = self.query_one(SpeechBubbleWidget)
         current = speech.source_bubble if speech.is_active else None
         # Don't let a transient comment clobber a persistent progress bubble.
-        if current is not None and current.persistent and not message.bubble.persistent:
+        if current is not None and current.persistent and not message.speech.persistent:
             return
         # Persistent-over-persistent skips typing; everything else clobbers with typing.
-        skip = message.bubble.persistent and current is not None and current.persistent
+        skip = message.speech.persistent and current is not None and current.persistent
         self._pending_bubble = None
-        self._begin_bubble(variant, source=message.bubble, skip_typing=skip)
+        self._begin_bubble(variant, source=message.speech, skip_typing=skip)
 
     def on_hide_speech(self, _message: HideSpeech) -> None:
         self.query_one(SpeechBubbleWidget).hide()

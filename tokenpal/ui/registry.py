@@ -88,10 +88,10 @@ def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
             )
             overlay_name = _TEXTUAL_FALLBACK
 
-    cls = _OVERLAY_REGISTRY.get(overlay_name)
-    if cls is None:
+    selected: type[AbstractOverlay] | None = _OVERLAY_REGISTRY.get(overlay_name)
+    if selected is None:
         available = list(_OVERLAY_REGISTRY.keys())
         raise RuntimeError(f"Unknown overlay '{overlay_name}'. Available: {available}")
 
-    log.info("Using overlay: %s (%s)", cls.__name__, overlay_name)
-    return cls(config)
+    log.info("Using overlay: %s (%s)", selected.__name__, overlay_name)
+    return selected(config)

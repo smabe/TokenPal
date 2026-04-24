@@ -485,7 +485,9 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
         model = entry.model or "(no model)"
         return f"{marker}{entry.label}\n{model}"
 
-    def _server_variant(self, idx: int) -> str:
+    def _server_variant(
+        self, idx: int,
+    ) -> Literal["default", "primary", "success", "warning", "error"]:
         entry = self._state.known_servers[idx]
         if _same_server(entry.url, self._state.current_api_url):
             return "primary"

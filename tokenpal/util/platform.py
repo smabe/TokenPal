@@ -20,7 +20,7 @@ def has_nvidia_gpu() -> bool:
         import pynvml
 
         pynvml.nvmlInit()
-        return pynvml.nvmlDeviceGetCount() > 0
+        return int(pynvml.nvmlDeviceGetCount()) > 0
     except Exception:
         return False
 

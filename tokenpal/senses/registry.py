@@ -71,13 +71,19 @@ def resolve_senses(
         if override:
             chosen = next((c for c in compatible if c.__name__ == override), None)
             if chosen is None:
-                log.warning("Override '%s' not found for sense '%s', using default", override, sense_name)
+                log.warning(
+                    "Override '%s' not found for sense '%s', using default",
+                    override, sense_name,
+                )
                 chosen = min(compatible, key=lambda c: c.priority)
         else:
             chosen = min(compatible, key=lambda c: c.priority)
 
         sense_config = configs.get(sense_name, {})
         instances.append(chosen(sense_config))
-        log.info("Loaded sense '%s' -> %s (priority %d)", sense_name, chosen.__name__, chosen.priority)
+        log.info(
+            "Loaded sense '%s' -> %s (priority %d)",
+            sense_name, chosen.__name__, chosen.priority,
+        )
 
     return instances

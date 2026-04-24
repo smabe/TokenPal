@@ -504,7 +504,7 @@ class ResearchRunner:
                 original,
             )
             return self._default_backend()
-        return name  # type: ignore[return-value]
+        return name
 
     async def _search_all(
         self, session: ResearchSession, queries: list[PlannedQuery]
@@ -529,7 +529,7 @@ class ResearchRunner:
         collected: list[SearchResult] = []
         seen: set[str] = set()
         for batch in batches:
-            if isinstance(batch, Exception):
+            if isinstance(batch, BaseException):
                 log.debug("search sub-task failed: %s", batch)
                 continue
             for hit in batch:
@@ -561,7 +561,7 @@ class ResearchRunner:
             if "duckduckgo" not in session.backends_tried:
                 session.backends_tried.append("duckduckgo")
             for batch in ddg_batches:
-                if isinstance(batch, Exception):
+                if isinstance(batch, BaseException):
                     continue
                 for hit in batch:
                     if not hit.source_url:
@@ -1585,7 +1585,7 @@ Question: Why did Concorde stop flying?
 
 Question: Compare Rust and Go for backend services
 [
-  {{"query": "Rust vs Go backend performance benchmarks {current_year}", "intent": "runtime tradeoffs"}},
+  {{"query": "Rust vs Go backend perf benchmarks {current_year}", "intent": "runtime tradeoffs"}},
   {{"query": "Rust vs Go ecosystem maturity {current_year}", "intent": "libraries and tooling"}},
   {{"query": "Rust vs Go hiring market {current_year}", "intent": "practical adoption"}}
 ]

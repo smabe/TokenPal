@@ -156,7 +156,7 @@ def _make_handler(sense: FilesystemPulse, base_cls: type) -> Any:
     we override dispatch to handle all event kinds uniformly.
     """
 
-    class _Handler(base_cls):  # type: ignore[misc, valid-type]
+    class _Handler(base_cls):  # type: ignore[misc]
         def dispatch(self, event: Any) -> None:
             if getattr(event, "is_directory", False):
                 return
