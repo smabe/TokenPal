@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from tokenpal.server import __version__
 from tokenpal.server.auth import NoAuth, SharedSecretAuth
 from tokenpal.server.job_store import JsonFileJobStore
+from tokenpal.server.routes_audio import router as audio_router
 from tokenpal.server.routes_inference import router as inference_router
 from tokenpal.server.routes_models import router as models_router
 from tokenpal.server.routes_server import router as server_router
@@ -93,7 +94,14 @@ def create_app(
     # Back-compat: routes still read app.state.ollama_url. Dropped next release.
     app.state.ollama_url = inference_url
 
-    # Routes
+    # Routes — audio comes BEFORE inference_router because
+    # inference_router's /v1/{path:path} catch-all proxies to Ollama, and
+    # FastAPI's first-registered-wins rule would otherwise hijack
+    # /v1/audio/transcriptions to the (404'ing) Ollama backend. /v1 (no
+    # /api) so the audio path matches OpenAI exactly — any
+    # whisper-server client (ours included) drops in without per-server
+    # URL juggling.
+    app.include_router(audio_router, prefix="/v1")
     app.include_router(inference_router)
     app.include_router(server_router, prefix="/api/v1")
     app.include_router(models_router, prefix="/api/v1")

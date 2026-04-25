@@ -51,6 +51,9 @@ training = [
 server = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
+    # Multipart form-data parser — needed for the OpenAI-compatible
+    # /v1/audio/transcriptions endpoint that takes a file upload.
+    "python-multipart>=0.0.9",
 ]
 desktop = [
     "PySide6>=6.9",
