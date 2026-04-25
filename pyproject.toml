@@ -55,6 +55,13 @@ server = [
 desktop = [
     "PySide6>=6.9",
 ]
+audio = [
+    # Kokoro ONNX TTS — pulls onnxruntime + numpy transitively.
+    "kokoro-onnx>=0.4",
+    # PortAudio bindings for playback. Wheel ships PortAudio inside on
+    # macOS / Windows / x86_64 Linux; aarch64 Linux needs portaudio19-dev.
+    "sounddevice>=0.4",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
