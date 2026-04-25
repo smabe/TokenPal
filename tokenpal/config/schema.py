@@ -474,6 +474,32 @@ class SessionSummaryConfig:
 
 
 @dataclass
+class AudioConfig:
+    # Both toggles are independent and default OFF. speak_ambient_enabled never
+    # opens a mic stream; voice_conversation_enabled additionally requires the
+    # AUDIO_INPUT consent gate. See plans/say-what.md for the four-state matrix.
+    voice_conversation_enabled: bool = False
+    speak_ambient_enabled: bool = False
+    # Voice IDs are namespaced "<backend>:<voice>" so future trained-voice
+    # backends can register without colliding with Kokoro voice names.
+    tts_backend: str = "kokoro"
+    tts_voice: str = "kokoro:af_bella"
+    # int8 (~80MB / ~200MB resident) auto-selected on ≤8GB total RAM by the
+    # installer; fp16 is the quality-leaning default elsewhere.
+    kokoro_quantization: Literal["int8", "fp16", "fp32"] = "fp16"
+    wakeword_backend: str = "openwakeword"
+    wakeword_threshold: float = 0.7
+    # Hard-closes regardless of VAD state — otherwise TV/music in the room
+    # keeps the session open forever.
+    trailing_window_s: float = 8.0
+    # "server" POSTs to the optional ASR endpoint mounted by create_app and
+    # falls back to "local" on a 2s timeout (see plans/say-what.md).
+    asr_backend: Literal["local", "server"] = "local"
+    asr_server_url: str = ""
+    asr_model_size: str = "small.en"
+
+
+@dataclass
 class TokenPalConfig:
     senses: SensesConfig = field(default_factory=SensesConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
@@ -501,3 +527,4 @@ class TokenPalConfig:
     git_nudge: GitNudgeConfig = field(default_factory=GitNudgeConfig)
     cloud_llm: CloudLLMConfig = field(default_factory=CloudLLMConfig)
     cloud_search: CloudSearchConfig = field(default_factory=CloudSearchConfig)
+    audio: AudioConfig = field(default_factory=AudioConfig)

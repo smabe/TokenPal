@@ -11,6 +11,7 @@ from typing import Any
 from tokenpal.config.schema import (
     ActionsConfig,
     AgentConfig,
+    AudioConfig,
     BrainConfig,
     ChatLogConfig,
     CloudLLMConfig,
@@ -67,6 +68,7 @@ _SECTION_MAP: dict[str, type] = {
     "cloud_llm": CloudLLMConfig,
     "cloud_search": CloudSearchConfig,
     "chat_log": ChatLogConfig,
+    "audio": AudioConfig,
 }
 
 
