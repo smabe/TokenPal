@@ -270,6 +270,9 @@ class Brain:
         # are off or the install path hasn't run — _emit_comment becomes a
         # no-op for speech in that case, text bubbles still render.
         self._audio_pipeline = audio_pipeline
+        # Edge-detect sensitive-app transitions so the wake listener pauses
+        # only when state changes, not on every tick.
+        self._was_sensitive_app: bool = False
         self._personality = personality
         self._status_callback = status_callback
         self._mood_callback = mood_callback
@@ -594,6 +597,7 @@ class Brain:
                 self._record_memory_events(snapshot, readings)
                 self._push_mood_if_changed()
                 self._push_status()
+                self._sync_audio_sensitive_state(snapshot)
 
                 # Process any pending user input
                 while not self._user_input_queue.empty():
@@ -983,6 +987,24 @@ class Brain:
             # tests). No loop → no playback; ambient text still renders.
             return
         loop.create_task(speak(text, source=source, pipeline=self._audio_pipeline))
+
+    def _sync_audio_sensitive_state(self, snapshot: str) -> None:
+        """Bridge the personality's sensitive-app check into the voice
+        InputPipeline. Edge-triggered so notify_* fires only on transitions.
+        """
+        ap = getattr(self, "_audio_pipeline", None)
+        if ap is None or ap.input is None:
+            return
+        is_sensitive = bool(
+            snapshot and self._personality.check_sensitive_app(snapshot),
+        )
+        if is_sensitive == self._was_sensitive_app:
+            return
+        if is_sensitive:
+            ap.input.notify_sensitive_app()
+        else:
+            ap.input.notify_sensitive_app_cleared()
+        self._was_sensitive_app = is_sensitive
 
     async def _speak_voice_reply(self, text: str) -> None:
         """Speak a voice reply, then nudge the InputPipeline into the

@@ -256,28 +256,21 @@ def install_all(
     return InstallResult(ok=True, message=message.strip())
 
 
-# Silero VAD pre-exported onnx — same release as the python silero-vad
-# package, but we fetch the file directly to avoid the torch dependency
-# the pip package brings.
-_SILERO_VAD_URL: Final[str] = (
-    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+# OpenWakeWord v0.5.1 release ships every input-side onnx we need —
+# silero VAD, the shared mel + embedding, and the stock wakeword. Pinning
+# all four to one release tag is atomic: bump the constant to upgrade
+# everything, no drift between independently-versioned files.
+_OWW_RELEASE_BASE: Final[str] = (
+    "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 )
-# OpenWakeWord ships its stock models under the package's resources/
-# directory at install time. They sometimes lag the GitHub release; the
-# canonical source is the hf release on github.
+_SILERO_VAD_URL: Final[str] = f"{_OWW_RELEASE_BASE}/silero_vad.onnx"
 _OWW_MODEL_URLS: Final[dict[str, str]] = {
-    "hey_jarvis_v0.1.onnx": (
-        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
-        "resources/models/hey_jarvis_v0.1.onnx"
-    ),
-    "melspectrogram.onnx": (
-        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
-        "resources/models/melspectrogram.onnx"
-    ),
-    "embedding_model.onnx": (
-        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
-        "resources/models/embedding_model.onnx"
-    ),
+    name: f"{_OWW_RELEASE_BASE}/{name}"
+    for name in (
+        "hey_jarvis_v0.1.onnx",
+        "melspectrogram.onnx",
+        "embedding_model.onnx",
+    )
 }
 
 
