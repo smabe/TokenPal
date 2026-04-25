@@ -584,6 +584,9 @@ def main() -> None:
     def _cmd_zip(args: str) -> CommandResult:
         return _handle_zip_command(args)
 
+    def _cmd_voice_io(args: str) -> CommandResult:
+        return _handle_voice_io_command(args, config)
+
     def _cmd_cloud(args: str) -> CommandResult:
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else ""
@@ -1669,6 +1672,7 @@ def main() -> None:
     dispatcher.register("status", _cmd_status)
     dispatcher.register("model", _cmd_model)
     dispatcher.register("voice", _cmd_voice)
+    dispatcher.register("voice-io", _cmd_voice_io)
     dispatcher.register("server", _cmd_server)
     dispatcher.register("zip", _cmd_zip)
     dispatcher.register("tools", _cmd_tools)
@@ -2411,6 +2415,72 @@ def _handle_cloud_anthropic(subcmd: str, target: str, config: TokenPalConfig) ->
     return CommandResult(
         "Usage: /cloud anthropic [status|enable <key>|disable|forget|"
         "model <id>|plan on|off|deep on|off|search on|off]"
+    )
+
+
+def _handle_voice_io_command(
+    args: str, config: TokenPalConfig,
+) -> CommandResult:
+    """Handle /voice-io — terse audio I/O toggles for headless / muscle-memory use.
+
+    Bare command shows both states. ``on`` / ``off`` flips voice
+    conversation; ``ambient on`` / ``ambient off`` flips ambient narration.
+    Writes go through audio_writer and update config.audio in place. test /
+    say <text> are reserved for phase 2 once a real TTS backend lands.
+    """
+    from tokenpal.config.audio_writer import (
+        set_speak_ambient_enabled,
+        set_voice_conversation_enabled,
+    )
+
+    parts = args.strip().split(maxsplit=1)
+    subcmd = parts[0].lower() if parts else ""
+    rest = parts[1].strip().lower() if len(parts) > 1 else ""
+
+    def _state_line() -> str:
+        v = "on" if config.audio.voice_conversation_enabled else "off"
+        a = "on" if config.audio.speak_ambient_enabled else "off"
+        return f"voice-io: voice {v}, ambient {a}"
+
+    if subcmd == "":
+        return CommandResult(_state_line())
+
+    if subcmd in ("test", "say"):
+        return CommandResult(
+            f"/voice-io {subcmd}: not available yet — TTS backend lands in phase 2."
+        )
+
+    def _apply(
+        field_name: str,
+        label: str,
+        value: bool,
+        setter: Callable[[bool], Path],
+    ) -> CommandResult:
+        try:
+            setter(value)
+        except OSError as e:
+            return CommandResult(f"/voice-io: could not write config: {e}")
+        setattr(config.audio, field_name, value)
+        return CommandResult(f"voice-io: {label} {'on' if value else 'off'}.")
+
+    if subcmd in ("on", "off"):
+        return _apply(
+            "voice_conversation_enabled",
+            "voice",
+            subcmd == "on",
+            set_voice_conversation_enabled,
+        )
+
+    if subcmd == "ambient" and rest in ("on", "off"):
+        return _apply(
+            "speak_ambient_enabled",
+            "ambient",
+            rest == "on",
+            set_speak_ambient_enabled,
+        )
+
+    return CommandResult(
+        "Usage: /voice-io [on|off|ambient on|ambient off]  (bare = show state)"
     )
 
 

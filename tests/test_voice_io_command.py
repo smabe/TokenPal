@@ -1,0 +1,104 @@
+"""Tests for the /voice-io slash command handler."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from tokenpal.app import _handle_voice_io_command
+from tokenpal.config.schema import AudioConfig, TokenPalConfig
+
+
+@pytest.fixture()
+def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
+    config_path = tmp_path / "config.toml"
+    state: dict[str, Any] = {"toml_data": {}, "config_path": config_path}
+
+    def fake_update_config(mutate, **_kwargs):  # type: ignore[no-untyped-def]
+        mutate(state["toml_data"])
+        config_path.write_text(json.dumps(state["toml_data"]))
+        return config_path
+
+    monkeypatch.setattr(
+        "tokenpal.config.audio_writer.update_config", fake_update_config
+    )
+    return state
+
+
+@pytest.fixture()
+def cfg() -> TokenPalConfig:
+    return TokenPalConfig(audio=AudioConfig())
+
+
+def test_bare_shows_state(isolated, cfg: TokenPalConfig) -> None:
+    msg = _handle_voice_io_command("", cfg).message
+    assert "voice off" in msg
+    assert "ambient off" in msg
+
+
+def test_on_flips_voice_and_persists(isolated, cfg: TokenPalConfig) -> None:
+    result = _handle_voice_io_command("on", cfg)
+    assert "voice on" in result.message
+    assert cfg.audio.voice_conversation_enabled is True
+    assert (
+        isolated["toml_data"]["audio"]["voice_conversation_enabled"] is True
+    )
+
+
+def test_off_flips_voice_back(isolated, cfg: TokenPalConfig) -> None:
+    cfg.audio.voice_conversation_enabled = True
+    _handle_voice_io_command("off", cfg)
+    assert cfg.audio.voice_conversation_enabled is False
+    assert (
+        isolated["toml_data"]["audio"]["voice_conversation_enabled"] is False
+    )
+
+
+def test_ambient_on_off(isolated, cfg: TokenPalConfig) -> None:
+    _handle_voice_io_command("ambient on", cfg)
+    assert cfg.audio.speak_ambient_enabled is True
+    _handle_voice_io_command("ambient off", cfg)
+    assert cfg.audio.speak_ambient_enabled is False
+
+
+def test_voice_and_ambient_independent(isolated, cfg: TokenPalConfig) -> None:
+    _handle_voice_io_command("on", cfg)
+    _handle_voice_io_command("ambient on", cfg)
+    assert cfg.audio.voice_conversation_enabled is True
+    assert cfg.audio.speak_ambient_enabled is True
+    _handle_voice_io_command("off", cfg)
+    assert cfg.audio.voice_conversation_enabled is False
+    assert cfg.audio.speak_ambient_enabled is True
+
+
+def test_test_subcommand_defers_to_phase_2(
+    isolated, cfg: TokenPalConfig,
+) -> None:
+    result = _handle_voice_io_command("test", cfg)
+    assert "phase 2" in result.message.lower()
+    assert cfg.audio.voice_conversation_enabled is False
+
+
+def test_say_subcommand_defers_to_phase_2(
+    isolated, cfg: TokenPalConfig,
+) -> None:
+    result = _handle_voice_io_command("say hello", cfg)
+    assert "phase 2" in result.message.lower()
+
+
+def test_unknown_subcommand_returns_usage(
+    isolated, cfg: TokenPalConfig,
+) -> None:
+    result = _handle_voice_io_command("garbage", cfg)
+    assert "usage" in result.message.lower()
+
+
+def test_ambient_without_value_returns_usage(
+    isolated, cfg: TokenPalConfig,
+) -> None:
+    result = _handle_voice_io_command("ambient", cfg)
+    assert "usage" in result.message.lower()
+    assert cfg.audio.speak_ambient_enabled is False
