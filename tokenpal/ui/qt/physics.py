@@ -194,21 +194,26 @@ class PendulumConfig:
     # settles cleanly); at the angular speed cap only this fraction
     # remains, so a sustained twirl keeps going.
     spin_damping_floor: float = 0.02
-    # Additive torque (rad/s² per rad/s of cursor circling) that drives
-    # body rotation in the cursor's detected circular direction. Pure
-    # drive — NOT a PID on (ω_cursor − ω_body). PID felt wrong because
-    # it brakes body's existing momentum at the top of the orbit (where
-    # body may momentarily spin opposite cursor while passing through),
-    # producing an "invisible pillow" stall. Pure drive only accelerates
-    # in cursor's direction; damping provides the ceiling. 0 disables.
+    # Asymmetric tracking gain (1/s) on (ω_cursor − ω_body). Drives
+    # body ω toward cursor ω so a cursor circle produces a 1:1
+    # "yo-yo" lock: body's COM traces a single larger circle at
+    # cursor's rate, instead of whipping multiple revolutions per
+    # cursor lap. Asymmetric: torque is applied ONLY when the body is
+    # under-spinning in the cursor's direction (same sign as ω_cursor
+    # AND |ω_body| < |ω_cursor|), zero otherwise. That dodges the
+    # "invisible pillow" failure mode of a symmetric PID, which would
+    # brake the body's existing momentum at the top of an orbit
+    # (where body may briefly spin opposite cursor while passing
+    # through) or undo a flick the user just gave the body. Damping
+    # alone bleeds off any over-shoot. 0 disables.
     #
-    # Tuned high enough that the steady-state ω solution from
-    # (damping + drag/mass)·damp_factor·ω == coupling·ω_cursor has no
-    # real root below max_angular_speed — body saturates at cap for
-    # ω_cursor ≳ 0.5 rad/s. Keeps the orbit pinned to the cap so
-    # momentary cursor-velocity dips (natural at a hand-drawn circle's
-    # turning points) don't drop body ω and trigger gravity kick-ins.
-    circular_coupling: float = 12.0
+    # Sized for ω_b → 0.95·ω_cursor at ω_cursor ≈ 2 rad/s against the
+    # combined damping + drag/mass torque (~6.9 rad/s² at body
+    # ω≈1.9): coupling·0.1 ≈ 6.9·1.9 ⇒ coupling ≈ 130. The previous
+    # design saturated body ω to max_angular_speed for ω_cursor
+    # ≳ 0.5 rad/s, which produced a camshaft pattern instead of a
+    # yo-yo at hand-drawn cursor speeds.
+    circular_coupling: float = 130.0
     # Deque depth for cursor-history-based circular-rate estimation.
     # At 60 Hz, 24 samples = 0.4 s window — long enough to see a
     # ~2 rad/s circle (46° sweep), short enough to respond quickly.
@@ -251,14 +256,23 @@ class PendulumConfig:
     # several full revolutions, which reads as broken. 0.35 keeps the
     # impulse punchy without going full washing-machine.
     fling_scale: float = 0.35
-    # Angular-velocity scale at which wind-drag and yank fade out.
-    # Above this body rotation rate, the cursor's absolute velocity and
-    # acceleration stop contributing to torque — they're parasitic
-    # during orbit, producing torque that oscillates at 2·ω_body and
-    # gets amplified by large-circle cursor motions (|v| = R·ω_c,
-    # |a| = R·ω_c²). Wind-drag and yank remain fully active near rest
-    # so small drags and whip motions still feel responsive.
-    spin_lockout_rate: float = 4.0
+    # Cursor angular-rate scale at which gravity, wind-drag, and yank
+    # fade out. Above this *cursor* circling rate, those terms stop
+    # contributing — they're parasitic during orbit. Wind-drag and
+    # yank produce torque that oscillates at 2·ω_body and gets
+    # amplified by large-circle cursor motions (|v| = R·ω_c,
+    # |a| = R·ω_c²); gravity oscillates at ω during orbit, causing
+    # ~10% sag at the top of each revolution (KE↔PE exchange). The
+    # gate reads `ω_cursor_smoothed`, NOT `|ω_body|`, deliberately:
+    # gating on body ω would flicker as it tracks natural human
+    # cursor-speed variation (1.5-3.5 rad/s on a "constant" circle),
+    # making drag/yank/gravity snap on/off as the user's hand varies.
+    # `ω_cursor_smoothed` has the EMA absorbing hand jitter, so the
+    # gate stays stable across a steady orbit. On release ω_cursor
+    # collapses to 0 immediately, restoring full gravity for clean
+    # settle. Drag and yank stay fully active near rest so small
+    # drags and whip motions still feel responsive.
+    spin_lockout_rate: float = 2.5
     # 25 rad/s (~4 revolutions/s). Sustained orbit requires θ_dot² > 4g/L
     # (~8.9 rad/s for default art); the cap leaves ~3x headroom so the
     # body doesn't constantly bump against it during pumping.
@@ -441,19 +455,16 @@ class PendulumSimulator:
         # both the intrinsic damping and the wind-drag damping — at
         # near-orbit speeds the cursor-free friction has to back off or
         # resonant pumping can't keep up with dissipation.
-        spin_ratio = min(
-            abs(self._theta_dot) / cfg.max_angular_speed, 1.0,
-        )
+        abs_theta_dot = abs(self._theta_dot)
+        spin_ratio = min(abs_theta_dot / cfg.max_angular_speed, 1.0)
         damp_factor = 1.0 - (1.0 - cfg.spin_damping_floor) * spin_ratio
         # Sign on the forcing term is positive: in Qt's coordinate system
         # painter.rotate(+deg) rotates CW in screen, which swings the
         # FEET to the LEFT for a top-pivot. So a rightward cursor
         # (vx > 0) needs to push θ positive to make the feet trail left,
         # matching the user's "drag right → feet go left" intuition.
-        # Cursor's detected circular-motion rate drives body ω as a
-        # pure additive torque — no PID feedback on body's current ω.
-        # EMA-smoothed so hand-jitter on an imperfect circle doesn't
-        # pulse the drive and sag body ω below cap.
+        # Cursor's detected circular-motion rate, EMA-smoothed so hand
+        # jitter on an imperfect circle doesn't pulse the drive.
         omega_cursor_raw = self._cursor_angular_rate()
         rate_alpha = cfg.circular_rate_smoothing
         self._omega_cursor_smoothed = (
@@ -461,22 +472,27 @@ class PendulumSimulator:
             + (1.0 - rate_alpha) * self._omega_cursor_smoothed
         )
         omega_cursor = self._omega_cursor_smoothed
-        # Spin-fade: scale down position-dependent forcing as body
-        # rotation grows. Full at rest, zero at the speed cap.
-        #   - wind-drag and yank project cursor velocity/accel onto
-        #     the body's tangent. At high ω this oscillates at 2·ω,
-        #     driving parasitic back-and-forth pump (especially bad
-        #     for big cursor circles with high |v|, |a|).
-        #   - gravity (-g·sinθ/L) oscillates at ω during orbit: body
-        #     ω sags ~10% at the top of each revolution and climbs
-        #     back at the bottom (KE↔PE exchange). Reads visually as
-        #     a "sine-wave" waviness in an otherwise smooth orbit.
-        # Fading gravity too gives a clean constant-ω orbit once
-        # driven, while leaving full gravity for settle at rest.
-        spin_fade = max(
-            0.0,
-            1.0 - abs(self._theta_dot) / cfg.spin_lockout_rate,
-        )
+        abs_omega_cursor = abs(omega_cursor)
+        # Asymmetric tracking torque: only accelerates in cursor's
+        # direction when the body is under-spinning. Edge cases via
+        # the product test: cursor=0 OR opposite signs ⇒ product ≤ 0
+        # ⇒ no torque; body=0 with cursor≠0 ⇒ product = 0 ⇒ same-sign
+        # branch fires (kick from rest works). Full rationale on
+        # `circular_coupling` in PendulumConfig.
+        if (
+            omega_cursor * self._theta_dot >= 0.0
+            and abs_theta_dot < abs_omega_cursor
+        ):
+            tracking_torque = cfg.circular_coupling * (
+                omega_cursor - self._theta_dot
+            )
+        else:
+            tracking_torque = 0.0
+        # Spin-fade: scale gravity, drag, yank down as the cursor
+        # sustains circular motion (full near rest, zero at
+        # `spin_lockout_rate`). Gated on cursor ω, not body ω — see
+        # `spin_lockout_rate` in PendulumConfig for the longer "why."
+        spin_fade = max(0.0, 1.0 - abs_omega_cursor / cfg.spin_lockout_rate)
         theta_ddot = (
             -spin_fade * cfg.gravity * sin_t / self._length
             + spin_fade * drag * (vx * cos_t - vy * sin_t)
@@ -484,7 +500,7 @@ class PendulumSimulator:
             + spin_fade * cfg.yank * (ax * cos_t - ay * sin_t)
             / self._length
             - (cfg.damping + drag / mass) * damp_factor * self._theta_dot
-            + cfg.circular_coupling * omega_cursor
+            + tracking_torque
         )
 
         # Semi-implicit Euler: velocity first, then position. Stable for

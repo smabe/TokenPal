@@ -273,6 +273,83 @@ def test_pendulum_min_length_floor() -> None:
     assert sim.length == 100.0
 
 
+def _drive_cursor_circle(
+    sim: PendulumSimulator,
+    center: tuple[float, float],
+    radius: float,
+    omega_cursor: float,
+    duration: float,
+    *,
+    dt: float = 1.0 / 60.0,
+    sample_after: float | None = None,
+) -> list[float]:
+    """Drive ``sim``'s pivot around ``center`` at ``omega_cursor`` for
+    ``duration`` seconds. Returns body θ_dot samples taken after
+    ``sample_after`` seconds (empty if None)."""
+    cx0, cy0 = center
+    samples: list[float] = []
+    for i in range(int(duration / dt)):
+        t = i * dt
+        sim.set_pivot(
+            cx0 + radius * math.cos(omega_cursor * t),
+            cy0 + radius * math.sin(omega_cursor * t),
+        )
+        sim.tick(dt)
+        if sample_after is not None and t > sample_after:
+            samples.append(sim.theta_dot)
+    return samples
+
+
+def test_pendulum_yo_yo_lock_tracks_cursor_circle() -> None:
+    """Cursor traces a circle at hand-drawn speed; body's angular
+    velocity should track the cursor's, not saturate to the cap.
+
+    This is the "yo-yo, not camshaft" lock: a cursor circling at
+    ω_c rad/s should produce body ω_b ≈ ω_c, so the body traces a
+    single larger circle in step with the cursor (radius R+L) instead
+    of whipping multiple revolutions per cursor lap.
+    """
+    sim = PendulumSimulator(pivot=(200.0, 200.0), length=120.0)
+    omega_cursor = 2.0  # rad/s — typical hand-drawn circling rate
+    # 1.5 s spin-up, sample steady-state over the last 2.5 s.
+    samples = _drive_cursor_circle(
+        sim,
+        center=(200.0, 200.0),
+        radius=80.0,
+        omega_cursor=omega_cursor,
+        duration=4.0,
+        sample_after=1.5,
+    )
+    avg_omega_body = sum(samples) / len(samples)
+    assert avg_omega_body == pytest.approx(omega_cursor, rel=0.15), (
+        f"yo-yo lock failed: cursor ω={omega_cursor}, body ω={avg_omega_body}"
+    )
+
+
+def test_pendulum_tracking_does_not_brake_existing_flick() -> None:
+    """A flick gives the body angular momentum exceeding ω_cursor; the
+    asymmetric tracking law must not slow it down toward ω_cursor —
+    only damping should bleed energy off."""
+    sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
+    sim.apply_angular_impulse(8.0)
+    omega_after_impulse = sim.theta_dot
+    omega_cursor = 2.0
+    _drive_cursor_circle(
+        sim,
+        center=(0.0, 0.0),
+        radius=50.0,
+        omega_cursor=omega_cursor,
+        duration=0.25,
+    )
+    # Damping over 0.25s decays body ω at most ~50%; a symmetric PID
+    # would crash it down toward ω_cursor=2 in the same window.
+    assert sim.theta_dot > omega_cursor * 1.5, (
+        f"tracking law braked the flick: "
+        f"start={omega_after_impulse}, end={sim.theta_dot}, "
+        f"ω_cursor={omega_cursor}"
+    )
+
+
 def test_pendulum_stable_over_long_integration() -> None:
     """Integrate 100s at 60Hz with constant pivot — theta shouldn't explode."""
     sim = PendulumSimulator(pivot=(0.0, 0.0), length=150.0)
