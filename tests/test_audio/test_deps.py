@@ -37,23 +37,41 @@ def _patch_find_spec(present: set[str]) -> Iterator[None]:
         audio_deps.importlib.util.find_spec = real  # type: ignore[assignment]
 
 
+# Order pinned to AUDIO_DEPS dict insertion order in tokenpal.audio.deps.
+_ALL_PIP = ("kokoro-onnx", "sounddevice", "openwakeword", "faster-whisper")
+_ALL_IMPORT = {"kokoro_onnx", "sounddevice", "openwakeword", "faster_whisper"}
+
+
 def test_missing_deps_when_nothing_installed() -> None:
     with _patch_find_spec(present=set()):
-        assert missing_deps() == ("kokoro-onnx", "sounddevice")
+        assert missing_deps() == _ALL_PIP
 
 
 def test_missing_deps_when_partial() -> None:
-    with _patch_find_spec(present={"sounddevice"}):
-        assert missing_deps() == ("kokoro-onnx",)
+    # Output side present, input side missing — covers the realistic phase 2b
+    # → phase 3 upgrade path.
+    with _patch_find_spec(present={"kokoro_onnx", "sounddevice"}):
+        assert missing_deps() == ("openwakeword", "faster-whisper")
 
 
 def test_missing_deps_when_all_present() -> None:
-    with _patch_find_spec(present={"kokoro_onnx", "sounddevice"}):
+    with _patch_find_spec(present=_ALL_IMPORT):
         assert missing_deps() == ()
 
 
-def test_install_short_circuits_when_already_installed() -> None:
+def test_missing_deps_include_input_false_skips_input_side() -> None:
+    # Ambient-only callers must not probe input-side wheels — find_spec
+    # would otherwise route through the modularity blocker. With output
+    # side present and input side missing, the gated call is empty.
     with _patch_find_spec(present={"kokoro_onnx", "sounddevice"}):
+        assert missing_deps(include_input=False) == ()
+        assert missing_deps(include_input=True) == (
+            "openwakeword", "faster-whisper",
+        )
+
+
+def test_install_short_circuits_when_already_installed() -> None:
+    with _patch_find_spec(present=_ALL_IMPORT):
         result = install()
     assert result.ok is True
     assert "already" in result.message.lower()
@@ -72,16 +90,20 @@ def test_install_runs_pip_for_missing_only(
     monkeypatch.setattr(audio_deps.subprocess, "run", fake_run)
 
     # Pretend kokoro-onnx is missing on first check (pre-install) AND
-    # present on the second check (post-install verification).
+    # present on the second check (post-install verification). The other
+    # deps stay present throughout. The fake never falls through to the
+    # real importlib.util.find_spec — monkeypatch replaces it on the same
+    # module reference, so a fallthrough would recurse infinitely.
     calls = {"n": 0}
+    present = {"sounddevice", "openwakeword", "faster_whisper"}
 
     def fake_find_spec(name: str, package: Any = None) -> Any:
-        if name == "sounddevice":
+        if name in present:
             return object()
         if name == "kokoro_onnx":
             calls["n"] += 1
             return None if calls["n"] == 1 else object()
-        return importlib.util.find_spec(name, package)
+        return None
 
     monkeypatch.setattr(audio_deps.importlib.util, "find_spec", fake_find_spec)
 
@@ -148,7 +170,7 @@ def test_install_reports_keyboard_interrupt(
 
 
 def test_format_warning_returns_none_when_all_present() -> None:
-    with _patch_find_spec(present={"kokoro_onnx", "sounddevice"}):
+    with _patch_find_spec(present=_ALL_IMPORT):
         assert format_warning() is None
 
 

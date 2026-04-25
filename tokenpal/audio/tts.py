@@ -74,7 +74,7 @@ async def speak(
     if source == "voice" and not cfg.voice_conversation_enabled:
         return
 
-    if deps.missing_deps():
+    if deps.missing_deps(include_input=False):
         log.debug("tts.speak: audio deps missing, skipping playback")
         return
 

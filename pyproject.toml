@@ -58,9 +58,18 @@ desktop = [
 audio = [
     # Kokoro ONNX TTS — pulls onnxruntime + numpy transitively.
     "kokoro-onnx>=0.4",
-    # PortAudio bindings for playback. Wheel ships PortAudio inside on
-    # macOS / Windows / x86_64 Linux; aarch64 Linux needs portaudio19-dev.
+    # PortAudio bindings for mic capture + playback. Wheel ships PortAudio
+    # inside on macOS / Windows / x86_64 Linux; aarch64 Linux needs
+    # portaudio19-dev.
     "sounddevice>=0.4",
+    # Wake-word (input side). Onnxruntime already in via kokoro-onnx.
+    # Shared melspectrogram + embedding + per-wakeword .onnx files are
+    # fetched via openwakeword.utils.download_models() — install_models()
+    # handles that out-of-band so the wheel stays small.
+    "openwakeword>=0.6",
+    # ASR (input side). Pulls ctranslate2 (CPU + CUDA both supported); no
+    # ffmpeg system dep — pyav handles decode.
+    "faster-whisper>=1.0",
 ]
 dev = [
     "pytest>=8.0",

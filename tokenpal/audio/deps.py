@@ -29,21 +29,39 @@ from typing import Final
 log = logging.getLogger(__name__)
 
 # Maps each pip distribution name to the import name used to detect
-# presence. Phase 3 will add e.g. ``faster-whisper`` → ``faster_whisper``,
-# and pip→import is not a hyphen-replace rule in general (Pillow→PIL,
+# presence. pip→import isn't a hyphen-replace rule in general (Pillow→PIL,
 # python-dateutil→dateutil), so the mapping is explicit. onnxruntime +
 # numpy come transitively from kokoro-onnx so we don't double-list them.
-AUDIO_DEPS: Final[dict[str, str]] = {
+#
+# Output side: TTS playback. Required when speak_ambient_enabled is on.
+# Input side: wake-word + ASR. Required when voice_conversation_enabled is
+# on. The split is what keeps ambient-only boots from probing
+# openwakeword/faster_whisper via find_spec — the modularity test's
+# meta_path blocker raises on any spec-lookup of input-side names.
+_OUTPUT_DEPS: Final[dict[str, str]] = {
     "kokoro-onnx": "kokoro_onnx",
     "sounddevice": "sounddevice",
 }
+_INPUT_DEPS: Final[dict[str, str]] = {
+    "openwakeword": "openwakeword",
+    "faster-whisper": "faster_whisper",
+}
+# Public union — /voice-io install fetches everything in one shot.
+AUDIO_DEPS: Final[dict[str, str]] = {**_OUTPUT_DEPS, **_INPUT_DEPS}
 
 
-def missing_deps() -> tuple[str, ...]:
-    """Return the pip names of audio deps that aren't importable."""
+def missing_deps(*, include_input: bool = True) -> tuple[str, ...]:
+    """Return the pip names of audio deps that aren't importable.
+
+    ``include_input`` gates the wake-word / ASR deps. Ambient-only callers
+    pass False so an unprobed openwakeword wheel doesn't show up as a
+    missing dep — and so the modularity test's spec-finder blocker isn't
+    tripped by an innocent presence-check.
+    """
+    deps_map = AUDIO_DEPS if include_input else _OUTPUT_DEPS
     return tuple(
         pip_name
-        for pip_name, import_name in AUDIO_DEPS.items()
+        for pip_name, import_name in deps_map.items()
         if importlib.util.find_spec(import_name) is None
     )
 
