@@ -57,6 +57,16 @@ _COM_Y_FRACTION = 0.30
 # the inverted-pendulum unstable equilibrium ±π. 0.015 rad ≈ 0.86°,
 # below any visually noticeable snap.
 _UNSTABLE_EPS = 0.015
+# Hard cap on the visual rest-tilt produced by an off-axis grab.
+# Geometric truth (atan2(dx, dy)) puts a corner-ear grab at ±25-45°
+# of resting tilt, which costs the user the first half of a same-
+# direction drag swing on uncrossing neutral before the lean shows.
+# Clamping to ±10° keeps a visible "this side of the body is heavier"
+# cue at rest while letting nearly the full drag swing read as actual
+# trail-behind-the-cursor lean. Pure visual offset — physics still
+# treats theta_sim=0 as the COM-below-pivot equilibrium, so gravity
+# settles correctly on release.
+_MAX_REST_TILT = math.radians(10.0)
 
 # Center-of-torso "deadzone" — grabs here keep the head as pivot and
 # rigidly translate the buddy instead of pivoting around the grab point.
@@ -280,15 +290,19 @@ class BuddyWindow(QWidget):
 
     def _angle_of_com_offset(self) -> float:
         """Angle from +y (down in screen coords) to the pivot→COM vector,
-        CW. Baked into the paint rotation so ``physics.theta = 0`` always
-        hangs the COM directly below the pivot, regardless of where on
-        the art the user grabbed."""
+        CW, clamped to ``±_MAX_REST_TILT``. Baked into the paint
+        rotation so ``physics.theta = 0`` always hangs the buddy near
+        upright at rest, regardless of where on the art the user
+        grabbed. Clamping (rather than the raw atan2) trades visual
+        accuracy at rest — a corner-ear grab no longer hangs the body
+        precisely under the pivot — for a much stronger "drag → lean
+        opposite" feel: same-side grab + same-direction drag no longer
+        burns half the swing on uncrossing the resting tilt."""
         com_x, com_y = self._com_art()
         dx = com_x - self._pivot_art[0]
         dy = com_y - self._pivot_art[1]
-        # atan2(dx, dy) gives the CW-from-+y angle: (0,1) → 0,
-        # (0,-1) → π, (1,0) → π/2, (-1,0) → -π/2. See the plan comment.
-        return math.atan2(dx, dy)
+        raw = math.atan2(dx, dy)
+        return max(-_MAX_REST_TILT, min(_MAX_REST_TILT, raw))
 
     def _recompute_geometry(self) -> None:
         """Size the widget to the AABB of the *rotated* art at the
