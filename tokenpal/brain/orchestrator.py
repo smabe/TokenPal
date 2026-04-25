@@ -17,16 +17,16 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
     from tokenpal.audio.pipeline import AudioPipeline
-    from tokenpal.audio.types import InputSource
     from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
+from tokenpal.audio.types import InputSource
 from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
@@ -64,6 +64,8 @@ from tokenpal.senses.base import AbstractSense, SenseReading
 
 log = logging.getLogger(__name__)
 
+_QT = TypeVar("_QT")
+
 
 _SENTENCE_ENDERS = (".", "!", "?", "…")
 # Whitespace plus closing quotes/brackets/markdown that may trail a sentence.
@@ -97,6 +99,10 @@ class ConversationSession:
     last_activity: float = field(default_factory=time.monotonic)
     max_turns: int = 10
     timeout_s: float = 120.0
+    # Most recent user-turn origin. Reply routing reads this to decide
+    # whether to speak the assistant turn — voice-initiated session →
+    # speak; typed turn → text only, even mid-session.
+    last_user_source: InputSource = "typed"
 
     @property
     def is_expired(self) -> bool:
@@ -111,8 +117,9 @@ class ConversationSession:
         """Number of completed turn pairs (user + assistant)."""
         return sum(1 for m in self.history if m["role"] == "assistant")
 
-    def add_user_turn(self, content: str) -> None:
+    def add_user_turn(self, content: str, source: InputSource = "typed") -> None:
         self.last_activity = time.monotonic()
+        self.last_user_source = source
         self.history.append({"role": "user", "content": content})
         self._enforce_cap()
 
@@ -238,8 +245,12 @@ class Brain:
         git_nudge_config: GitNudgeConfig | None = None,
         audio_pipeline: AudioPipeline | None = None,
     ) -> None:
-        # User input queue (thread-safe, fed from main thread)
-        self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
+        # User input queue (thread-safe, fed from main thread). Carries
+        # (text, source) so voice-vs-typed routing survives the cross-thread
+        # hop without a side channel.
+        self._user_input_queue: asyncio.Queue[tuple[str, InputSource]] = (
+            asyncio.Queue()
+        )
         self._agent_goal_queue: asyncio.Queue[str] = asyncio.Queue()
         self._research_queue: asyncio.Queue[str] = asyncio.Queue()
         self._refine_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -577,8 +588,8 @@ class Brain:
                 # Process any pending user input
                 while not self._user_input_queue.empty():
                     try:
-                        user_msg = self._user_input_queue.get_nowait()
-                        await self._handle_user_input(user_msg)
+                        user_msg, user_src = self._user_input_queue.get_nowait()
+                        await self._handle_user_input(user_msg, user_src)
                     except asyncio.QueueEmpty:
                         break
 
@@ -1852,7 +1863,9 @@ class Brain:
             log.warning("Action '%s' failed: %s", tc.name, e)
             return f"Error: {e}"
 
-    def _post_threadsafe(self, queue: asyncio.Queue[str], item: str, label: str) -> None:
+    def _post_threadsafe(
+        self, queue: asyncio.Queue[_QT], item: _QT, label: str,
+    ) -> None:
         if self._loop is None:
             return
         try:
@@ -1860,8 +1873,10 @@ class Brain:
         except RuntimeError:
             log.warning("Brain event loop closed — %s dropped", label)
 
-    def submit_user_input(self, text: str) -> None:
-        self._post_threadsafe(self._user_input_queue, text, "user input")
+    def submit_user_input(self, text: str, source: InputSource = "typed") -> None:
+        self._post_threadsafe(
+            self._user_input_queue, (text, source), "user input",
+        )
 
     def submit_agent_goal(self, goal: str) -> None:
         self._post_threadsafe(self._agent_goal_queue, goal, "agent goal")
@@ -2512,13 +2527,29 @@ class Brain:
             payload,
         )
 
-    async def _handle_user_input(self, user_message: str) -> None:
+    async def _handle_user_input(
+        self, user_message: str, source: InputSource = "typed",
+    ) -> None:
         """Respond to direct user input using multi-turn conversation context."""
+        def _emit_reply(text: str) -> None:
+            # Render bubble + speak when source is voice. Typed turns stay
+            # text-only per the routing contract; ambient never reaches
+            # this path so this branch is safe.
+            self._ui_callback(text)
+            if (
+                source == "voice"
+                and getattr(self, "_audio_pipeline", None) is not None
+            ):
+                self._speak_async(text, source="voice")
+
         # PRIVACY: check sensitive apps BEFORE building prompt or touching history
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
             log.debug("Sensitive app detected during conversation — clearing session")
             self._clear_conversation()
+            # Sensitive-app deflection stays text-only even on voice input
+            # — the whole point is to not narrate while the user handles
+            # something private.
             self._ui_callback("I'll look away while you handle that.")
             return
 
@@ -2531,7 +2562,7 @@ class Brain:
             log.debug("New conversation session started")
 
         # Record user turn (also resets timeout)
-        self._conversation.add_user_turn(user_message)
+        self._conversation.add_user_turn(user_message, source=source)
 
         # Build messages array: [system, history..., context, user]
         system_msg = self._personality.build_conversation_system_message(
@@ -2567,7 +2598,7 @@ class Brain:
                 log.info("TokenPal (reply suppressed near-duplicate): %s", filtered)
                 quip = self._personality.get_confused_quip()
                 self._conversation.add_assistant_turn(quip)
-                self._ui_callback(quip)
+                _emit_reply(quip)
                 self._last_comment_time = time.monotonic()
                 return
             if filtered:
@@ -2583,21 +2614,21 @@ class Brain:
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
                 self._recent_outputs.append(filtered)
-                self._ui_callback(filtered)
+                _emit_reply(filtered)
                 self._last_comment_time = time.monotonic()
             else:
                 # Record placeholder so history stays coherent
                 self._conversation.add_assistant_turn("[no response]")
                 log.debug("Conversation response filtered: %r", reply_text[:80])
                 quip = self._personality.get_confused_quip()
-                self._ui_callback(quip)
+                _emit_reply(quip)
         except Exception:
             log.exception("Failed to generate conversation response")
             # Don't record failed exchange — remove the user turn we just added
             if self._conversation.history and self._conversation.history[-1]["role"] == "user":
                 self._conversation.history.pop()
             quip = self._personality.get_confused_quip()
-            self._ui_callback(quip)
+            _emit_reply(quip)
 
     def _record_memory_events(
         self, snapshot: str, readings: list[SenseReading]
