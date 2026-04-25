@@ -202,9 +202,9 @@ def test_reposition_dock_fires_on_position_changed(qapp: QApplication) -> None:
         _pump(qapp, ms=30)
         before = (overlay._dock.x(), overlay._dock.y())
 
-        # snap_pivot keeps velocity state zeroed so the real dock (not
+        # snap_home keeps velocity state zeroed so the real dock (not
         # the mid-swing mock) is the follower under test here.
-        overlay._buddy._sim.snap_pivot(900.0, 500.0)
+        overlay._buddy._sim.snap_home(900.0, 500.0)
         overlay._buddy._wake_timer()
         _pump(qapp, ms=120)
 

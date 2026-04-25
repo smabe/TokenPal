@@ -33,9 +33,9 @@ def test_dropping_near_left_edge_snaps_to_left(qapp: QApplication) -> None:
     left, top, _right, _bottom = _screen_geom(qapp)
     buddy = BuddyWindow(frame_lines=BUDDY_IDLE, initial_anchor=(float(left), 400.0))
     try:
-        buddy._sim.set_pivot(float(left + _EDGE_DOCK_THRESHOLD - 5), 400.0)
+        buddy._sim.snap_home(float(left + _EDGE_DOCK_THRESHOLD - 5), 400.0)
         buddy._maybe_edge_dock()
-        assert buddy._sim.pivot[0] == float(left)
+        assert buddy._sim.home[0] == float(left)
     finally:
         buddy.close()
 
@@ -47,11 +47,11 @@ def test_dropping_near_top_edge_snaps_to_top(qapp: QApplication) -> None:
         initial_anchor=(float(left + 300), float(top)),
     )
     try:
-        buddy._sim.set_pivot(
+        buddy._sim.snap_home(
             float(left + 300), float(top + _EDGE_DOCK_THRESHOLD - 5),
         )
         buddy._maybe_edge_dock()
-        assert buddy._sim.pivot[1] == float(top)
+        assert buddy._sim.home[1] == float(top)
     finally:
         buddy.close()
 
@@ -62,8 +62,8 @@ def test_dropping_far_from_edge_does_not_snap(qapp: QApplication) -> None:
     mid_y = float((top + bottom) / 2)
     buddy = BuddyWindow(frame_lines=BUDDY_IDLE, initial_anchor=(mid_x, mid_y))
     try:
-        buddy._sim.set_pivot(mid_x, mid_y)
+        buddy._sim.snap_home(mid_x, mid_y)
         buddy._maybe_edge_dock()
-        assert buddy._sim.pivot == (mid_x, mid_y)
+        assert buddy._sim.home == (mid_x, mid_y)
     finally:
         buddy.close()

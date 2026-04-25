@@ -37,12 +37,10 @@ def test_dock_repositions_when_buddy_moves(qapp: QApplication) -> None:
         _pump(qapp, ms=30)
         before = (overlay._dock.x(), overlay._dock.y())
 
-        # snap_pivot (not set_pivot) keeps velocity state zeroed so the
-        # body stays upright → real dock is the active follower. With
-        # set_pivot the big instantaneous velocity kicks the pendulum
-        # and the mock takes over; either way the buddy moves, but this
-        # test exercises the real-dock path.
-        overlay._buddy._sim.snap_pivot(1100.0, 600.0)
+        # snap_home teleports the body + home anchor with zeroed
+        # velocity so the buddy stays upright → real dock (not the
+        # mid-swing mock) is the active follower under test.
+        overlay._buddy._sim.snap_home(1100.0, 600.0)
         overlay._buddy._wake_timer()
         _pump(qapp, ms=150)
 
