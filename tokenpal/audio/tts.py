@@ -3,20 +3,20 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
+
+from tokenpal.audio.types import InputSource
 
 if TYPE_CHECKING:
     from tokenpal.audio.pipeline import AudioPipeline
 
 log = logging.getLogger(__name__)
 
-Source = Literal["typed", "voice", "ambient"]
-
 
 async def speak(
     text: str,
     *,
-    source: Source,
+    source: InputSource,
     pipeline: AudioPipeline,
 ) -> None:
     """Speak ``text`` if the routing rules permit it."""
