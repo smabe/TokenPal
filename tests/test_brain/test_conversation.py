@@ -145,19 +145,6 @@ class TestConversationSession:
         s.add_assistant_turn("a2")
         assert s.turn_count == 2
 
-    def test_default_source_is_typed(self):
-        s = ConversationSession()
-        s.add_user_turn("hello")
-        assert s.last_user_source == "typed"
-
-    def test_voice_source_persists_until_next_turn(self):
-        s = ConversationSession()
-        s.add_user_turn("hey tokenpal", source="voice")
-        assert s.last_user_source == "voice"
-        # next typed turn flips it back — wake-then-type still gets text-only reply
-        s.add_user_turn("typed follow up", source="typed")
-        assert s.last_user_source == "typed"
-
 
 # ---------------------------------------------------------------------------
 # PersonalityEngine conversation methods

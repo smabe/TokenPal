@@ -1,9 +1,7 @@
 """Shared audio types.
 
-Lives outside ``tokenpal/audio/tts.py`` so the brain can label input
-sources without dragging the audio output module in. ``InputSource``
-collides-by-name avoidance: ``tokenpal.brain.research.Source`` is the
-research-citation dataclass.
+``InputSource`` is named explicitly to avoid colliding with
+``tokenpal.brain.research.Source`` (a research-citation dataclass).
 """
 
 from __future__ import annotations
