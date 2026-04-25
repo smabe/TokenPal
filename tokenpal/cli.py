@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import os
 import platform
 import shutil
 import sys
@@ -164,6 +165,64 @@ def _check_actions(config: TokenPalConfig) -> None:
         print(f"  {_CHECK} {len(actions)} actions: {', '.join(anames)}")
     else:
         print(f"  {_WARN} No actions enabled")
+
+
+def _check_audio(config: TokenPalConfig) -> int:
+    """Audio I/O readiness: deps, model files, and on macOS the parent-terminal
+    binary the user must grant mic permission to (which is NOT 'tokenpal' or
+    'python3'). Returns problem count.
+
+    Output-only: when both [audio] toggles are off, audio is unused and we
+    skip silently — no point dunning the user about missing deps for a
+    feature they haven't enabled.
+    """
+    audio_cfg = config.audio
+    if not (
+        audio_cfg.speak_ambient_enabled or audio_cfg.voice_conversation_enabled
+    ):
+        return 0
+
+    from tokenpal.audio import deps
+
+    problems = 0
+    print()  # blank line so audio block reads as its own section
+    print(f"  {_BOLD}Audio I/O{_RESET}")
+
+    missing_pkgs = deps.missing_deps()
+    if missing_pkgs:
+        print(
+            f"  {_WARN} missing deps: {', '.join(missing_pkgs)} "
+            f"— run /voice-io install",
+        )
+        problems += 1
+    else:
+        print(f"  {_CHECK} audio wheels installed")
+
+    data_dir = Path(config.paths.data_dir).expanduser().resolve()
+    missing_files = deps.missing_models(
+        data_dir, audio_cfg.kokoro_quantization,
+    )
+    if missing_files:
+        names = ", ".join(p.name for p in missing_files)
+        print(f"  {_WARN} missing model files: {names} — run /voice-io install")
+        problems += 1
+    else:
+        print(
+            f"  {_CHECK} kokoro models present "
+            f"({audio_cfg.kokoro_quantization})",
+        )
+
+    if audio_cfg.voice_conversation_enabled and platform.system() == "Darwin":
+        # Mic permission on macOS is granted to the *parent terminal binary*
+        # (Terminal.app, iTerm2, Cursor, ...), not the python interpreter.
+        # Naming "tokenpal" sends the user hunting in the wrong place.
+        host = os.environ.get("TERM_PROGRAM", "your terminal app")
+        print(
+            f"  {_WARN} macOS: grant Microphone access to {host} "
+            f"in System Settings > Privacy & Security > Microphone",
+        )
+
+    return problems
 
 
 def _check_utility_wedges(config: TokenPalConfig) -> None:
@@ -329,6 +388,9 @@ async def _validate(config_path: Path | None) -> int:
 
     # 6c. Cloud LLM (opt-in Anthropic synth for /research)
     _check_cloud_llm(config)
+
+    # 6d. Audio I/O — only when at least one [audio] toggle is on
+    problems += _check_audio(config)
 
     # 7. macOS Accessibility reminder
     if plat == "Darwin":
