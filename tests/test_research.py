@@ -6,6 +6,11 @@ from typing import Any
 
 import pytest
 
+from tests._helpers import ScriptedLLM
+from tests._helpers import capture_logs as _logs
+from tests._helpers import noop_fetch as _noop_fetch
+from tests._helpers import ok_response as _ok
+from tests._helpers import search_hit as _hit
 from tokenpal.brain.research import (
     Pick,
     PlannedQuery,
@@ -24,59 +29,13 @@ from tokenpal.brain.research import (
     _validate_picks,
 )
 from tokenpal.config.schema import CloudSearchConfig
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
+from tokenpal.llm.base import LLMResponse
 from tokenpal.senses.web_search.client import SearchResult
 
-# ---------------------------------------------------------------------------
-# Test doubles
-# ---------------------------------------------------------------------------
 
-
-class _ScriptedLLM(AbstractLLMBackend):
-    backend_name = "scripted"
-    platforms = ("darwin", "linux", "windows")
-
-    def __init__(self, responses: list[LLMResponse]) -> None:
-        super().__init__({})
-        self._responses = list(responses)
-        self.prompts: list[str] = []
-        self.call_kwargs: list[dict[str, Any]] = []
-
-    async def setup(self) -> None: ...
-    async def teardown(self) -> None: ...
-
-    async def generate(
-        self, prompt: str, max_tokens: int = 256, **kwargs: Any
-    ) -> LLMResponse:
-        self.prompts.append(prompt)
-        self.call_kwargs.append(kwargs)
-        if not self._responses:
-            return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
-        return self._responses.pop(0)
-
-    async def generate_with_tools(self, messages, tools, max_tokens=256, **_: Any):
-        raise AssertionError("research path must not use generate_with_tools")
-
-
-def _ok(text: str, tokens: int = 10) -> LLMResponse:
-    return LLMResponse(text=text, tokens_used=tokens, model_name="t", latency_ms=0)
-
-
-def _hit(url: str, title: str, text: str, backend: str = "duckduckgo") -> SearchResult:
-    return SearchResult(query="q", backend=backend, title=title, text=text, source_url=url)  # type: ignore[arg-type]
-
-
-async def _noop_fetch(_url: str) -> str | None:
-    return None
-
-
-def _logs() -> tuple[list[str], Any]:
-    buf: list[str] = []
-
-    def _cb(msg: str, *, url: str | None = None) -> None:
-        buf.append(f"{msg} <{url}>" if url else msg)
-
-    return buf, _cb
+def _ScriptedLLM(responses: list[LLMResponse]) -> ScriptedLLM:  # noqa: N802
+    """Research path must never reach for tool-calling - assert via forbid."""
+    return ScriptedLLM(responses, forbid_tools=True)
 
 
 # ---------------------------------------------------------------------------

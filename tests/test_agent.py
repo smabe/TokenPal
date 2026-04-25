@@ -7,47 +7,14 @@ from typing import Any
 
 import pytest
 
+from tests._helpers import ScriptedLLM
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner, AgentSession
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
+from tokenpal.llm.base import LLMResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
-
-
-class _ScriptedLLM(AbstractLLMBackend):
-    """Returns pre-queued LLMResponse objects in order."""
-
-    backend_name = "scripted"
-    platforms = ("darwin", "linux", "windows")
-
-    def __init__(self, responses: list[LLMResponse]) -> None:
-        super().__init__({})
-        self._responses = list(responses)
-        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
-
-    async def setup(self) -> None: ...
-    async def teardown(self) -> None: ...
-
-    async def generate(
-        self, prompt: str, max_tokens: int = 256, **_: Any
-    ) -> LLMResponse:
-        return await self.generate_with_tools(
-            [{"role": "user", "content": prompt}], [], max_tokens
-        )
-
-    async def generate_with_tools(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        max_tokens: int = 256,
-        **_: Any,
-    ) -> LLMResponse:
-        self.calls.append((list(messages), list(tools)))
-        if not self._responses:
-            return LLMResponse(text="done", tokens_used=0, model_name="test", latency_ms=0)
-        return self._responses.pop(0)
 
 
 class _Echo(AbstractAction):
@@ -116,7 +83,7 @@ def _echo_actions() -> dict[str, AbstractAction]:
 
 
 def _runner(
-    llm: _ScriptedLLM,
+    llm: ScriptedLLM,
     actions: dict[str, AbstractAction] | None = None,
     *,
     confirm=_always_allow,
@@ -149,7 +116,7 @@ def _call(name: str, args: dict[str, Any] | None = None, call_id: str = "") -> T
 
 @pytest.mark.asyncio
 async def test_completes_when_model_emits_no_tool_call() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(text="all done", tokens_used=42, model_name="t", latency_ms=0),
     ])
     session = await _runner(llm).run("greet me")
@@ -165,7 +132,7 @@ async def test_status_callback_reports_tool_name() -> None:
     """Each tool invoke should push a 'using <tool>...' label. The label
     persists through the follow-up LLM step so a fast gather isn't
     overwritten before the UI renders it."""
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=10,
@@ -192,7 +159,7 @@ async def test_status_callback_reports_tool_name() -> None:
 
 @pytest.mark.asyncio
 async def test_executes_tool_then_returns_final_text() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=10,
@@ -220,7 +187,7 @@ async def test_executes_tool_then_returns_final_text() -> None:
 @pytest.mark.asyncio
 async def test_empty_tool_call_id_gets_fallback() -> None:
     """Ollama sometimes emits empty id strings — the agent must substitute."""
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -241,7 +208,7 @@ async def test_empty_tool_call_id_gets_fallback() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_tool_records_error_not_crash() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -259,7 +226,7 @@ async def test_unknown_tool_records_error_not_crash() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_exception_captured_as_step_result() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -282,7 +249,7 @@ async def test_tool_exception_captured_as_step_result() -> None:
 
 @pytest.mark.asyncio
 async def test_denied_tool_aborts_with_forced_synthesis() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -309,7 +276,7 @@ async def test_confirmed_tool_executes() -> None:
         calls.append((name, args))
         return True
 
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -348,7 +315,7 @@ async def test_step_cap_stops_loop_and_forces_synthesis() -> None:
         for i in range(3)
     ]
     forced = LLMResponse(text="ran out", tokens_used=0, model_name="t", latency_ms=0)
-    llm = _ScriptedLLM(looping + [forced])
+    llm = ScriptedLLM(looping + [forced])
     session = await _runner(llm, max_steps=3).run("loop forever")
 
     assert session.stopped_reason == "step_cap"
@@ -358,7 +325,7 @@ async def test_step_cap_stops_loop_and_forces_synthesis() -> None:
 
 @pytest.mark.asyncio
 async def test_token_budget_stops_loop() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=9999,
@@ -384,7 +351,7 @@ async def test_sensitive_app_detected_mid_run_aborts() -> None:
         trigger["fired"] = True  # sensitive on the SECOND check
         return False
 
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=5,
@@ -407,7 +374,7 @@ async def test_sensitive_app_detected_mid_run_aborts() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_timeout_does_not_crash_loop() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -427,7 +394,7 @@ async def test_tool_timeout_does_not_crash_loop() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_step_timeout_stops_run() -> None:
-    class _HangLLM(_ScriptedLLM):
+    class _HangLLM(ScriptedLLM):
         async def generate_with_tools(
             self, messages, tools, max_tokens=256
         ):
@@ -480,7 +447,7 @@ class _Counting(AbstractAction):
 @pytest.mark.asyncio
 async def test_identical_tool_call_returns_cached_result() -> None:
     _Counting.calls = 0
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -515,7 +482,7 @@ async def test_identical_tool_call_returns_cached_result() -> None:
 @pytest.mark.asyncio
 async def test_cache_key_is_order_insensitive() -> None:
     _Counting.calls = 0
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,
@@ -545,7 +512,7 @@ async def test_noncacheable_tool_never_hits_cache() -> None:
         cacheable = False
 
     _Counting.calls = 0
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         LLMResponse(
             text="",
             tokens_used=0,

@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from tests._helpers import ScriptedLLM
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.idle_rules import IdleToolContext
 from tokenpal.brain.idle_tools import FireTracker
@@ -16,47 +17,11 @@ from tokenpal.brain.idle_tools_m3 import (
     LLMInitiatedRoller,
 )
 from tokenpal.config.schema import IdleToolsConfig
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
+from tokenpal.llm.base import LLMResponse, ToolCall
 
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------
-
-
-class _ScriptedLLM(AbstractLLMBackend):
-    """Returns pre-queued LLMResponse objects in order."""
-
-    backend_name = "scripted"
-    platforms = ("darwin", "linux", "windows")
-
-    def __init__(self, responses: list[LLMResponse]) -> None:
-        super().__init__({})
-        self._responses = list(responses)
-        self.calls: list[tuple[list[dict[str, Any]], list[dict[str, Any]]]] = []
-
-    async def setup(self) -> None: ...
-    async def teardown(self) -> None: ...
-
-    async def generate(
-        self, prompt: str, max_tokens: int = 256, **_: Any,
-    ) -> LLMResponse:
-        return await self.generate_with_tools(
-            [{"role": "user", "content": prompt}], [], max_tokens,
-        )
-
-    async def generate_with_tools(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]],
-        max_tokens: int = 256,
-        **_: Any,
-    ) -> LLMResponse:
-        self.calls.append((list(messages), list(tools)))
-        if not self._responses:
-            return LLMResponse(
-                text="done", tokens_used=0, model_name="test", latency_ms=0,
-            )
-        return self._responses.pop(0)
 
 
 class _StubAction(AbstractAction):
@@ -141,7 +106,7 @@ def _llm_response(*, tool_calls: list[ToolCall] | None = None) -> LLMResponse:
 
 @pytest.mark.asyncio
 async def test_disabled_by_default_skips_llm_call() -> None:
-    llm = _ScriptedLLM([])
+    llm = ScriptedLLM([])
     roller = LLMInitiatedRoller(
         config=_config(llm_on=False),
         actions=_full_actions(),
@@ -154,7 +119,7 @@ async def test_disabled_by_default_skips_llm_call() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_decline_returns_none_no_state_mutation() -> None:
-    llm = _ScriptedLLM([_llm_response(tool_calls=[])])
+    llm = ScriptedLLM([_llm_response(tool_calls=[])])
     tracker = FireTracker()
     roller = LLMInitiatedRoller(
         config=_config(),
@@ -170,7 +135,7 @@ async def test_llm_decline_returns_none_no_state_mutation() -> None:
 
 @pytest.mark.asyncio
 async def test_llm_picks_valid_tool_returns_fire_result() -> None:
-    llm = _ScriptedLLM([_llm_response(tool_calls=[
+    llm = ScriptedLLM([_llm_response(tool_calls=[
         ToolCall(id="t1", name="word_of_the_day", arguments={}),
     ])])
     tracker = FireTracker()
@@ -192,7 +157,7 @@ async def test_llm_picks_valid_tool_returns_fire_result() -> None:
 
 @pytest.mark.asyncio
 async def test_out_of_catalog_tool_rejected() -> None:
-    llm = _ScriptedLLM([_llm_response(tool_calls=[
+    llm = ScriptedLLM([_llm_response(tool_calls=[
         ToolCall(id="t1", name="open_app", arguments={"name": "Mail"}),
     ])])
     roller = LLMInitiatedRoller(
@@ -207,7 +172,7 @@ async def test_out_of_catalog_tool_rejected() -> None:
 @pytest.mark.asyncio
 async def test_consent_filters_web_tools_from_catalog() -> None:
     """When web consent is missing, only no-web tools should appear in spec."""
-    llm = _ScriptedLLM([_llm_response(tool_calls=[])])
+    llm = ScriptedLLM([_llm_response(tool_calls=[])])
     roller = LLMInitiatedRoller(
         config=_config(),
         actions=_full_actions(),
@@ -227,7 +192,7 @@ async def test_cross_path_per_tool_cooldown_filters_moon() -> None:
     """A deterministic-side fire of moon_phase blocks M3 from picking it."""
     import time
 
-    llm = _ScriptedLLM([_llm_response(tool_calls=[])])
+    llm = ScriptedLLM([_llm_response(tool_calls=[])])
     tracker = FireTracker()
     # Simulate a deterministic fire of moon_phase 1 hour ago.
     tracker.last_by_tool["moon_phase"] = time.monotonic() - 3600.0
@@ -247,7 +212,7 @@ async def test_cross_path_per_tool_cooldown_filters_moon() -> None:
 async def test_circuit_breaker_filters_after_three_consecutive_picks() -> None:
     import time
 
-    llm = _ScriptedLLM([_llm_response(tool_calls=[])])
+    llm = ScriptedLLM([_llm_response(tool_calls=[])])
     tracker = FireTracker()
     tracker.consecutive_same_tool["random_fact"] = 3
     # Within the 2h circuit cool-off window.
@@ -267,7 +232,7 @@ async def test_circuit_breaker_filters_after_three_consecutive_picks() -> None:
 async def test_m3_cooldown_blocks_back_to_back_fires() -> None:
     import time
 
-    llm = _ScriptedLLM([_llm_response(tool_calls=[])])
+    llm = ScriptedLLM([_llm_response(tool_calls=[])])
     tracker = FireTracker()
     # M3 fired 5 minutes ago - well within the 30-minute cooldown.
     tracker.m3_last_fire = time.monotonic() - 300.0
@@ -285,7 +250,7 @@ async def test_m3_cooldown_blocks_back_to_back_fires() -> None:
 @pytest.mark.asyncio
 async def test_memory_query_missing_metric_gets_sanitized_default() -> None:
     """LLM omits the required `metric` arg; sanitizer injects the default."""
-    llm = _ScriptedLLM([_llm_response(tool_calls=[
+    llm = ScriptedLLM([_llm_response(tool_calls=[
         ToolCall(id="t1", name="memory_query", arguments={}),
     ])])
     actions = _full_actions()
@@ -303,7 +268,7 @@ async def test_memory_query_missing_metric_gets_sanitized_default() -> None:
 
 @pytest.mark.asyncio
 async def test_consecutive_streak_increments_on_repeat_picks() -> None:
-    llm = _ScriptedLLM([
+    llm = ScriptedLLM([
         _llm_response(tool_calls=[
             ToolCall(id="t1", name="random_fact", arguments={}),
         ]),

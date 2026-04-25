@@ -6,36 +6,17 @@ from typing import Any
 
 import pytest
 
+from tests._helpers import ScriptedLLM
+from tests._helpers import ok_response as _ok
 from tokenpal.actions.research.research_action import ResearchAction
 from tokenpal.config.schema import ResearchConfig
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
+from tokenpal.llm.base import LLMResponse
 from tokenpal.senses.web_search.client import SearchResult
 
 
-class _ScriptedLLM(AbstractLLMBackend):
-    backend_name = "scripted"
-    platforms = ("darwin", "linux", "windows")
-
-    def __init__(self, responses: list[LLMResponse]) -> None:
-        super().__init__({})
-        self._responses = list(responses)
-
-    async def setup(self) -> None: ...
-    async def teardown(self) -> None: ...
-
-    async def generate(
-        self, prompt: str, max_tokens: int = 256, **_: Any
-    ) -> LLMResponse:
-        if not self._responses:
-            return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
-        return self._responses.pop(0)
-
-    async def generate_with_tools(self, messages, tools, max_tokens=256, **_: Any):
-        raise AssertionError("research path must not use generate_with_tools")
-
-
-def _ok(text: str, tokens: int = 10) -> LLMResponse:
-    return LLMResponse(text=text, tokens_used=tokens, model_name="t", latency_ms=0)
+def _ScriptedLLM(responses: list[LLMResponse]) -> ScriptedLLM:  # noqa: N802
+    """Research action path must never reach for tool-calling."""
+    return ScriptedLLM(responses, forbid_tools=True)
 
 
 @pytest.fixture()
