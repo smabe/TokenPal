@@ -142,6 +142,7 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._build_custom_server(body_layout)
         self._build_weather(body_layout)
         self._build_wifi(body_layout)
+        self._build_audio(body_layout)
         self._build_launchers(body_layout)
 
         body_layout.addStretch(1)
@@ -391,6 +392,25 @@ class OptionsDialog(QDialog, _OneShotCallback):
         self._wifi_status = QLabel("")
         self._wifi_status.setStyleSheet("color: #888")
         parent.addWidget(self._wifi_status)
+
+    def _build_audio(self, parent: QVBoxLayout) -> None:
+        parent.addWidget(_section_header("Audio I/O"))
+        parent.addWidget(_section_help(
+            "Off by default. Voice conversation = mic + speakers. "
+            "Ambient narration = speakers only.",
+        ))
+        self._voice_conversation_cb = QCheckBox(
+            'Voice conversation ("hey tokenpal" wake word + voice replies)',
+        )
+        self._voice_conversation_cb.setChecked(
+            self._state.voice_conversation_enabled,
+        )
+        parent.addWidget(self._voice_conversation_cb)
+        self._speak_ambient_cb = QCheckBox(
+            "Speak ambient observations (narrate random buddy bubbles)",
+        )
+        self._speak_ambient_cb.setChecked(self._state.speak_ambient_enabled)
+        parent.addWidget(self._speak_ambient_cb)
 
     def _build_launchers(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Settings shortcuts"))
@@ -657,6 +677,8 @@ class OptionsDialog(QDialog, _OneShotCallback):
             ),
             set_chat_font=self._read_font_if_changed(self._chat_font_widgets),
             set_bubble_font=self._read_font_if_changed(self._bubble_font_widgets),
+            voice_conversation_enabled=self._voice_conversation_cb.isChecked(),
+            speak_ambient_enabled=self._speak_ambient_cb.isChecked(),
         )
 
     def _read_font_if_changed(

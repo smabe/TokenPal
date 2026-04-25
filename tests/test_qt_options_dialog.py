@@ -84,6 +84,28 @@ def test_clear_history_button_sets_flag(qapp: QApplication) -> None:
     assert captured[0].clear_history is True
 
 
+def test_audio_toggles_round_trip(qapp: QApplication) -> None:
+    """Both checkboxes mirror the state on construction and ride in the
+    result after Save."""
+    state = OptionsModalState(
+        max_persisted=200,
+        persist_enabled=True,
+        voice_conversation_enabled=True,
+        speak_ambient_enabled=False,
+    )
+    captured: list[OptionsModalResult | None] = []
+    dlg = OptionsDialog(state, captured.append)
+    assert dlg._voice_conversation_cb.isChecked() is True
+    assert dlg._speak_ambient_cb.isChecked() is False
+
+    dlg._speak_ambient_cb.setChecked(True)
+    dlg._on_save()
+    result = captured[0]
+    assert result is not None
+    assert result.voice_conversation_enabled is True
+    assert result.speak_ambient_enabled is True
+
+
 def test_zip_apply_fires_partial_and_keeps_dialog_open(
     qapp: QApplication,
 ) -> None:
