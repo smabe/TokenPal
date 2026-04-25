@@ -238,6 +238,25 @@ class RigidBodyConfig:
     # grab point. Disabled when not grabbed so the body doesn't sag
     # below ``home`` after release.
     gravity: float = 6000.0
+    # Distance-gated upright bias: a soft preferred-orientation torque
+    # that pulls θ → 0 for grabs near COM, fading to zero past
+    # ``upright_bias_radius`` so foot/ear grabs still dangle freely.
+    # Without this, grabbing at the geometric center (which is below
+    # COM in the head-heavy model — see ``_COM_Y_FRACTION``) creates
+    # an unstable inverted-pendulum equilibrium and the body flips
+    # 180° to put COM below the grab anchor. The bias mimics the
+    # stabilizing effect distributed mass would provide: near-balance
+    # grabs feel stable, off-balance grabs dangle.
+    #
+    # ``strength`` is the angular spring constant at zero grab offset
+    # (units: torque per radian). ``radius`` is the body-frame grab
+    # distance at which bias is zero (linear fade in between). For a
+    # head-heavy buddy with COM at art_h*0.30, the visual center is
+    # ~art_h*0.20 below COM (~25 px), so radius ≈ 30 captures center
+    # grabs without bleeding into the limbs.
+    upright_bias_strength: float = 500000.0
+    upright_bias_radius: float = 30.0
+    upright_bias_damping_ratio: float = 1.0
     # Settle thresholds — applied only when not grabbed.
     settle_speed: float = 1.0       # px/s
     settle_omega: float = 0.05      # rad/s
@@ -425,6 +444,24 @@ class RigidBodySimulator:
         # home with no benefit.
         if self._grab_local is not None:
             self._vy += cfg.gravity * dt
+            # Distance-gated upright bias. Center-of-COM grabs get
+            # full restoring torque toward θ=0 (prevents the inverted-
+            # pendulum flip); far-COM grabs get nothing and dangle
+            # freely under gravity.
+            grab_r = math.hypot(self._grab_local[0], self._grab_local[1])
+            bias_factor = max(0.0, 1.0 - grab_r / cfg.upright_bias_radius)
+            if bias_factor > 0.0:
+                k_bias = cfg.upright_bias_strength
+                omega_b = math.sqrt(k_bias / inertia)
+                c_bias = (
+                    2.0 * inertia * cfg.upright_bias_damping_ratio * omega_b
+                )
+                alpha_bias = (
+                    bias_factor
+                    * (-k_bias * self._theta - c_bias * self._omega)
+                    / inertia
+                )
+                self._omega += alpha_bias * dt
 
         # Angular home spring: returns θ → 0 (upright) when not
         # grabbed. NO linear home spring — body slides under inertia
