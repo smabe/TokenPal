@@ -876,10 +876,12 @@ def main() -> None:
                 overlay.clear_log()
                 overlay.log_buddy_message("/options: chat history cleared.")
 
+            from tokenpal.audio.deps import missing_deps
             from tokenpal.config.audio_writer import (
                 set_speak_ambient_enabled,
                 set_voice_conversation_enabled,
             )
+            audio_changed_to_on = False
             for field_name, new_value, label, setter in (
                 (
                     "voice_conversation_enabled",
@@ -902,9 +904,18 @@ def main() -> None:
                     overlay.log_buddy_message(
                         f"/options: {label} {'on' if new_value else 'off'}."
                     )
+                    if new_value:
+                        audio_changed_to_on = True
                 except OSError as e:
                     overlay.log_buddy_message(
                         f"/options: could not write config: {e}"
+                    )
+            if audio_changed_to_on:
+                missing = missing_deps()
+                if missing:
+                    overlay.log_buddy_message(
+                        f"/options: audio deps missing ({', '.join(missing)}). "
+                        f"Run /voice-io install to fetch them."
                     )
 
         return overlay.open_options_modal(
@@ -2425,8 +2436,11 @@ def _handle_voice_io_command(
 
     Bare command shows both states. ``on`` / ``off`` flips voice
     conversation; ``ambient on`` / ``ambient off`` flips ambient narration.
+    ``install`` runs pip on the [audio] extra in the active venv.
     Writes go through audio_writer and update config.audio in place.
     """
+    from tokenpal.audio.deps import install as install_audio_deps
+    from tokenpal.audio.deps import missing_deps
     from tokenpal.config.audio_writer import (
         set_speak_ambient_enabled,
         set_voice_conversation_enabled,
@@ -2439,10 +2453,19 @@ def _handle_voice_io_command(
     def _state_line() -> str:
         v = "on" if config.audio.voice_conversation_enabled else "off"
         a = "on" if config.audio.speak_ambient_enabled else "off"
-        return f"voice-io: voice {v}, ambient {a}"
+        missing = missing_deps()
+        deps_note = (
+            "" if not missing
+            else f"  (missing deps: {', '.join(missing)} — run /voice-io install)"
+        )
+        return f"voice-io: voice {v}, ambient {a}.{deps_note}"
 
     if subcmd == "":
         return CommandResult(_state_line())
+
+    if subcmd == "install":
+        result = install_audio_deps()
+        return CommandResult(f"voice-io install: {result.message}")
 
     if subcmd in ("test", "say"):
         return CommandResult(
@@ -2460,7 +2483,15 @@ def _handle_voice_io_command(
         except OSError as e:
             return CommandResult(f"/voice-io: could not write config: {e}")
         setattr(config.audio, field_name, value)
-        return CommandResult(f"voice-io: {label} {'on' if value else 'off'}.")
+        msg = f"voice-io: {label} {'on' if value else 'off'}."
+        if value:
+            missing = missing_deps()
+            if missing:
+                msg += (
+                    f"  (missing deps: {', '.join(missing)} — "
+                    f"run /voice-io install)"
+                )
+        return CommandResult(msg)
 
     if subcmd in ("on", "off"):
         return _apply(
@@ -2479,7 +2510,8 @@ def _handle_voice_io_command(
         )
 
     return CommandResult(
-        "Usage: /voice-io [on|off|ambient on|ambient off]  (bare = show state)"
+        "Usage: /voice-io [on|off|ambient on|ambient off|install]  "
+        "(bare = show state)"
     )
 
 
