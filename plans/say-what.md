@@ -1,5 +1,43 @@
 # Say What — local-first voice I/O for the buddy
 
+## Status (resume from here)
+
+**Phase 1 — structural promise + plumbing — SHIPPED** (commits `f465705..5234d3a`):
+- Falsifiable modularity test at `tests/test_audio/test_modularity.py`. Ambient-only boot must not import `pyaudio` / `sounddevice` / `openwakeword` / `faster_whisper`. Anti-test: voice ON under the same blocker MUST raise ImportError. Both real, not tautological.
+- `tokenpal/audio/{__init__,pipeline,tts,types}.py` — minimal scaffolding. `AudioPipeline(config)`, `boot()` lazy-imports `sounddevice` for voice ON, `speak(text, *, source, pipeline)` routes typed/voice/ambient. `InputSource = Literal["typed","voice","ambient"]`.
+- `AudioConfig` in `tokenpal/config/schema.py` + wired into `_SECTION_MAP`. `[audio]` block in `config.default.toml`.
+- `AUDIO_INPUT` / `AUDIO_OUTPUT` consent categories.
+- `audio_writer.py` setters going through `update_config`.
+- Audio I/O toggles in Textual `OptionsModal` and Qt `OptionsDialog` (parity).
+- `/voice-io [on|off|ambient on|ambient off]` slash command, status-by-default.
+- `CLAUDE.md` updated with the opt-in story.
+
+**Phase 2a — deps plumbing — SHIPPED** (commits `d365872..a43bc3d`):
+- `[project.optional-dependencies] audio = ["kokoro-onnx>=0.4", "sounddevice>=0.4"]` in `pyproject.toml`. onnxruntime + numpy come transitively.
+- `tokenpal/audio/deps.py`: `AUDIO_DEPS` dict (pip→import names), `missing_deps()` via `importlib.util.find_spec` (no top-level imports — keeps the modularity test green), `install()` shells out to `python -m pip install --progress-bar off -q ...` against the active venv (works for editable + run.sh-managed venvs), `format_warning()` consolidates the "missing deps — run /voice-io install" message used by both `/voice-io` and the modal save handler.
+- `/voice-io install` triggers it from inside the buddy. **Verified working on the user's Mac.**
+
+**What's been intentionally deferred** (and why):
+- The orchestrator-side `InputSource` threading was added (`de8884e`) and then reverted (`eb22a58`) per /simplify — `last_user_source` was dead state until phase 2's TTS firing consumes it. Phase 2 will land it together with the consumer.
+- `tokenpal/audio/base.py` (TTSBackend / ASRBackend / WakeWordBackend ABCs) and `tokenpal/audio/registry.py` were created in phase 1 and then deleted in the same simplify pass — no concrete backend yet, no callers. Phase 2 brings them back alongside `KokoroBackend`.
+- `--validate` `_check_audio` hook — pointless without models/sounddevice to actually validate. Lands with phase 2.
+- `docs/claude/{ui,brain,server}.md` audio notes — write when there's something to point at.
+
+**Resume here — phase 2b: real Kokoro TTS backend**
+
+Suggested order for the next session:
+
+1. **Research first** (per CLAUDE.md "External APIs" rule). Fetch the kokoro-onnx PyPI README and the upstream Kokoro repo. Confirm: which model files are needed (model.onnx + voices.bin or equivalent), where they live on Hugging Face, what voice IDs the default voice pack ships, what `Kokoro.create()` actually returns (numpy array + sample rate). Don't trust training-data recall — kokoro-onnx is a fast-moving library.
+2. **Bring back `tokenpal/audio/base.py`** with `TTSBackend` ABC (`sample_rate: ClassVar[int]`, `list_voices() -> list[VoiceInfo]`, `synthesize(text, voice_id, *, speed) -> AsyncIterator[bytes]`, `warmup`, `aclose`). And `tokenpal/audio/registry.py` with `@register_tts_backend` + `discover_backends(*, include_input)` (the include_input gate is what keeps ambient-only safe — phase 1 already verified the contract).
+3. **`tokenpal/audio/backends/kokoro.py`** — concrete `KokoroBackend`. `kokoro_onnx` and `numpy` imports stay inside methods, not at module top, so the modularity test stays green.
+4. **Model file install.** Add a second deps step: `tokenpal/audio/deps.py` already handles wheels; model files are separate. Either extend `install()` with a model-download phase (Hugging Face URLs, write to `~/.tokenpal/audio/`) or factor `install_models()` alongside it. Update the schema's `kokoro_quantization` to actually pick which model variant to fetch (int8 / fp16 / fp32 — auto on ≤8GB RAM per the plan).
+5. **Real `tts.speak()`.** Replace the phase-1 stub with a queue + sentence-streaming split (`.!?\n`), pulling from the active backend's `synthesize()`. `sounddevice.OutputStream` for playback. Drain-on-cancel. Source-aware gating already lives in the function; just plug it in.
+6. **Brain hookup.** Phase 2's first real consumer: when an ambient bubble fires, call `speak(text, source="ambient", pipeline=...)`. Watch the sensitive-app filter — must check right before each playback chunk, not just at queue time (failure mode listed in plan).
+7. **Re-thread `InputSource` through `submit_user_input` / `_handle_user_input` / `ConversationSession.add_user_turn`** (was reverted in `eb22a58`). This time it has a real reader: voice replies route through `speak(source="voice")`.
+8. **`--validate _check_audio`** — sounddevice install, model files present, on macOS read `TERM_PROGRAM` and tell the user to grant mic to the parent terminal binary.
+
+Phase 3 (input side: wake word + VAD + ASR) is its own next-next session.
+
 ## Goal
 Add an opt-in **voice conversation mode** modeled on ChatGPT/Claude voice: user says "hey tokenpal", the buddy answers in voice, the mic stays hot through a short trailing window so the user can keep talking without re-waking. Typed conversations stay text-only. Random ambient observations stay text-only by default; speaking them is a separate sub-opt-in that does not require the mic.
 
