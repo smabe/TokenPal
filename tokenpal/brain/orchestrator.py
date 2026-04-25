@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 import time
@@ -30,6 +31,7 @@ from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
 from tokenpal.brain.git_nudge import GitNudgeDetector, GitNudgeSignal
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
+from tokenpal.brain.idle_tools_m3 import LLMInitiatedRoller
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.observation_enricher import ObservationEnricher
@@ -322,6 +324,15 @@ class Brain:
         self._idle_tools = IdleToolRoller(
             config=self._idle_tools_config,
             actions=self._actions,
+        )
+        # M3 (issue #33). Shares the deterministic roller's tracker so that
+        # cross-path cooldowns work (a deterministic moon_phase fire blocks
+        # M3 moon_phase for the rule's cooldown window).
+        self._idle_tools_m3 = LLMInitiatedRoller(
+            config=self._idle_tools_config,
+            actions=self._actions,
+            llm=self._llm,
+            tracker=self._idle_tools.tracker,
         )
         # Session-scoped: computed once at startup from memory.db.
         self._first_session_of_day: bool = True
@@ -668,7 +679,8 @@ class Brain:
                     emitted = await self._generate_freeform_comment()
 
                 if not emitted and self._idle_tools_eligible():
-                    await self._maybe_fire_idle_tool(snapshot)
+                    if not await self._maybe_fire_llm_initiated_tool(snapshot):
+                        await self._maybe_fire_idle_tool(snapshot)
 
             except Exception:
                 log.exception("Error in brain loop")
@@ -1311,6 +1323,33 @@ class Brain:
                 return
         await self._generate_tool_riff(snapshot, result)
 
+    async def _maybe_fire_llm_initiated_tool(self, snapshot: str) -> bool:
+        """M3 (issue #33): let the LLM optionally pick a flavor tool.
+
+        Returns True iff a tool was picked, invoked, and riffed - so the
+        caller can skip the deterministic roll for this tick. Hard gates
+        live here (env, mood, sensitive app); per-tool cooldowns + circuit
+        breaker live in LLMInitiatedRoller.
+        """
+        if not self._idle_tools_config.llm_initiated_enabled:
+            return False
+        if os.environ.get("TOKENPAL_M3") != "1":
+            return False
+        if self._personality.check_sensitive_app(snapshot):
+            return False
+        if self._personality.mood_role in {"sleepy", "concerned"}:
+            return False
+        ctx = self._build_idle_context()
+        try:
+            result = await self._idle_tools_m3.maybe_fire(ctx)
+        except Exception:
+            log.exception("M3 idle tool roll crashed")
+            return False
+        if result is None:
+            return False
+        await self._generate_tool_riff(snapshot, result)
+        return True
+
     def _register_running_bit(self, fire: IdleFireResult) -> None:
         """Install the fired rule as a running bit on the personality engine."""
         try:
@@ -1405,12 +1444,18 @@ class Brain:
         """
         if self._memory is None:
             return
+        source = (
+            "llm_initiated"
+            if fire.rule_name.startswith("llm_initiated:")
+            else "deterministic"
+        )
         data: dict[str, Any] = {
             "tool": fire.tool_name,
             "emitted": emitted,
             "tool_success": fire.success,
             "running_bit": fire.running_bit,
             "latency_ms": int(fire.latency_ms),
+            "source": source,
         }
         if filter_reason:
             data["filter_reason"] = filter_reason

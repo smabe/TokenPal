@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import logging
+import os
 import re
 import signal
 import sys
@@ -32,6 +33,7 @@ from tokenpal.config.cloud_writer import (
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
     set_idle_tools_enabled,
+    set_llm_initiated_enabled,
 )
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import DEFAULT_TOOLS, TokenPalConfig
@@ -1408,6 +1410,29 @@ def main() -> None:
                 "Restart TokenPal for the change to take effect."
             )
 
+        if subcmd in ("llm_on", "llm_off"):
+            try:
+                path = set_llm_initiated_enabled(subcmd == "llm_on")
+            except OSError as e:
+                return CommandResult(f"/idle_tools: could not write config: {e}")
+            return CommandResult(
+                f"idle_tools llm_initiated turned {subcmd[4:]} in {path.name}. "
+                "Restart TokenPal for the change to take effect."
+            )
+
+        if subcmd == "llm_status":
+            it = config.idle_tools
+            mark = "on " if it.llm_initiated_enabled else "off"
+            env = os.environ.get("TOKENPAL_M3", "")
+            env_line = f"set ({env})" if env else "unset"
+            return CommandResult(
+                "Idle tools - LLM-initiated path (M3, issue #33):\n"
+                f"  config:  {mark}  "
+                f"(cooldown {int(it.llm_initiated_cooldown_s)}s, "
+                f"cap {it.llm_initiated_max_per_hour}/h)\n"
+                f"  env TOKENPAL_M3:  {env_line}"
+            )
+
         if subcmd == "roll":
             if not target:
                 return CommandResult(
@@ -1453,7 +1478,9 @@ def main() -> None:
             return CommandResult(f"Rolling {target}...")
 
         return CommandResult(
-            "Usage: /idle_tools [list|on|off|enable <rule>|disable <rule>|roll <rule>]"
+            "Usage: /idle_tools "
+            "[list|on|off|enable <rule>|disable <rule>|roll <rule>|"
+            "llm_on|llm_off|llm_status]"
         )
 
     def _cmd_wifi(args: str) -> CommandResult:

@@ -11,6 +11,7 @@ import pytest
 from tokenpal.config.idle_tools_writer import (
     set_idle_rule_enabled,
     set_idle_tools_enabled,
+    set_llm_initiated_enabled,
 )
 
 
@@ -55,3 +56,10 @@ def test_global_and_rule_coexist(fake_config: Path) -> None:
     data = _toml(fake_config)
     assert data["idle_tools"]["enabled"] is True
     assert data["idle_tools"]["rules"]["monday_joke"] is False
+
+
+def test_set_llm_initiated_round_trips(fake_config: Path) -> None:
+    set_llm_initiated_enabled(True)
+    assert _toml(fake_config)["idle_tools"]["llm_initiated_enabled"] is True
+    set_llm_initiated_enabled(False)
+    assert _toml(fake_config)["idle_tools"]["llm_initiated_enabled"] is False

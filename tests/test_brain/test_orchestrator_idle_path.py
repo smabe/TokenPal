@@ -98,6 +98,21 @@ def test_record_idle_fire_writes_telemetry_row() -> None:
     assert row["data"]["emitted"] is True
     assert row["data"]["tool_success"] is True
     assert row["data"]["latency_ms"] == 42
+    assert row["data"]["source"] == "deterministic"
+
+
+def test_record_idle_fire_marks_llm_initiated_source() -> None:
+    """M3 fires set rule_name to 'llm_initiated:<tool>'; telemetry distinguishes."""
+    brain = _bare_brain()
+    brain._memory = _RecordingMemory()
+    fire = IdleFireResult(
+        rule_name="llm_initiated:word_of_the_day", tool_name="word_of_the_day",
+        tool_output="serendipity: a happy accident",
+        framing="react to it",
+        latency_ms=80.0, success=True,
+    )
+    brain._record_idle_fire(fire, emitted=True)
+    assert brain._memory.calls[0]["data"]["source"] == "llm_initiated"
 
 
 async def test_generate_comment_returns_false_on_sensitive_app() -> None:

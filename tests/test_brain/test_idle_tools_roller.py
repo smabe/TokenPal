@@ -268,7 +268,7 @@ def test_rule_status_flags_cooldown_reason() -> None:
         actions={"stub": action},
         rules=(_rule(cooldown_s=3600.0),),
     )
-    roller._last_fire_by_rule["fixture"] = time.monotonic()
+    roller.tracker.last_by_rule["fixture"] = time.monotonic()
     rows = roller.rule_status(_ctx())
     assert len(rows) == 1
     _, _, reason = rows[0]

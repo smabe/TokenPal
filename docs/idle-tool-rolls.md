@@ -373,15 +373,107 @@ also the paper trail for debugging framing drift — without
   text is already filtered through the response cleanup path
   (`_clean_llm_text`, `_has_cross_franchise`, `is_clean_english`).
 
+## LLM-initiated rolls (M3)
+
+The deterministic M1+M2 path covers time-of-day rituals well, but leaves
+gaps in the middle of normal sessions where no predicate matches and the
+LLM might still know a flavor tool would land. M3 (issue #33) lets the
+model decide. Lives in `tokenpal/brain/idle_tools_m3.py`.
+
+**Wiring.** `_maybe_fire_llm_initiated_tool` runs BEFORE
+`_maybe_fire_idle_tool` inside the idle-eligible block in the brain
+loop. On a hit it consumes the tick and the deterministic roller is
+skipped; on a decline (or any gate failure) the deterministic path
+runs unchanged. Both rollers share one `FireTracker` instance so cross-
+path cooldowns work.
+
+**Hard gates** (in order, cheapest first):
+
+1. `idle_tools.llm_initiated_enabled` config flag (default off).
+2. `TOKENPAL_M3=1` environment variable. Required during dogfood
+   (stages M3.1-M3.3); dropped in M3.4.
+3. `personality.check_sensitive_app(snapshot)` - same gate as the
+   deterministic path.
+4. `personality.mood_role in {"sleepy", "concerned"}` - skip when the
+   user is winding down or stressed. The original plan called for a
+   "focused" mood block too, but no `Mood.FOCUSED` enum exists; if
+   telemetry shows we want one, add it then.
+
+**Soft gates** inside `LLMInitiatedRoller.maybe_fire`:
+
+5. M3-specific cooldown (`llm_initiated_cooldown_s`, default 30 min)
+   between any two M3 fires. Separate from the deterministic 180s.
+6. M3-specific rolling-hour cap (`llm_initiated_max_per_hour`, default
+   1). Separate counter from the deterministic max_per_hour=6.
+7. Shared global rolling-hour cap with the deterministic path - so
+   noise stays bounded across both paths combined.
+8. Per-tool cool-off via `FireTracker.last_by_tool`. A deterministic
+   fire of `moon_phase` writes `last_by_tool["moon_phase"]=now` and
+   blocks M3 `moon_phase` for the rule's cooldown (24h). The reverse
+   does NOT hold: M3 fires don't block deterministic. Asymmetric by
+   design - M3 is the conservative experimental path.
+9. Circuit breaker: same M3 tool picked `CONSECUTIVE_PICK_LIMIT`=3
+   times in a row triggers a `CIRCUIT_COOLOFF_S`=2h block on that tool
+   for both the M3 and deterministic paths.
+
+**Catalog.** Curated 9-tool subset; the LLM never sees the full action
+registry. Defined in `idle_tools_m3.py:M3_CATALOG`. Per-tool cool-offs
+mirror the tightest deterministic rule cooldown for the same tool
+(`PER_TOOL_COOLOFF_S`).
+
+**Single tool turn.** M3 calls `generate_with_tools` once. If the
+response includes a `tool_calls[0]` in the catalog, the action is
+invoked, then `_generate_tool_riff` (the existing deterministic riff
+path) runs LLM turn 2 to compose the in-character line - the personality
+prompt + filter pipeline are reused unchanged. M3 does NOT round-trip
+the tool call back to the model on turn 2; the personality prompt frames
+the output instead. This trades "model sees its own tool call" for
+"voice stays in character" and avoids Ollama tool-format drift.
+
+**memory_query metric default.** The action requires a `metric` enum
+arg. If the LLM omits it, `_sanitize_args` injects
+`MEMORY_QUERY_DEFAULT_METRIC = "session_count_today"` (the lowest-
+privacy probe; matches the deterministic floor in `idle_tools._MEMORY_RECALL_METRICS`).
+
+**Telemetry.** Successful M3 fires write `idle_tool_fire` rows with
+`data["source"] = "llm_initiated"` and `summary = "llm_initiated:<tool>"`.
+Deterministic rows carry `data["source"] = "deterministic"`. The
+distinction is derived in `Brain._record_idle_fire` from the `rule_name`
+prefix - no schema migration needed. Declines (LLM picked no tool) do
+NOT write telemetry rows.
+
+**Slash commands.**
+
+- `/idle_tools llm_on` / `llm_off` - flip
+  `idle_tools.llm_initiated_enabled` in `config.toml`.
+- `/idle_tools llm_status` - dump current config + env-var state.
+
+**Verification (manual).**
+
+```sh
+# 1. Enable both gates.
+export TOKENPAL_M3=1
+./run.sh
+# In TokenPal: /idle_tools llm_on
+
+# 2. Wait for a freeform tick (>10 min idle). Watch chat log for
+#    "TokenPal (idle-tool llm_initiated:<tool> -> <tool>): ..."
+
+# 3. Confirm telemetry.
+sqlite3 ~/.tokenpal/memory.db \
+  "SELECT summary, data FROM observations \
+   WHERE event_type='idle_tool_fire' \
+   AND summary LIKE 'llm_initiated:%' \
+   ORDER BY ts DESC LIMIT 3;"
+```
+
 ## Known non-goals
 
-- **LLM-initiated tool-calling** during idle (the model saying "let me
-  look something up"). Templated traps + non-deterministic latency on
-  small quantized models make this unsafe to ship without more work.
-  Tracked at [issue #33](https://github.com/smabe/TokenPal/issues/33).
+- **Always-on M3.** `llm_initiated_enabled` defaults to false even
+  after M3.4 (the env-var drop); user must opt-in via `/idle_tools
+  llm_on`.
 - **Per-voice rule muting.** Every voice gets every rule. If a voice
   produces cringe with a specific tool, tune the rule's framing string
   or cooldown instead.
-- **Author-birthday `callback_book` rule.** Cut during M2 — reliable
-  detection would need an LLM classifier we don't have yet. Revisit
-  alongside #33.
+- **Author-birthday `callback_book` rule.** Cut during M2 - reliable
+  detection would need an LLM classifier we don't have yet.

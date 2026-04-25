@@ -45,6 +45,10 @@ class IdleToolsConfig:
     # via rule metadata — keeps the schema forward-compatible as new rules
     # land without forcing a config migration.
     rules: dict[str, bool] = field(default_factory=dict)
+    # M3 LLM-initiated tool calls during freeform ticks. Off until #33 ships.
+    llm_initiated_enabled: bool = False
+    llm_initiated_cooldown_s: float = 1800.0   # 30min gap between M3 fires
+    llm_initiated_max_per_hour: int = 1        # paranoid rolling-hour cap
 
 
 @dataclass

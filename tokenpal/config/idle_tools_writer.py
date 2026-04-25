@@ -28,3 +28,11 @@ def set_idle_rule_enabled(rule_name: str, enabled: bool) -> Path:
         rules[rule_name] = enabled
 
     return update_config(mutate)
+
+
+def set_llm_initiated_enabled(enabled: bool) -> Path:
+    """Flip `[idle_tools] llm_initiated_enabled = true|false` (M3, issue #33)."""
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("idle_tools", {})["llm_initiated_enabled"] = enabled
+
+    return update_config(mutate)

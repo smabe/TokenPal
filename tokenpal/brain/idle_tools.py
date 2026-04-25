@@ -89,6 +89,33 @@ class _CacheEntry:
     fetched_at: float               # wall clock (time.time())
 
 
+@dataclass
+class FireTracker:
+    """Shared cooldown + rate-cap state across deterministic + M3 rollers.
+
+    Both rollers write to the same instance so cross-path cooldowns work in
+    one direction: a deterministic fire of `moon_phase` writes
+    `last_by_tool["moon_phase"] = now`, which M3 reads to filter that tool
+    from its catalog for the rule's cooldown window. M3 fires also write
+    `last_by_tool` (for its own circuit breaker + cross-tool dedup), but
+    deterministic only consults `last_by_rule`, so M3 does not block
+    deterministic. Asymmetric by design - M3 is the conservative path.
+    """
+
+    last_by_rule: dict[str, float] = field(default_factory=dict)
+    last_by_tool: dict[str, float] = field(default_factory=dict)
+    last_any: float | None = None
+    recent_fires: deque[float] = field(default_factory=deque)
+    # M3-specific counters (separate from the shared global cap so M3 can be
+    # tuned without touching deterministic behavior).
+    m3_last_fire: float | None = None
+    m3_recent_fires: deque[float] = field(default_factory=deque)
+    # M3.3 circuit breaker: increments on consecutive same-tool LLM picks,
+    # resets when the LLM picks a different tool. Deterministic path doesn't
+    # touch this.
+    consecutive_same_tool: dict[str, int] = field(default_factory=dict)
+
+
 class IdleToolRoller:
     """Rolls a weighted die across contextual rules during quiet stretches."""
 
@@ -102,6 +129,7 @@ class IdleToolRoller:
         rules: tuple[IdleToolRule, ...] = M1_RULES,
         rng: random.Random | None = None,
         invoker: ToolInvoker | None = None,
+        tracker: FireTracker | None = None,
     ) -> None:
         self._config = config
         self._actions = actions
@@ -109,18 +137,17 @@ class IdleToolRoller:
         self._rng = rng or random.Random()
         self._invoker = invoker or ToolInvoker()
 
-        # Per-rule last-fire monotonic timestamps. Initialized lazy on first
-        # maybe_fire — we do not want to stamp "just fired" on startup. A
-        # missing key means "never fired", so cooldown checks should let the
-        # rule through on the first call regardless of process uptime.
-        self._last_fire_by_rule: dict[str, float] = {}
-        self._last_fire_any: float | None = None
-
-        # Sliding window of fire times (monotonic) for max_per_hour.
-        self._recent_fires: deque[float] = deque()
+        # Lazy: a missing key in last_by_rule means "never fired", so cooldown
+        # checks let the rule through on the first call regardless of uptime.
+        # Shared with the M3 LLMInitiatedRoller so cross-path cooldowns work.
+        self._tracker = tracker or FireTracker()
 
         # Evergreen warm cache.
         self._daily_cache: dict[str, _CacheEntry] = {}
+
+    @property
+    def tracker(self) -> FireTracker:
+        return self._tracker
 
     # ------------------------------------------------------------------
     # Public API
@@ -152,24 +179,25 @@ class IdleToolRoller:
             return None
 
         now = time.monotonic()
+        tr = self._tracker
 
         # Global cooldown.
         if (
-            self._last_fire_any is not None
-            and now - self._last_fire_any < self._config.global_cooldown_s
+            tr.last_any is not None
+            and now - tr.last_any < self._config.global_cooldown_s
         ):
-            remaining = self._config.global_cooldown_s - (now - self._last_fire_any)
+            remaining = self._config.global_cooldown_s - (now - tr.last_any)
             log.debug("idle-roll skip: global cooldown, %.0fs remaining", remaining)
             return None
 
         # Rolling-hour rate cap.
         cutoff = now - 3600.0
-        while self._recent_fires and self._recent_fires[0] < cutoff:
-            self._recent_fires.popleft()
-        if len(self._recent_fires) >= self._config.max_per_hour:
+        while tr.recent_fires and tr.recent_fires[0] < cutoff:
+            tr.recent_fires.popleft()
+        if len(tr.recent_fires) >= self._config.max_per_hour:
             log.debug(
                 "idle-roll skip: rate cap (%d fires in the last hour, max=%d)",
-                len(self._recent_fires), self._config.max_per_hour,
+                len(tr.recent_fires), self._config.max_per_hour,
             )
             return None
 
@@ -190,9 +218,10 @@ class IdleToolRoller:
 
         # Record fire state regardless of tool success — a flaky API
         # shouldn't let us hammer it twice a second.
-        self._last_fire_by_rule[rule.name] = now
-        self._last_fire_any = now
-        self._recent_fires.append(now)
+        tr.last_by_rule[rule.name] = now
+        tr.last_by_tool[rule.tool_name] = now
+        tr.last_any = now
+        tr.recent_fires.append(now)
         return result
 
     async def force_fire(
@@ -210,9 +239,11 @@ class IdleToolRoller:
         if result is None:
             return None
         now = time.monotonic()
-        self._last_fire_by_rule[rule.name] = now
-        self._last_fire_any = now
-        self._recent_fires.append(now)
+        tr = self._tracker
+        tr.last_by_rule[rule.name] = now
+        tr.last_by_tool[rule.tool_name] = now
+        tr.last_any = now
+        tr.recent_fires.append(now)
         return result
 
     # ------------------------------------------------------------------
@@ -249,7 +280,7 @@ class IdleToolRoller:
                 continue
             if rule.needs_web_fetches and not ctx.consent_web_fetches:
                 continue
-            last = self._last_fire_by_rule.get(rule.name)
+            last = self._tracker.last_by_rule.get(rule.name)
             if last is not None and now - last < rule.cooldown_s:
                 continue
             if rule.tool_name not in self._actions:
@@ -370,7 +401,7 @@ class IdleToolRoller:
             return "disabled in config"
         if rule.needs_web_fetches and not ctx.consent_web_fetches:
             return "web_fetches consent missing"
-        last = self._last_fire_by_rule.get(rule.name)
+        last = self._tracker.last_by_rule.get(rule.name)
         if last is not None:
             remaining = rule.cooldown_s - (now - last)
             if remaining > 0:
