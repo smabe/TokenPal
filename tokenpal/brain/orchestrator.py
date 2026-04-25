@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 if TYPE_CHECKING:
+    from tokenpal.audio.pipeline import AudioPipeline
+    from tokenpal.audio.types import InputSource
     from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
 from tokenpal.actions.base import AbstractAction
@@ -234,6 +236,7 @@ class Brain:
         intent_config: IntentConfig | None = None,
         rage_detect_config: RageDetectConfig | None = None,
         git_nudge_config: GitNudgeConfig | None = None,
+        audio_pipeline: AudioPipeline | None = None,
     ) -> None:
         # User input queue (thread-safe, fed from main thread)
         self._user_input_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -252,6 +255,10 @@ class Brain:
         self._llm = llm
         self._ui_callback = ui_callback
         self._log_callback = log_callback
+        # Audio pipeline drives ambient TTS. None when both [audio] toggles
+        # are off or the install path hasn't run — _emit_comment becomes a
+        # no-op for speech in that case, text bubbles still render.
+        self._audio_pipeline = audio_pipeline
         self._personality = personality
         self._status_callback = status_callback
         self._mood_callback = mood_callback
@@ -927,12 +934,34 @@ class Brain:
         """Record a comment and show it to the user."""
         self._personality.record_comment(text)
         self._ui_callback(text)
+        # Ambient narration: every emit-comment path is unsolicited (idle
+        # tool, freeform, observation, EOD, drift, easter egg). Reply paths
+        # call self._ui_callback directly and never reach here, so a "typed
+        # → no speak" violation can't sneak through this hook. Voice-reply
+        # plumbing is stage 7's job. getattr() makes us tolerant of tests
+        # that bypass __init__ via Brain.__new__.
+        if getattr(self, "_audio_pipeline", None) is not None:
+            self._speak_async(text, source="ambient")
         if acknowledge:
             self._context.acknowledge()
         self._last_comment_time = time.monotonic()
         self._consecutive_comments += 1
         self._suppressed_streak = 0
         self._comment_timestamps.append(time.monotonic())
+
+    def _speak_async(self, text: str, *, source: InputSource) -> None:
+        """Fire-and-forget TTS. Imports kept lazy so an audio-disabled run
+        never pulls the audio module."""
+        from tokenpal.audio.tts import speak
+
+        assert self._audio_pipeline is not None
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # _emit_comment is occasionally called from sync paths (e.g.
+            # tests). No loop → no playback; ambient text still renders.
+            return
+        loop.create_task(speak(text, source=source, pipeline=self._audio_pipeline))
 
     def _handle_suppressed_output(self, reason: str) -> None:
         """Apply cooldown + silence pressure after a filter rejected a gen.

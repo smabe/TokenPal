@@ -272,6 +272,25 @@ def main() -> None:
             return False
         return await fut
 
+    # Audio pipeline — built when either [audio] toggle is on. Never required
+    # for the brain to run; a missing install just means ambient narration
+    # / voice replies stay silent. Voice mode imports openwakeword in
+    # boot(), so swallow ImportError gracefully so a config drift doesn't
+    # block startup.
+    audio_pipeline = None
+    if (
+        config.audio.speak_ambient_enabled
+        or config.audio.voice_conversation_enabled
+    ):
+        try:
+            from tokenpal.audio.pipeline import boot as _boot_audio
+            audio_pipeline = _boot_audio(config.audio, data_dir)
+        except ImportError as e:
+            log.warning(
+                "audio toggle on but install incomplete (%s) — run /voice-io install",
+                e,
+            )
+
     # Build the brain
     brain = Brain(
         senses=senses,
@@ -312,6 +331,7 @@ def main() -> None:
         intent_config=config.intent,
         rage_detect_config=config.rage_detect,
         git_nudge_config=config.git_nudge,
+        audio_pipeline=audio_pipeline,
     )
 
     # Load voice-specific buddy art into the overlay
