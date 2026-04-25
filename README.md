@@ -287,6 +287,7 @@ Type any of these at the buddy's input dock. Commands that open a window (`/opti
 /mood                    show current mood
 /status                  model, senses, actions summary
 /idle_tools              show / toggle idle-tool rolls (3-min cooldown, 6/hr cap)
+/idle_tools llm_status   show LLM-initiated (M3) gate state — config flag + TOKENPAL_M3 env
 ```
 
 **Agents + research:**

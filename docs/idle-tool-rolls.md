@@ -260,14 +260,15 @@ max_per_hour = 4                   # rolling-hour rate cap
 
 Per-rule toggles are a flat `dict[str, bool]` so adding new rules
 doesn't churn the schema. Writes go through
-`tokenpal/config/idle_tools_writer.py::set_idle_rule_enabled` and
-`::set_idle_tools_enabled` — the writer is invoked from
-`/idle_tools enable <rule>` and friends.
+`tokenpal/config/idle_tools_writer.py::set_idle_rule_enabled`,
+`::set_idle_tools_enabled`, and `::set_llm_initiated_enabled` (M3) — all
+three are invoked from `/idle_tools` subcommands.
 
 ## Slash command
 
 ```
-/idle_tools [list | on | off | enable <rule> | disable <rule> | roll <rule>]
+/idle_tools [list | on | off | enable <rule> | disable <rule> | roll <rule>
+             | llm_on | llm_off | llm_status]
 ```
 
 - `list` — rules + enabled state + ineligibility reason (cooldown,
@@ -278,6 +279,12 @@ doesn't churn the schema. Writes go through
 - `enable` / `disable` — flip a single rule toggle. Restart required.
 - `roll <rule>` — force-fire via `force_fire`, bypassing predicate and
   cooldown. Useful for tuning framing strings live.
+- `llm_on` / `llm_off` — flip `llm_initiated_enabled` for the M3 path
+  (issue #33). Restart required. Note: M3 also requires the
+  `TOKENPAL_M3=1` env var during dogfood (M3.1-M3.3); env-gate drops
+  in M3.4.
+- `llm_status` — read-only dump of the M3 config flag, env-var state,
+  and the per-tool cool-off table. No writes.
 
 `roll` still records the fire in cooldown state so a manual roll
 doesn't trigger an automatic one right after.
@@ -290,16 +297,21 @@ Every fire writes one row to `memory.db` via
 ```
 sense_name  = "idle_tools"
 event_type  = "idle_tool_fire"
-summary     = rule.name
+summary     = rule.name                # "llm_initiated:<tool>" for M3 fires
 data        = {
   "tool":          rule.tool_name,
   "emitted":       bool,              # False if filter_response swallowed it
   "tool_success":  bool,              # tool returned non-empty output
   "running_bit":   bool,
   "latency_ms":    int,
+  "source":        str,               # "deterministic" or "llm_initiated" (M3)
   "filter_reason": str,               # present on swallows — see commentary-gate.md
 }
 ```
+
+The `source` field is derived in `Brain._record_idle_fire` from the
+`rule_name` prefix - no schema migration when M3 landed; pre-M3 rows
+just lack the field. M3 declines (model picked no tool) write nothing.
 
 `filter_reason` is one of the `FilterReason` enum values from
 `tokenpal/brain/personality.py` (`drifted`, `anchor_regurgitation`,
