@@ -41,11 +41,15 @@ class TTSBackend(ABC):
     def list_voices(self) -> list[VoiceInfo]: ...
 
     @abstractmethod
-    async def synthesize(
+    def synthesize(
         self, text: str, voice_id: str, *, speed: float = 1.0,
     ) -> AsyncIterator[bytes]:
         """Yield PCM chunks in the backend's declared format. Streaming-first;
-        a buffer-only backend yields a single chunk."""
+        a buffer-only backend yields a single chunk.
+
+        Declared without ``async`` (mypy: see asynchronous-iterators docs);
+        concrete impls are async generators using ``yield``.
+        """
 
     async def warmup(self) -> None:
         """Lazy-load model weights on first use, not at import."""
