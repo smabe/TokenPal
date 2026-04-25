@@ -223,3 +223,80 @@ with current `(v, ω)`; the home-spring keeps pulling it back.
   Files-to-touch). If center-grabs feel different post-rewrite,
   that's expected behavior — the smooth `r × P` gradient replaces
   the old hard threshold.
+- **Multi-body ragdoll**: the only fix for "grabs at the visual
+  middle slowly flip the body" given the head-heavy COM. Filed
+  as #39 to revisit when interaction quality demands it.
+
+## Lesson summary (post-ship retrospective)
+
+The rewrite paid off. Net delete: ~1100 LOC of pendulum + tuning
+heuristics replaced by ~250 LOC of Catto soft-constraint solver
+plus four small forces (gravity, distance-gated upright bias,
+always-on damping, angular home spring). What we learned, ranked
+by surprise:
+
+1. **Iteration count is load-bearing**, not a perf knob. Box2D's
+   8 velocity iterations per `b2World::Step` isn't optimization —
+   it's the difference between "constraint holds against gravity"
+   and "body drifts 3-4 px/tick downward forever." A single
+   Gauss-Seidel sweep mathematically cannot overcome any
+   persistent external force; the soft-constraint formulation
+   relies on iteration to converge. The first-pass implementation
+   shipped with one iteration and the bug only surfaced when the
+   user added gravity-during-grab and watched the buddy drift
+   away from the cursor.
+
+2. **Warm-start with no bound is unstable.** Box2D pairs cross-tick
+   warm-starting with a `maxForce` clamp on the impulse accumulator;
+   without that clamp, `γ·P_acc` grows unbounded under sustained
+   external load. Resetting per-tick is simpler than implementing
+   maxForce clamping and gives the same correctness.
+
+3. **Apply gravity outside the solver, not inside.** Tempting to
+   include gravity as part of the bias term — don't. Box2D's clean
+   separation (forces modify velocity → solver corrects to satisfy
+   constraints) is what makes the math work. Mixing them violates
+   Catto's Sequential Impulses derivation.
+
+4. **The "no double-counting on release" rule simplifies more than
+   the code.** Dropping `_inject_fling_impulse` removed not just
+   the impulse code but the asymmetric-tracking law that was
+   compensating for it. Several knobs disappeared together.
+
+5. **Off-COM rotation falls out of `K = J·M⁻¹·Jᵀ` for free.** No
+   explicit parallel-axis term, no separate "torque from cursor
+   force" calc — just compute the effective mass matrix, invert,
+   apply impulse. Worth porting Catto's ~50-line primitive
+   correctly rather than re-deriving locally.
+
+6. **Single rigid body has expressive limits.** The "head heavier
+   than feet" intuition only emerges from offset COM. Grabs at the
+   visual center are an unstable equilibrium because COM is above
+   the anchor. Distance-gated upright bias papers over this for
+   true near-COM grabs but can't distinguish "torso center" from
+   "lower torso" — both are off-COM, but only one is intuitively a
+   balance point. The real fix is multi-body ragdoll (#39).
+
+7. **Tuning by feel against named scenarios beats tuning against
+   vibes.** The five-scenario list (slow drag, fast whip, sustained
+   twirl, click-and-release, off-COM grab) caught regressions that
+   "does it feel right" wouldn't. Codifying this approach in future
+   physics work.
+
+8. **Decoupled linear vs angular damping was the unlock for
+   inertia-feel slide.** Pre-decoupling, lowering damping for slide
+   also made the pendulum-while-held swingy. Splitting into
+   `linear_drag_frequency_hz` and `angular_drag_frequency_hz`
+   cleanly separated the two concerns.
+
+Time spent: about 7 commits over a single session, including the
+research pass that produced fling-me.md. Cost vs. value: high —
+the buddy now feels like a real object on a string instead of
+a hand-tuned animation, and the failure modes are now physical
+(unstable equilibria, etc.) rather than incidental (the old
+spin-fade cliff).
+
+What I'd do differently: dispatch the research agents *before*
+phase 1, not just before deciding the rewrite. They'd have caught
+the iteration-count requirement up front instead of surfacing it
+when gravity drift broke the integration test.
