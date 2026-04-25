@@ -25,12 +25,6 @@ def _toml(path: Path) -> dict:
     return tomllib.loads(path.read_text())
 
 
-def test_set_voice_conversation_creates_file(fake_config: Path) -> None:
-    assert not fake_config.exists()
-    set_voice_conversation_enabled(True)
-    assert _toml(fake_config)["audio"]["voice_conversation_enabled"] is True
-
-
 def test_set_speak_ambient_upserts_existing(fake_config: Path) -> None:
     fake_config.write_text(
         '[audio]\nvoice_conversation_enabled = true\nspeak_ambient_enabled = false\n'

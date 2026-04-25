@@ -364,9 +364,6 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 )
                 yield Button("Apply", id="wifi-btn")
 
-            # --------------------------------------------------------------
-            # Audio I/O
-            # --------------------------------------------------------------
             yield Label("Audio I/O", classes="section-header")
             yield Label(
                 "Off by default. Voice conversation = mic + speakers. "
@@ -479,6 +476,9 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
         )
 
     def _read_checkbox(self, selector: str, fallback: bool) -> bool:
+        # Falls back to the state value when the modal isn't mounted —
+        # tests in test_options_modal exercise _collect on a fresh
+        # OptionsModal() without going through mount.
         try:
             return bool(self.query_one(selector, Checkbox).value)
         except Exception:

@@ -2425,8 +2425,7 @@ def _handle_voice_io_command(
 
     Bare command shows both states. ``on`` / ``off`` flips voice
     conversation; ``ambient on`` / ``ambient off`` flips ambient narration.
-    Writes go through audio_writer and update config.audio in place. test /
-    say <text> are reserved for phase 2 once a real TTS backend lands.
+    Writes go through audio_writer and update config.audio in place.
     """
     from tokenpal.config.audio_writer import (
         set_speak_ambient_enabled,

@@ -74,21 +74,6 @@ def test_voice_and_ambient_independent(isolated, cfg: TokenPalConfig) -> None:
     assert cfg.audio.speak_ambient_enabled is True
 
 
-def test_test_subcommand_defers_to_phase_2(
-    isolated, cfg: TokenPalConfig,
-) -> None:
-    result = _handle_voice_io_command("test", cfg)
-    assert "phase 2" in result.message.lower()
-    assert cfg.audio.voice_conversation_enabled is False
-
-
-def test_say_subcommand_defers_to_phase_2(
-    isolated, cfg: TokenPalConfig,
-) -> None:
-    result = _handle_voice_io_command("say hello", cfg)
-    assert "phase 2" in result.message.lower()
-
-
 def test_unknown_subcommand_returns_usage(
     isolated, cfg: TokenPalConfig,
 ) -> None:

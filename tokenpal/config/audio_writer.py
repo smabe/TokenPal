@@ -1,9 +1,7 @@
 """Write [audio] toggles into config.toml.
 
-Used by the options modal (Textual + Qt) when the user flips a voice or
-ambient toggle. Phase 1 only persists the two opt-in flags — backend
-choice, voice ID, and other [audio] fields stay schema-default until
-phase 2 lands the Kokoro backend that actually consumes them.
+Used by the options modal (Textual + Qt) and the /voice-io slash
+command when the user flips a voice or ambient toggle.
 """
 
 from __future__ import annotations
