@@ -31,6 +31,7 @@ Load the relevant doc on demand rather than reading all of them.
 - User input: Textual `Input` widget, routes via `brain.submit_user_input()` (asyncio.Queue + call_soon_threadsafe)
 - Senses produce `SenseReading` with `.summary` (natural language, NOT bracketed tags), `.changed_from` (transition metadata), `.confidence`, per-sense `reading_ttl_s`
 - Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
+- Audio I/O: opt-in via `[audio]` (both `voice_conversation_enabled` and `speak_ambient_enabled` default off). Output (TTS) and input (wake/VAD/ASR) sides are kept structurally separate so ambient narration alone never opens a mic — `tokenpal/audio/` + `tests/test_audio/test_modularity.py` enforce this. See `plans/say-what.md`
 
 ## Key Commands
 - Platform installers: `bash scripts/install-macos.sh`, `powershell scripts/install-windows.ps1`, `bash scripts/install-linux.sh` — standalone fresh-machine setup with interactive client/server/both prompt and VRAM-based model recommendation
@@ -56,7 +57,8 @@ Load the relevant doc on demand rather than reading all of them.
 - Log files and memory.db at 0o600 (owner-only)
 - Music track names redacted from DEBUG logs
 - Network senses/commands — all opt-in, all keyless by default: `weather` (Open-Meteo), `world_awareness` (HN Algolia), `/ask` (DuckDuckGo + Wikipedia; Brave via `TOKENPAL_BRAVE_KEY` env var stubbed). All untrusted external text wrapped in delimiters + filtered via `contains_sensitive_term` before any prompt composition. `/ask` shows an explicit first-use consent warning; queries never persisted to disk
-- Lat/lon rounded to 1 decimal. No ip-api.com. No clipboard monitoring. No mic/audio sensing
+- Lat/lon rounded to 1 decimal. No ip-api.com. No clipboard monitoring
+- Audio I/O is opt-in via `[audio]` toggles, both default off. Voice conversation requires `AUDIO_INPUT` + `AUDIO_OUTPUT` consent; ambient narration requires `AUDIO_OUTPUT` only and never opens a mic. No cloud STT/TTS — all audio stays local
 
 ## Platform Notes
 - macOS: use `alpha` transparency on tkinter, NOT `systemTransparent`
