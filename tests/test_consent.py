@@ -70,3 +70,8 @@ def test_has_consent_returns_category_value(consent_path: Path) -> None:
 def test_has_consent_rejects_unknown_category(consent_path: Path) -> None:
     save_consent({Category.WEB_FETCHES: True}, consent_path)
     assert has_consent("nonexistent", consent_path) is False
+
+
+def test_audio_categories_registered() -> None:
+    assert Category.AUDIO_INPUT in ALL_CATEGORIES
+    assert Category.AUDIO_OUTPUT in ALL_CATEGORIES

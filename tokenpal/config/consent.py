@@ -8,6 +8,8 @@ Known categories (callers should use the ``Category`` constants):
     location_lookups    — geocoding, IP->location, reverse geocode
     external_keyed_apis — anything requiring a user-supplied API key
     research_mode       — /research multi-step planner + fetch
+    audio_input         — mic capture (wake word, ASR)
+    audio_output        — speaker playback (TTS)
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ class Category:
     LOCATION_LOOKUPS: Final = "location_lookups"
     EXTERNAL_KEYED_APIS: Final = "external_keyed_apis"
     RESEARCH_MODE: Final = "research_mode"
+    AUDIO_INPUT: Final = "audio_input"
+    AUDIO_OUTPUT: Final = "audio_output"
 
 
 ALL_CATEGORIES: Final[tuple[str, ...]] = (
@@ -33,6 +37,8 @@ ALL_CATEGORIES: Final[tuple[str, ...]] = (
     Category.LOCATION_LOOKUPS,
     Category.EXTERNAL_KEYED_APIS,
     Category.RESEARCH_MODE,
+    Category.AUDIO_INPUT,
+    Category.AUDIO_OUTPUT,
 )
 
 
