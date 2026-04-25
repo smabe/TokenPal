@@ -228,56 +228,113 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 
 ## Commands
 
+Type any of these at the buddy's input dock. Commands that open a window (`/options`, `/cloud`, `/tools`, `/consent`) launch a real Qt sub-dialog on the desktop overlay; on the Textual overlay they pop a TUI modal.
+
+**Settings modals** (see also the next section):
+
 ```
-/model list              show available models
-/model gemma4            switch model (remembered per-server in config.toml)
-/voice train wiki char   train a voice from a Fandom wiki
-/voice switch bmo        hot-swap voice (no restart)
+/options                 F3 umbrella settings modal — chat history cap + clear, chat opacity,
+                           background + log-text color pickers, chat + bubble font size,
+                           server + model picker, weather ZIP, wifi label, launcher buttons
+                           for Cloud LLM / Senses / Tools / Voice
+/cloud                   Cloud settings modal (Anthropic / Tavily / Brave — enable, model,
+                           search on/off, deep on/off, status, forget)
+/voice                   Voice picker modal (switch active character, inspect persona)
+/tools                   Tool picker modal, grouped by section with per-category consent
+/consent                 Consent category picker (web_fetches, location, keyed_search,
+                           research) — gates /ask, weather, cloud search backends
+```
+
+**Model / server / voice:**
+
+```
+/model list              show available models on the current server
+/model <name>            switch model (remembered per-server in config.toml)
 /server status           show server connection
 /server switch local     use local Ollama (restores that host's remembered model)
-/server switch hostname  switch to remote server (restores that host's remembered model)
-/zip 90210               set weather location (geocodes, writes config)
-/weather                 current conditions on demand (buddy riffs)
+/server switch <host>    switch to remote server (restores that host's remembered model)
+/voice train wiki char   train a voice from a Fandom wiki (e.g. adventuretime BMO)
+/voice switch bmo        hot-swap voice (no restart)
+```
+
+**Senses + environment:**
+
+```
 /senses                  list senses with on/off + loaded status
 /senses enable <name>    turn a sense on in config.toml (restart to apply)
 /senses disable <name>   turn a sense off in config.toml (restart to apply)
-/wifi label <name>       label current wifi (SSID hashed, never stored raw)
+/zip 90210               set weather location (geocodes, writes config)
+/weather <state>         dev override for the weather overlay — clear | sun | partly |
+                           cloudy | overcast | fog | drizzle | rain | storm | snow |
+                           day | night | <wmo code> | off (clears the override)
+/wifi label <name>       label the current wifi (SSID hashed, never stored raw)
 /watch                   list directories watched by filesystem_pulse
 /watch add <path>        add a directory to watch (restart to apply)
 /watch remove <path>     stop watching a directory (restart to apply)
+```
+
+**Quick-hit tools + chat:**
+
+```
 /math 2 + 2 * 3          evaluate an arithmetic expression (bypasses the LLM)
 /gh                      recent commits (buddy comments in character)
 /gh prs                  open pull requests
 /gh issues               open issues
-/ask <question>          web search (DuckDuckGo + Wikipedia), buddy riffs on result
-/options                 umbrella settings modal (F3) — chat history cap + clear, server + model picker, launcher buttons for Cloud/Senses/Tools/Voice
+/ask <question>          web search (DuckDuckGo + Wikipedia / Brave if keyed), buddy riffs
 /chatlog                 chat-log controls (clear, cap) from the prompt
-/idle_tools              show/toggle idle-tool rolls (3 min cooldown, 6/hr cap)
-/tools                   open the Textual tool-picker modal (grouped sections)
-/tools list              plain-text list with on/off marks
-/tools describe <name>   full metadata for a tool (flags, consent, rate limit)
-/consent                 open the consent-category picker (web/location/keyed/research)
+/clear                   clear the current chat history
+/help                    list every registered command
+/mood                    show current mood
+/status                  model, senses, actions summary
+/idle_tools              show / toggle idle-tool rolls (3-min cooldown, 6/hr cap)
+```
+
+**Agents + research:**
+
+```
 /agent <goal>            multi-step agent loop (chains tools toward a goal)
-/research <question>     plan-search-read-synthesize with numbered citations
-/refine <follow-up>      re-synthesize last /research locally against cached excerpts
+/research <question>     plan → parallel multi-backend search → read → synthesize with citations
+/refine <follow-up>      re-synthesize last /research locally against cached excerpts (free)
 /followup <question>     cheap cloud follow-up via cached Anthropic message history (~$0.02-0.05)
-/cloud                   open the cloud settings modal (Anthropic / Tavily / Brave)
-/cloud anthropic enable <key>  cloud synth via Sonnet/Haiku/Opus (legacy `/cloud enable` still works)
-/cloud tavily enable <key>     LLM-optimized search with preloaded content (~$0.05/run, free tier 1k/mo)
+```
+
+**Cloud integrations** (see the Cloud section above for full details):
+
+```
+/cloud anthropic enable <key>  cloud synth via Sonnet/Haiku/Opus
+/cloud tavily enable <key>     LLM-optimized search with preloaded content
 /cloud brave enable <key>      free-tier web search (2k queries/month)
-/cloud search on         Sonnet drives web_search (mid-tier, ~$0.10/run)
-/cloud deep on           Sonnet drives web_search + web_fetch (expensive, $1-3/run — use for SPAs/paywalls)
+/cloud search on               Sonnet drives web_search (mid-tier, ~$0.10/run)
+/cloud deep on                 Sonnet drives web_search + web_fetch ($1-3/run — SPAs/paywalls)
+```
+
+**Executive-function nudges:**
+
+```
 /intent finish auth PR   set an ambient goal; buddy nudges on drift
 /intent status           show current intent + age
 /intent clear            remove the active intent
 /summary                 end-of-day reflection bubble (yesterday)
 /summary today           today's reflection on demand
-/mood                    current mood
-/status                  model, senses, actions
 ```
 
 For the full agent/research/tool picture — enabling tools, adding your own action,
 model recommendations, caches, rate limits — see [docs/agents-and-tools.md](docs/agents-and-tools.md).
+
+## Settings modals
+
+Most long-form configuration lives behind graphical modals so you don't have to hand-edit TOML. On the Qt overlay they're frameless, non-modal sibling windows (you can keep Options open while you tweak a sub-dialog). On the Textual overlay they're standard TUI modals.
+
+| Modal | How to open | What it controls |
+|---|---|---|
+| **Options** | `/options` or `F3` | Chat history cap + clear, chat opacity slider, background + log-text color pickers, chat + bubble font sizes with live preview (Cmd/Ctrl-`+`/`-`/`0` also work), server + model picker (probes the server for available models), weather ZIP, current-wifi label. "Settings shortcuts" row launches Cloud / Senses / Tools / Voice sub-dialogs. `Apply` stages changes, `Save` persists to `config.toml` |
+| **Cloud** | `/cloud` | Per-backend enable/disable for Anthropic, Tavily, Brave. Key entry with fingerprint-only display. Anthropic model pick (Haiku / Sonnet / Opus), `search` on/off, `deep` on/off with cost warning, `plan` on/off |
+| **Senses** | Options → Senses | On/off toggles for every sense + inline help describing what each emits |
+| **Tools** | `/tools` or Options → Tools | Grouped sections (defaults / local / network / utilities / focus / research) with per-tool on/off, consent-category gating, and rate-limit hints. `/tools describe <name>` dumps full metadata |
+| **Consent** | `/consent` | Category picker (`web_fetches`, `location`, `keyed_search`, `research`). Gates `/ask`, weather, and any cloud search backend |
+| **Voice** | `/voice` or Options → Voice | Active voice picker, persona preview, training shortcut |
+
+The keyboard shortcut for the umbrella modal is **F3**; the Qt overlay also accepts **Cmd/Ctrl + `+` / `-` / `0`** live to resize chat + bubble fonts without opening anything.
 
 ## Voices
 
@@ -298,12 +355,16 @@ For deeper character embodiment, [LoRA fine-tune](docs/remote-training-guide.md)
 
 ## Enabling opt-in senses
 
-Most senses are on by default. A few are off until you flip them — weather needs a location, git only fires for devs, battery/network/process_heat/typing_cadence/filesystem_pulse are quieter on-transition-only senses best enabled when you actually want them.
+Only the four always-on senses (app awareness, hardware, idle, time) start enabled. Everything else is off until you flip it — weather needs a location, git only fires for devs, music assumes you're on macOS with Music.app or Spotify, and the noisier transition senses (battery / network / process_heat / typing_cadence / filesystem_pulse) are quieter when you actually want them.
 
-From inside TokenPal:
+Flip them on either from the Options → Senses modal (checkboxes + inline help) or from the chat prompt:
 
 ```
 /senses                  # list all senses with on/off + loaded status
+/senses enable music
+/senses enable productivity
+/senses enable weather
+/senses enable world_awareness
 /senses enable battery
 /senses enable network_state
 /senses enable process_heat
@@ -375,20 +436,22 @@ disable_reasoning = true               # fast responses
 # "http://gpu-box:8585/v1" = 256
 
 [senses]
-# These are on by default:
+# On by default:
 app_awareness = true
 hardware = true
 idle = true
 time_awareness = true
-music = true                           # detect Music.app/Spotify (macOS)
-productivity = true                    # work patterns from session data
-weather = false                        # opt-in: use /zip or first-run wizard
-git = false                            # opt-in: reacts to commits and branch switches
-battery = false                        # opt-in: plug/unplug + low-battery transitions
-network_state = false                  # opt-in: online/offline, wifi changes, VPN
-process_heat = false                   # opt-in: names the top CPU hog when pinned
-typing_cadence = false                 # opt-in: WPM bursts, post-burst silence (counts keypresses only)
-filesystem_pulse = false               # opt-in: activity bursts in watched dirs
+# Off by default (opt-in via /senses enable <name> or the Options → Senses modal):
+music = false                          # detect Music.app/Spotify (macOS)
+productivity = false                   # work patterns from session data
+weather = false                        # needs a location: /zip or first-run wizard
+git = false                            # reacts to commits and branch switches
+world_awareness = false                # ambient HN front-page context (keyless, Algolia)
+battery = false                        # plug/unplug + low-battery transitions
+network_state = false                  # online/offline, wifi changes, VPN
+process_heat = false                   # names the top CPU hog when pinned
+typing_cadence = false                 # WPM bursts, post-burst silence (counts keypresses only)
+filesystem_pulse = false               # activity bursts in watched dirs
 
 # [network_state]
 # ssid_labels = { "abcd1234abcd1234" = "home", "ffff0000ffff0000" = "coffee shop" }
