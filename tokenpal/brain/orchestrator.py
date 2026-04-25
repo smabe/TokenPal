@@ -435,6 +435,16 @@ class Brain:
         await self._llm.setup()
         log.info("Brain started — polling every %.1fs", self._poll_interval)
 
+        # Voice input: start the wake/VAD/ASR thread once we know the loop
+        # is up. on_voice_text feeds submit_user_input(source="voice"); the
+        # InputPipeline calls it via call_soon_threadsafe so this stays
+        # safe across threads.
+        if self._audio_pipeline is not None:
+            await self._audio_pipeline.start_input(
+                self._loop,
+                lambda text: self.submit_user_input(text, source="voice"),
+            )
+
         # Say hello immediately so the buddy isn't silent on startup
         greeting = self._personality.get_startup_greeting()
         log.info("TokenPal (startup): %s", greeting)
@@ -973,6 +983,20 @@ class Brain:
             # tests). No loop → no playback; ambient text still renders.
             return
         loop.create_task(speak(text, source=source, pipeline=self._audio_pipeline))
+
+    async def _speak_voice_reply(self, text: str) -> None:
+        """Speak a voice reply, then nudge the InputPipeline into the
+        trailing window. await-ing matters here — the FSM transitions
+        SPEAKING → TRAILING only after the audio actually drains, so
+        firing notify_tts_done early would re-open the mic while the
+        buddy is still talking and the wakeword would catch its own
+        voice."""
+        from tokenpal.audio.tts import speak
+
+        assert self._audio_pipeline is not None
+        await speak(text, source="voice", pipeline=self._audio_pipeline)
+        if self._audio_pipeline.input is not None:
+            self._audio_pipeline.input.notify_tts_done()
 
     def _handle_suppressed_output(self, reason: str) -> None:
         """Apply cooldown + silence pressure after a filter rejected a gen.
@@ -2531,16 +2555,25 @@ class Brain:
         self, user_message: str, source: InputSource = "typed",
     ) -> None:
         """Respond to direct user input using multi-turn conversation context."""
-        def _emit_reply(text: str) -> None:
+        # Typed input mid-voice-session: drop the voice path. The input
+        # FSM will close the mic and clear its buffer; the brain takes
+        # the typed turn from here. getattr-guarded so test setups that
+        # bypass __init__ (Brain.__new__) don't trip an AttributeError.
+        ap = getattr(self, "_audio_pipeline", None)
+        if source == "typed" and ap is not None and ap.input is not None:
+            ap.input.notify_typed_input()
+
+        async def _emit_reply(text: str) -> None:
             # Render bubble + speak when source is voice. Typed turns stay
             # text-only per the routing contract; ambient never reaches
-            # this path so this branch is safe.
+            # this path so this branch is safe. Voice replies are awaited
+            # so notify_tts_done lands AFTER playback drains.
             self._ui_callback(text)
             if (
                 source == "voice"
                 and getattr(self, "_audio_pipeline", None) is not None
             ):
-                self._speak_async(text, source="voice")
+                await self._speak_voice_reply(text)
 
         # PRIVACY: check sensitive apps BEFORE building prompt or touching history
         snapshot = self._context.snapshot()
@@ -2598,7 +2631,7 @@ class Brain:
                 log.info("TokenPal (reply suppressed near-duplicate): %s", filtered)
                 quip = self._personality.get_confused_quip()
                 self._conversation.add_assistant_turn(quip)
-                _emit_reply(quip)
+                await _emit_reply(quip)
                 self._last_comment_time = time.monotonic()
                 return
             if filtered:
@@ -2614,21 +2647,21 @@ class Brain:
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
                 self._recent_outputs.append(filtered)
-                _emit_reply(filtered)
+                await _emit_reply(filtered)
                 self._last_comment_time = time.monotonic()
             else:
                 # Record placeholder so history stays coherent
                 self._conversation.add_assistant_turn("[no response]")
                 log.debug("Conversation response filtered: %r", reply_text[:80])
                 quip = self._personality.get_confused_quip()
-                _emit_reply(quip)
+                await _emit_reply(quip)
         except Exception:
             log.exception("Failed to generate conversation response")
             # Don't record failed exchange — remove the user turn we just added
             if self._conversation.history and self._conversation.history[-1]["role"] == "user":
                 self._conversation.history.pop()
             quip = self._personality.get_confused_quip()
-            _emit_reply(quip)
+            await _emit_reply(quip)
 
     def _record_memory_events(
         self, snapshot: str, readings: list[SenseReading]
