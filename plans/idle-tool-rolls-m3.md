@@ -1,9 +1,15 @@
 # Idle Tool Rolls — M3: LLM-initiated tool calls
 
-**Status:** proposed — approval pending
+**Status:** M3.0 + M3.1 + M3.3 shipped 2026-04-25 (commit a87e204). M3.2 dogfood and M3.4 default-flip remain.
 **Issue:** [#33](https://github.com/smabe/TokenPal/issues/33)
 **Ships on top of:** M1 + M2 ([`plans/idle-tool-rolls.md`](./idle-tool-rolls.md), shipped 2026-04-17)
-**Arch doc for M1+M2:** [`docs/idle-tool-rolls.md`](../docs/idle-tool-rolls.md)
+**Arch doc:** [`docs/idle-tool-rolls.md`](../docs/idle-tool-rolls.md) (the "LLM-initiated rolls (M3)" section is the canonical reference; this plan is the historical design record)
+**Refined plan (with code-walk discoveries):** [`/Users/smabe/.claude/plans/grand-plan-is-done-async-torvalds.md`](file:///Users/smabe/.claude/plans/grand-plan-is-done-async-torvalds.md)
+
+### Remaining stages (time-gated)
+
+- **M3.2** — author dogfood week. Starts ~2026-05-01 (when M2 hits 14-day bake). Tune the picker prompt + catalog based on real fire telemetry. A/B Qwen3-14B-Q4 vs gemma4 tool-call quality.
+- **M3.4** — drop the `TOKENPAL_M3` env-var gate; ship default-available + opt-in via `/idle_tools llm_on`. Starts ~2 weeks after M3.2 lands. Close #33.
 
 ## Problem
 
