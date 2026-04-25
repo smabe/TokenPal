@@ -696,6 +696,8 @@ def main() -> None:
             chat_history_font_color=cl.font_color,
             chat_font=config.ui.chat_font,
             bubble_font=config.ui.bubble_font,
+            voice_conversation_enabled=config.audio.voice_conversation_enabled,
+            speak_ambient_enabled=config.audio.speak_ambient_enabled,
         )
 
         def on_open_subdialog(target: str) -> None:
@@ -870,6 +872,37 @@ def main() -> None:
                         log.warning("clear_chat_log failed: %s", e)
                 overlay.clear_log()
                 overlay.log_buddy_message("/options: chat history cleared.")
+
+            from tokenpal.config.audio_writer import (
+                set_speak_ambient_enabled,
+                set_voice_conversation_enabled,
+            )
+            for field_name, new_value, label, setter in (
+                (
+                    "voice_conversation_enabled",
+                    result.voice_conversation_enabled,
+                    "voice conversation",
+                    set_voice_conversation_enabled,
+                ),
+                (
+                    "speak_ambient_enabled",
+                    result.speak_ambient_enabled,
+                    "ambient narration",
+                    set_speak_ambient_enabled,
+                ),
+            ):
+                if new_value == getattr(config.audio, field_name):
+                    continue
+                try:
+                    setter(new_value)
+                    setattr(config.audio, field_name, new_value)
+                    overlay.log_buddy_message(
+                        f"/options: {label} {'on' if new_value else 'off'}."
+                    )
+                except OSError as e:
+                    overlay.log_buddy_message(
+                        f"/options: could not write config: {e}"
+                    )
 
         return overlay.open_options_modal(
             state, on_save, on_open_subdialog=on_open_subdialog,

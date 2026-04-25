@@ -25,7 +25,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Label
+from textual.widgets import Button, Checkbox, Input, Label
 
 from tokenpal.config.chatlog_writer import (
     MAX_PERSISTED,
@@ -33,6 +33,7 @@ from tokenpal.config.chatlog_writer import (
     clamp_max_persisted,
 )
 from tokenpal.config.schema import FontConfig
+from tokenpal.ui.wrapping_toggles import WrappingCheckbox
 
 NavigateTo = Literal["cloud", "senses", "tools", "voice"]
 
@@ -76,6 +77,8 @@ class OptionsModalState:
     chat_history_font_color: str = "#ffffff"
     chat_font: FontConfig = field(default_factory=FontConfig)
     bubble_font: FontConfig = field(default_factory=FontConfig)
+    voice_conversation_enabled: bool = False
+    speak_ambient_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -101,6 +104,8 @@ class OptionsModalResult:
     set_chat_history_font_color: str | None = None
     set_chat_font: FontConfig | None = None
     set_bubble_font: FontConfig | None = None
+    voice_conversation_enabled: bool = False
+    speak_ambient_enabled: bool = False
 
 
 class OptionsModal(ModalScreen[OptionsModalResult | None]):
@@ -360,6 +365,26 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 yield Button("Apply", id="wifi-btn")
 
             # --------------------------------------------------------------
+            # Audio I/O
+            # --------------------------------------------------------------
+            yield Label("Audio I/O", classes="section-header")
+            yield Label(
+                "Off by default. Voice conversation = mic + speakers. "
+                "Ambient narration = speakers only.",
+                classes="section-help",
+            )
+            yield WrappingCheckbox(
+                'Voice conversation ("hey tokenpal" wake word + voice replies)',
+                id="audio-voice-conversation",
+                value=s.voice_conversation_enabled,
+            )
+            yield WrappingCheckbox(
+                "Speak ambient observations (narrate random buddy bubbles)",
+                id="audio-speak-ambient",
+                value=s.speak_ambient_enabled,
+            )
+
+            # --------------------------------------------------------------
             # Settings shortcuts — launchers for existing modals
             # --------------------------------------------------------------
             yield Label("Settings shortcuts", classes="section-header")
@@ -443,7 +468,21 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             navigate_to=None,
             switch_server_to=self._pending_server,
             switch_model_to=self._pending_model,
+            voice_conversation_enabled=self._read_checkbox(
+                "#audio-voice-conversation",
+                self._state.voice_conversation_enabled,
+            ),
+            speak_ambient_enabled=self._read_checkbox(
+                "#audio-speak-ambient",
+                self._state.speak_ambient_enabled,
+            ),
         )
+
+    def _read_checkbox(self, selector: str, fallback: bool) -> bool:
+        try:
+            return bool(self.query_one(selector, Checkbox).value)
+        except Exception:
+            return fallback
 
     # ------------------------------------------------------------------
     # Server / Model picker — internal state + render helpers

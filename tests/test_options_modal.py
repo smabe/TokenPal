@@ -79,6 +79,32 @@ def test_result_carries_switch_server_to() -> None:
     assert r.navigate_to is None
 
 
+def test_audio_toggles_default_off() -> None:
+    s = OptionsModalState(max_persisted=200, persist_enabled=True)
+    r = OptionsModalResult(max_persisted=42)
+    assert s.voice_conversation_enabled is False
+    assert s.speak_ambient_enabled is False
+    assert r.voice_conversation_enabled is False
+    assert r.speak_ambient_enabled is False
+
+
+def test_audio_toggles_round_trip() -> None:
+    s = OptionsModalState(
+        max_persisted=200,
+        persist_enabled=True,
+        voice_conversation_enabled=True,
+        speak_ambient_enabled=False,
+    )
+    r = OptionsModalResult(
+        max_persisted=42,
+        voice_conversation_enabled=True,
+        speak_ambient_enabled=True,
+    )
+    assert s.voice_conversation_enabled is True
+    assert r.voice_conversation_enabled is True
+    assert r.speak_ambient_enabled is True
+
+
 def test_result_defaults_switch_server_to_none() -> None:
     r = OptionsModalResult(max_persisted=42)
     assert r.switch_server_to is None
