@@ -230,11 +230,8 @@ class BuddyWindow(QWidget):
         # pivot_art coords may no longer land on a visible pixel.
         self._measure_cells()
         self._pivot_art = (self._art_w / 2.0, 0.0)
-        self._recompute_geometry()
         self._sim.set_length(self._pendulum_length(self._pivot_art))
-        self._move_to_pivot()
-        self._update_click_mask()
-        self.update()
+        self._refresh_view()
 
     # --- Geometry --------------------------------------------------------
 
@@ -492,6 +489,18 @@ class BuddyWindow(QWidget):
         """
         self.setMask(QRegion(self.rect()))
 
+    def _refresh_view(self) -> None:
+        """Resize the widget to the rotated-art AABB, snap the pivot
+        into place, refresh the click-through mask to the new rect,
+        and request a repaint. Bundled because all three steps must
+        run together: skipping the mask after a resize clips the
+        buddy; skipping ``_move_to_pivot`` leaves him offset.
+        """
+        self._recompute_geometry()
+        self._move_to_pivot()
+        self._update_click_mask()
+        self.update()
+
     # --- Tick / timer ---------------------------------------------------
 
     def _on_tick(self) -> None:
@@ -502,11 +511,7 @@ class BuddyWindow(QWidget):
             self._sim.tick(min(dt, 1.0 / 30.0))  # clamp dt to survive stalls
         # Rigid drag: θ was zeroed at drag start and snap_pivot keeps
         # the sim's velocity state quiescent — nothing to tick.
-        self._recompute_geometry()
-        self._move_to_pivot()
-        self._update_click_mask()
-        # Rotation changed → repaint even if the widget didn't move.
-        self.update()
+        self._refresh_view()
         if _PHYSICS_DEBUG:
             self._debug_tick_counter += 1
             if self._debug_tick_counter % _PHYSICS_DEBUG_LOG_EVERY == 0:
@@ -611,18 +616,20 @@ class BuddyWindow(QWidget):
         theta_visual = self._sim.theta + old_angle_offset
 
         self._pivot_art = new_pivot_art
-        self._recompute_geometry()
         new_angle_offset = self._angle_of_com_offset()
         new_theta = theta_visual - new_angle_offset
         new_theta = (new_theta + math.pi) % (2 * math.pi) - math.pi
         if math.pi - abs(new_theta) < _UNSTABLE_EPS:
             new_theta = math.copysign(math.pi - _UNSTABLE_EPS, new_theta)
 
+        # Reset the sim BEFORE _refresh_view: _recompute_geometry reads
+        # sim.theta, and using stale theta sizes the widget for a pose
+        # that's never painted — the next tick then resizes to the
+        # correct AABB, producing a visible flicker on grab.
         self._sim.reset_angle(theta=new_theta, theta_dot=self._sim.theta_dot)
         self._sim.set_length(self._pendulum_length(self._pivot_art))
         self._sim.snap_pivot(new_pivot_world[0], new_pivot_world[1])
-        self._move_to_pivot()
-        self.update()
+        self._refresh_view()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if not self._drag_active:
