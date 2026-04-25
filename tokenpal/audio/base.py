@@ -56,3 +56,35 @@ class TTSBackend(ABC):
 
     async def aclose(self) -> None:
         """Release model RAM on toggle-off."""
+
+
+@dataclass(frozen=True)
+class WakeEvent:
+    # Which wakeword fired (e.g. "hey_jarvis", "hey_tokenpal") and its
+    # confidence score. The session FSM uses this to switch from idle to
+    # listening; downstream code generally only needs the score >= threshold
+    # decision the backend has already made.
+    model_name: str
+    score: float
+
+
+class WakeWordBackend(ABC):
+    # 16kHz int16 mono — the de-facto wake-word audio format. openWakeWord
+    # requires multiples of 80ms; 1280 samples = 80ms @ 16kHz is the
+    # minimum-latency choice. Backends with different needs (Porcupine etc.)
+    # override these.
+    sample_rate: ClassVar[int] = 16000
+    chunk_samples: ClassVar[int] = 1280
+
+    @abstractmethod
+    def detect(self, frame: bytes) -> WakeEvent | None:
+        """Run one wake-word inference pass on a single PCM frame.
+
+        ``frame`` is ``chunk_samples`` int16 mono samples (so
+        ``len(frame) == chunk_samples * 2``). Returns a WakeEvent when the
+        score crosses the configured threshold, else None.
+        """
+
+    async def warmup(self) -> None: ...
+
+    async def aclose(self) -> None: ...

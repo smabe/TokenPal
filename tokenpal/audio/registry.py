@@ -15,13 +15,15 @@ import pkgutil
 from collections.abc import Callable
 from typing import TypeVar
 
-from tokenpal.audio.base import TTSBackend
+from tokenpal.audio.base import TTSBackend, WakeWordBackend
 
 log = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=type[TTSBackend])
+_W = TypeVar("_W", bound=type[WakeWordBackend])
 
 _TTS_BACKENDS: dict[str, type[TTSBackend]] = {}
+_WAKE_BACKENDS: dict[str, type[WakeWordBackend]] = {}
 
 
 def register_tts_backend(name: str) -> Callable[[_T], _T]:
@@ -29,6 +31,15 @@ def register_tts_backend(name: str) -> Callable[[_T], _T]:
         if name in _TTS_BACKENDS:
             log.debug("re-registering TTS backend %r", name)
         _TTS_BACKENDS[name] = cls
+        return cls
+    return decorator
+
+
+def register_wakeword_backend(name: str) -> Callable[[_W], _W]:
+    def decorator(cls: _W) -> _W:
+        if name in _WAKE_BACKENDS:
+            log.debug("re-registering wakeword backend %r", name)
+        _WAKE_BACKENDS[name] = cls
         return cls
     return decorator
 
@@ -41,8 +52,21 @@ def get_tts_backend(name: str) -> type[TTSBackend]:
     return _TTS_BACKENDS[name]
 
 
+def get_wakeword_backend(name: str) -> type[WakeWordBackend]:
+    if name not in _WAKE_BACKENDS:
+        raise KeyError(
+            f"unknown wakeword backend {name!r} — "
+            f"registered: {sorted(_WAKE_BACKENDS)}",
+        )
+    return _WAKE_BACKENDS[name]
+
+
 def registered_tts_backends() -> tuple[str, ...]:
     return tuple(sorted(_TTS_BACKENDS))
+
+
+def registered_wakeword_backends() -> tuple[str, ...]:
+    return tuple(sorted(_WAKE_BACKENDS))
 
 
 def discover_backends(*, include_input: bool = False) -> None:
