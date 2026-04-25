@@ -2436,8 +2436,7 @@ def _handle_voice_io_command(
     ``install`` runs pip on the [audio] extra in the active venv.
     Writes go through audio_writer and update config.audio in place.
     """
-    from tokenpal.audio.deps import format_warning
-    from tokenpal.audio.deps import install as install_audio_deps
+    from tokenpal.audio.deps import format_warning, install_all
     from tokenpal.config.audio_writer import (
         set_speak_ambient_enabled,
         set_voice_conversation_enabled,
@@ -2458,7 +2457,8 @@ def _handle_voice_io_command(
         return CommandResult(_state_line())
 
     if subcmd == "install":
-        result = install_audio_deps()
+        data_dir = Path(config.paths.data_dir).expanduser().resolve()
+        result = install_all(data_dir, config.audio.kokoro_quantization)
         return CommandResult(f"voice-io install: {result.message}")
 
     if subcmd in ("test", "say"):

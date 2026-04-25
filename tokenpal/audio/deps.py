@@ -8,6 +8,10 @@ ImportError on first real use rather than at the top of any module —
 keeps the modularity test (ambient-only never loads sounddevice) honest.
 The installer shells out to ``pip`` in the same interpreter so editable
 installs and the venv launcher both work without extra glue.
+
+Model files (the .onnx weights + voices.bin) are not pip-shipped — they
+live on GitHub releases and land in ``<data_dir>/audio/``. ``install_models``
+fetches them so /voice-io install is a single end-to-end action.
 """
 
 from __future__ import annotations
@@ -16,7 +20,10 @@ import importlib.util
 import logging
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 log = logging.getLogger(__name__)
@@ -118,4 +125,101 @@ def install(timeout_s: float = 600.0) -> InstallResult:
     return InstallResult(
         ok=True,
         message=f"installed: {', '.join(missing)}. Restart to activate.",
+    )
+
+
+# GitHub releases tag for the Kokoro model files. Pinned so dropping
+# kokoro-onnx in the future doesn't move the URL out from under us.
+_KOKORO_RELEASE_BASE: Final[str] = (
+    "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+)
+
+
+def _kokoro_filenames(quantization: str) -> tuple[str, str]:
+    """Resolve (model_filename, voices_filename) for a quantization variant.
+
+    Imported lazily to avoid pulling the kokoro backend module at deps
+    import time — keeps deps.py callable in tests that haven't built the
+    backends package yet.
+    """
+    from tokenpal.audio.backends.kokoro import MODEL_FILENAMES, VOICES_FILENAME
+    if quantization not in MODEL_FILENAMES:
+        raise ValueError(
+            f"unknown quantization {quantization!r} — pick from "
+            f"{sorted(MODEL_FILENAMES)}",
+        )
+    return MODEL_FILENAMES[quantization], VOICES_FILENAME
+
+
+def missing_models(data_dir: Path, quantization: str = "fp16") -> tuple[Path, ...]:
+    audio_dir = data_dir / "audio"
+    model_name, voices_name = _kokoro_filenames(quantization)
+    return tuple(
+        audio_dir / name
+        for name in (model_name, voices_name)
+        if not (audio_dir / name).exists()
+    )
+
+
+def _download(url: str, dest: Path, timeout_s: float) -> None:
+    """Stream ``url`` to ``dest`` atomically.
+
+    Writes to ``dest.tmp`` first and renames on success so a Ctrl+C mid-flight
+    leaves no half-file the warmup() check would otherwise treat as present.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    with urllib.request.urlopen(url, timeout=timeout_s) as r, tmp.open("wb") as f:
+        # 1MB chunks — small enough that Ctrl+C interrupts reasonably fast.
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+    tmp.replace(dest)
+
+
+def install_models(
+    data_dir: Path,
+    quantization: str = "fp16",
+    timeout_s: float = 600.0,
+) -> InstallResult:
+    """Fetch missing Kokoro model files into ``<data_dir>/audio/``."""
+    missing = missing_models(data_dir, quantization)
+    if not missing:
+        return InstallResult(ok=True, message="audio models already present.")
+
+    fetched: list[str] = []
+    for path in missing:
+        url = f"{_KOKORO_RELEASE_BASE}/{path.name}"
+        log.info("Fetching %s -> %s", url, path)
+        try:
+            _download(url, path, timeout_s)
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            return InstallResult(
+                ok=False,
+                message=f"download {path.name} failed: {e}",
+            )
+        except KeyboardInterrupt:
+            return InstallResult(ok=False, message="model download cancelled.")
+        fetched.append(path.name)
+    return InstallResult(
+        ok=True,
+        message=f"downloaded: {', '.join(fetched)} ({quantization}).",
+    )
+
+
+def install_all(
+    data_dir: Path,
+    quantization: str = "fp16",
+    timeout_s: float = 600.0,
+) -> InstallResult:
+    """Run wheels then models. Stops at the first failure so the message
+    points at the actual blocker instead of a downstream ImportError."""
+    deps_result = install(timeout_s=timeout_s)
+    if not deps_result.ok:
+        return deps_result
+    models_result = install_models(data_dir, quantization, timeout_s=timeout_s)
+    if not models_result.ok:
+        return models_result
+    return InstallResult(
+        ok=True,
+        message=f"{deps_result.message} {models_result.message}".strip(),
     )
