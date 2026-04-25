@@ -21,23 +21,35 @@ from typing import Final
 
 log = logging.getLogger(__name__)
 
-# Maps a pip distribution name to the import name used to detect presence.
-# kokoro-onnx exposes the ``kokoro_onnx`` module; sounddevice keeps the
-# same name. onnxruntime + numpy come transitively from kokoro-onnx so we
-# don't double-list them.
-AUDIO_DEPS: Final[tuple[tuple[str, str], ...]] = (
-    ("kokoro-onnx", "kokoro_onnx"),
-    ("sounddevice", "sounddevice"),
-)
+# Maps each pip distribution name to the import name used to detect
+# presence. Phase 3 will add e.g. ``faster-whisper`` → ``faster_whisper``,
+# and pip→import is not a hyphen-replace rule in general (Pillow→PIL,
+# python-dateutil→dateutil), so the mapping is explicit. onnxruntime +
+# numpy come transitively from kokoro-onnx so we don't double-list them.
+AUDIO_DEPS: Final[dict[str, str]] = {
+    "kokoro-onnx": "kokoro_onnx",
+    "sounddevice": "sounddevice",
+}
 
 
 def missing_deps() -> tuple[str, ...]:
     """Return the pip names of audio deps that aren't importable."""
     return tuple(
         pip_name
-        for pip_name, import_name in AUDIO_DEPS
+        for pip_name, import_name in AUDIO_DEPS.items()
         if importlib.util.find_spec(import_name) is None
     )
+
+
+def format_warning(*, prefix: str = "missing deps") -> str | None:
+    """Build a user-visible warning string when deps are missing, else None.
+
+    Single source of truth for the modal save handler and /voice-io.
+    """
+    missing = missing_deps()
+    if not missing:
+        return None
+    return f"{prefix}: {', '.join(missing)} — run /voice-io install"
 
 
 @dataclass(frozen=True)
@@ -58,7 +70,14 @@ def install(timeout_s: float = 600.0) -> InstallResult:
     if not missing:
         return InstallResult(ok=True, message="audio deps already installed.")
 
-    cmd = [sys.executable, "-m", "pip", "install", *missing]
+    # --progress-bar off + -q drop pip's spinner / per-line download
+    # progress. Without these, capture_output buffers ~5-20MB of text on a
+    # slow connection (kokoro-onnx pulls onnxruntime ~200MB).
+    cmd = [
+        sys.executable, "-m", "pip", "install",
+        "--progress-bar", "off", "-q",
+        *missing,
+    ]
     log.info("Installing audio deps: %s", " ".join(missing))
     try:
         proc = subprocess.run(
@@ -73,6 +92,8 @@ def install(timeout_s: float = 600.0) -> InstallResult:
             ok=False,
             message=f"pip install timed out after {timeout_s:.0f}s.",
         )
+    except KeyboardInterrupt:
+        return InstallResult(ok=False, message="pip install cancelled.")
     except OSError as e:
         return InstallResult(ok=False, message=f"pip install failed: {e}")
 

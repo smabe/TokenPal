@@ -876,7 +876,7 @@ def main() -> None:
                 overlay.clear_log()
                 overlay.log_buddy_message("/options: chat history cleared.")
 
-            from tokenpal.audio.deps import missing_deps
+            from tokenpal.audio.deps import format_warning
             from tokenpal.config.audio_writer import (
                 set_speak_ambient_enabled,
                 set_voice_conversation_enabled,
@@ -911,12 +911,9 @@ def main() -> None:
                         f"/options: could not write config: {e}"
                     )
             if audio_changed_to_on:
-                missing = missing_deps()
-                if missing:
-                    overlay.log_buddy_message(
-                        f"/options: audio deps missing ({', '.join(missing)}). "
-                        f"Run /voice-io install to fetch them."
-                    )
+                warning = format_warning(prefix="audio deps missing")
+                if warning:
+                    overlay.log_buddy_message(f"/options: {warning}.")
 
         return overlay.open_options_modal(
             state, on_save, on_open_subdialog=on_open_subdialog,
@@ -2439,8 +2436,8 @@ def _handle_voice_io_command(
     ``install`` runs pip on the [audio] extra in the active venv.
     Writes go through audio_writer and update config.audio in place.
     """
+    from tokenpal.audio.deps import format_warning
     from tokenpal.audio.deps import install as install_audio_deps
-    from tokenpal.audio.deps import missing_deps
     from tokenpal.config.audio_writer import (
         set_speak_ambient_enabled,
         set_voice_conversation_enabled,
@@ -2453,12 +2450,9 @@ def _handle_voice_io_command(
     def _state_line() -> str:
         v = "on" if config.audio.voice_conversation_enabled else "off"
         a = "on" if config.audio.speak_ambient_enabled else "off"
-        missing = missing_deps()
-        deps_note = (
-            "" if not missing
-            else f"  (missing deps: {', '.join(missing)} — run /voice-io install)"
-        )
-        return f"voice-io: voice {v}, ambient {a}.{deps_note}"
+        warning = format_warning()
+        suffix = f"  ({warning})" if warning else ""
+        return f"voice-io: voice {v}, ambient {a}.{suffix}"
 
     if subcmd == "":
         return CommandResult(_state_line())
@@ -2485,12 +2479,9 @@ def _handle_voice_io_command(
         setattr(config.audio, field_name, value)
         msg = f"voice-io: {label} {'on' if value else 'off'}."
         if value:
-            missing = missing_deps()
-            if missing:
-                msg += (
-                    f"  (missing deps: {', '.join(missing)} — "
-                    f"run /voice-io install)"
-                )
+            warning = format_warning()
+            if warning:
+                msg += f"  ({warning})"
         return CommandResult(msg)
 
     if subcmd in ("on", "off"):

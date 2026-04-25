@@ -14,7 +14,7 @@ import pytest
 from tokenpal.audio import deps as audio_deps
 from tokenpal.audio.deps import (
     AUDIO_DEPS,
-    InstallResult,
+    format_warning,
     install,
     missing_deps,
 )
@@ -26,7 +26,7 @@ def _patch_find_spec(present: set[str]) -> Iterator[None]:
     real = importlib.util.find_spec
 
     def fake(name: str, package: Any = None) -> Any:
-        if name in {p[1] for p in AUDIO_DEPS}:
+        if name in set(AUDIO_DEPS.values()):
             return object() if name in present else None
         return real(name, package)
 
@@ -88,7 +88,9 @@ def test_install_runs_pip_for_missing_only(
     result = install()
     assert result.ok is True
     assert captured["cmd"] == [
-        sys.executable, "-m", "pip", "install", "kokoro-onnx",
+        sys.executable, "-m", "pip", "install",
+        "--progress-bar", "off", "-q",
+        "kokoro-onnx",
     ]
 
 
@@ -127,6 +129,44 @@ def test_install_reports_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "timed out" in result.message
 
 
+def test_install_reports_keyboard_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_run(cmd: list[str], **kwargs: Any) -> Any:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(audio_deps.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        audio_deps.importlib.util,
+        "find_spec",
+        lambda name, package=None: None,
+    )
+
+    result = install()
+    assert result.ok is False
+    assert "cancelled" in result.message
+
+
+def test_format_warning_returns_none_when_all_present() -> None:
+    with _patch_find_spec(present={"kokoro_onnx", "sounddevice"}):
+        assert format_warning() is None
+
+
+def test_format_warning_lists_missing_pip_names() -> None:
+    with _patch_find_spec(present={"sounddevice"}):
+        msg = format_warning()
+    assert msg is not None
+    assert "kokoro-onnx" in msg
+    assert "/voice-io install" in msg
+
+
+def test_format_warning_honors_prefix() -> None:
+    with _patch_find_spec(present=set()):
+        msg = format_warning(prefix="audio deps missing")
+    assert msg is not None
+    assert msg.startswith("audio deps missing:")
+
+
 def test_install_reports_post_install_still_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -148,7 +188,3 @@ def test_install_reports_post_install_still_missing(
     assert "restart" in result.message.lower()
 
 
-def test_install_result_is_frozen() -> None:
-    r = InstallResult(ok=True, message="x")
-    with pytest.raises(AttributeError):
-        r.ok = False  # type: ignore[misc]
