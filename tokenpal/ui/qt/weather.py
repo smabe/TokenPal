@@ -607,7 +607,7 @@ class WeatherSim:
                 kept.extend(self._spawn_splash(p.x, p.y))
                 continue
             if p.kind == "snow" and buddy is not None and self._hits_buddy(p, buddy):
-                kept.append(self._make_snow_dust(p.x, buddy.top()))
+                kept.append(self._make_snow_dust(p.x, p.y))
                 continue
 
             # Off-screen cull: drops that exit below the buddy zone or
@@ -647,10 +647,10 @@ class WeatherSim:
             ))
         return out
 
-    def _make_snow_dust(self, x: float, top_y: float) -> WeatherParticle:
+    def _make_snow_dust(self, x: float, y: float) -> WeatherParticle:
         return WeatherParticle(
             kind="snow_dust",
-            x=x, y=top_y - self.cell_px * 0.3,
+            x=x, y=y,
             vx=0.0, vy=0.0,
             life=_SNOW_DUST_LIFE_S,
             glyph="·",

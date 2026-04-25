@@ -423,6 +423,27 @@ class BuddyWindow(QWidget):
         (plan: pin the buddy-contact math to art-frame, not world OBB)."""
         return QRect(0, 0, self._art_w, self._art_h)
 
+    def is_painted_cell_at(self, ax: float, ay: float) -> bool:
+        """Hit-test an art-frame point against the actually-painted
+        glyphs (not just the AABB). Mirrors ``paintEvent``'s per-line
+        horizontal centering so weather flakes only collide with cells
+        that have a non-space glyph — drops can fall through gaps
+        between the antennae or beside a narrow body line."""
+        if ay < 0.0 or ax < 0.0:
+            return False
+        row = int(ay // self._line_h)
+        if row < 0 or row >= len(self._frame_lines):
+            return False
+        text = stripped_text(self._frame_lines[row])
+        chars = len(text)
+        if chars == 0:
+            return False
+        base_x = (self._art_w - chars * self._cell_w) // 2
+        col = int((ax - base_x) // self._cell_w)
+        if col < 0 or col >= chars:
+            return False
+        return text[col] != " "
+
     def is_dragging(self) -> bool:
         return self._drag_active
 

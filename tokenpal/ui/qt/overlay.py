@@ -839,19 +839,16 @@ class QtOverlay(AbstractOverlay):
         return QRectF(r)
 
     def _buddy_art_hit_for_sim(self, world_point: QPointF) -> bool:
-        """Tight art-frame AABB hit-test. The sim already passed the
-        coarse world-rect filter; here we invert the buddy's paint
-        transform and check the tight untransformed art rect."""
+        """Per-cell art hit-test. The sim already passed the coarse
+        world-rect filter; here we invert the buddy's paint transform
+        and check whether the point lands on an actually-painted glyph
+        (not just the AABB) so drops fall through gaps in the art."""
         if self._buddy is None:
             return False
         art_point = self._buddy.world_to_art(world_point)
         if art_point is None:
             return False
-        bounds = self._buddy.art_bounds()
-        return (
-            0.0 <= art_point.x() <= bounds.width()
-            and 0.0 <= art_point.y() <= bounds.height()
-        )
+        return self._buddy.is_painted_cell_at(art_point.x(), art_point.y())
 
     def _reanchor_weather(self) -> None:
         """Slot for ``BuddyWindow.position_changed``. Re-anchor is O(1)
