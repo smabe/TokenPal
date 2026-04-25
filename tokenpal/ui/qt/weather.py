@@ -277,6 +277,7 @@ class WeatherSim:
         buddy_rect_provider: Callable[[], QRectF | None] = lambda: None,
         buddy_art_hit: Callable[[QPointF], bool] | None = None,
         cell_px: float = 10.0,
+        line_px: float | None = None,
         rng: random.Random | None = None,
         now_hour: Callable[[], int] | None = None,
     ) -> None:
@@ -289,6 +290,7 @@ class WeatherSim:
         # ``BuddyWindow._build_transform()`` + ``art_bounds()``.
         self.buddy_art_hit = buddy_art_hit
         self.cell_px = max(cell_px, 1.0)
+        self.line_px = max(line_px if line_px is not None else cell_px, 1.0)
         self.rng = rng or random.Random()
         self._now_hour = now_hour  # test hook; None → derive from datetime
 
@@ -315,8 +317,10 @@ class WeatherSim:
         # prop selection. None before first tick.
         self.env: EnvState | None = None
 
-    def set_cell_px(self, cell_px: float) -> None:
+    def set_cell_px(self, cell_px: float, line_px: float | None = None) -> None:
         self.cell_px = max(cell_px, 1.0)
+        if line_px is not None:
+            self.line_px = max(line_px, 1.0)
 
     # --- Public tick --------------------------------------------------
 
@@ -500,7 +504,7 @@ class WeatherSim:
         drift = self.cloud_drift.offset_x(_OVERCAST_DRIFT_AMP, 0.0) * self.cell_px
         cx = sky.center().x() + drift
         x = cx + self.rng.uniform(-cloud_px_w / 2.0, cloud_px_w / 2.0)
-        y = sky.top() + len(RAIN_CLOUD_LINES) * self.cell_px
+        y = sky.top() + self.line_px * (1.0 + len(RAIN_CLOUD_LINES) * _RAIN_CLOUD_SCALE)
         vy_cells = self.rng.uniform(
             _RAIN_VY_MIN + 4.0 * intensity,
             _RAIN_VY_BASE + _RAIN_VY_SPREAD * intensity,
@@ -531,7 +535,7 @@ class WeatherSim:
         drift = self.cloud_drift.offset_x(_OVERCAST_DRIFT_AMP, 0.0) * self.cell_px
         cx = sky.center().x() + drift
         x = cx + self.rng.uniform(-cloud_px_w / 2.0, cloud_px_w / 2.0)
-        y = sky.top() + len(RAIN_CLOUD_LINES) * self.cell_px
+        y = sky.top() + self.line_px * (1.0 + len(RAIN_CLOUD_LINES) * _RAIN_CLOUD_SCALE)
         vy = self.rng.uniform(_SNOW_VY_MIN, _SNOW_VY_MAX) * self.cell_px
         phase = self.rng.uniform(0.0, 2.0 * math.pi)
         self.particles.append(WeatherParticle(
@@ -742,7 +746,7 @@ class SkyWindow(QWidget):
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._cell_w = max(self._measure_cell_w(), 1)
         self._line_h = self.fontMetrics().ascent()
-        self._sim.set_cell_px(float(self._cell_w))
+        self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
 
         _apply_transparent_window_flags(self)
         self.resize(_SKY_W_PX, _SKY_H_PX)
