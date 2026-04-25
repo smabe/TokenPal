@@ -173,6 +173,12 @@ def run_until_settled(
 DEFAULT_CONFIG = PhysicsConfig()
 
 
+# Per-tick velocity-constraint iterations for the grab solver. Box2D's
+# `b2World::Step` default; load-bearing for holding the body against
+# gravity (one sweep can't overcome any persistent external force).
+_GRAB_VELOCITY_ITERATIONS = 8
+
+
 # ---------------------------------------------------------------------------
 # RigidBodySimulator — mouse-joint style 2D rigid body.
 # Drives the dangleable Qt buddy. One body, one soft constraint.
@@ -190,10 +196,28 @@ class RigidBodyConfig:
     # Stiff + critically damped: cursor IS the user's intent.
     grab_frequency_hz: float = 8.0
     grab_damping_ratio: float = 1.0
-    # Soft spring on COM + θ pulling toward (home_x, home_y, 0).
-    # Slow + critically damped: gentle return after release.
-    home_frequency_hz: float = 2.0
-    home_damping_ratio: float = 1.0
+    # Angular home spring: returns θ → 0 (upright) when not grabbed.
+    # Linear has NO home spring — body slides under inertia after a
+    # toss, decelerated only by ``drag_damping_*``, and settles
+    # wherever momentum runs out. ``home_damping_ratio`` is sized
+    # so ``c_home + c_drag`` adds up to roughly critical for angular
+    # motion post-release (drag ≈ 0.3 ζ + home ≈ 0.7 ζ ≈ 1.0).
+    home_frequency_hz: float = 3.0
+    home_damping_ratio: float = 0.7
+    # Always-on damping (active during grab too). Damping only — no
+    # spring. The underlying coefficient is ``c = 2·m·ζ·ω_n`` (linear)
+    # or ``c = 2·I·ζ·ω_n`` (angular). Linear and angular are split:
+    #
+    # - Linear: this is what decelerates a post-toss slide. Lower =
+    #   longer slide. At 0.4 Hz, ζ=1, τ ≈ 0.4 s, so v=2000 px/s
+    #   slides ~ 800 px before stopping.
+    # - Angular: bleeds ω during sustained cursor twirls and tames
+    #   the pendulum-while-held. Higher than linear by design — we
+    #   want a long linear slide but a settled, mostly-critically-
+    #   damped pendulum dangle.
+    linear_drag_frequency_hz: float = 0.4
+    angular_drag_frequency_hz: float = 1.0
+    drag_damping_ratio: float = 1.0
     # Body inertia. `inertia` is the scalar moment of inertia I; for a
     # uniform disk of radius R, I = m·R²/2. We treat the buddy art as
     # such a disk; the off-COM grab dynamics emerge from the Jacobian
@@ -201,9 +225,19 @@ class RigidBodyConfig:
     mass: float = 1.0
     inertia: float = 4000.0
     # Velocity caps so a hard fling can't slingshot off-screen / spin
-    # faster than the integrator stays stable.
+    # faster than the integrator stays stable. Angular cap is set
+    # below the post-release recovery's "easy" decay range so a
+    # vigorous twirl doesn't take a perceptible "still spinning"
+    # tail to settle (15 rad/s ≈ 2.4 revolutions/sec).
     max_linear_speed: float = 4000.0
-    max_angular_speed: float = 40.0
+    max_angular_speed: float = 15.0
+    # Downward gravitational acceleration (px/s²), active ONLY during
+    # a grab. Gives real-pendulum dangle: with the constraint pinning
+    # the grab anchor to the cursor, gravity pulls COM to "below the
+    # cursor" and the body rotates until COM hangs directly below the
+    # grab point. Disabled when not grabbed so the body doesn't sag
+    # below ``home`` after release.
+    gravity: float = 6000.0
     # Settle thresholds — applied only when not grabbed.
     settle_speed: float = 1.0       # px/s
     settle_omega: float = 0.05      # rad/s
@@ -250,11 +284,11 @@ class RigidBodySimulator:
         self._omega = 0.0
         # Grab state. ``_grab_local`` is the grab point in body-frame
         # coords (relative to COM); ``_grab_target`` is the cursor in
-        # world coords. ``_grab_impulse_acc`` warm-starts the constraint
-        # solver across ticks (Catto-style).
+        # world coords. Constraint impulse is reset per-tick inside
+        # the solver (no cross-tick warm-start) so γ·P_acc can't grow
+        # unbounded under sustained gravity.
         self._grab_local: tuple[float, float] | None = None
         self._grab_target: tuple[float, float] | None = None
-        self._grab_impulse_acc: tuple[float, float] = (0.0, 0.0)
         self._settled_ticks = 0
         self._sleeping = True
 
@@ -307,7 +341,6 @@ class RigidBodySimulator:
         self._x, self._y = x, y
         self._theta = 0.0
         self._vx = self._vy = self._omega = 0.0
-        self._grab_impulse_acc = (0.0, 0.0)
         self._settled_ticks = 0
         self._sleeping = True
 
@@ -324,7 +357,6 @@ class RigidBodySimulator:
         coords of the pixel under the cursor."""
         self._grab_local = (local_x, local_y)
         self._grab_target = (target_x, target_y)
-        self._grab_impulse_acc = (0.0, 0.0)
         self._wake()
 
     def set_grab_target(self, x: float, y: float) -> None:
@@ -335,12 +367,17 @@ class RigidBodySimulator:
 
     def end_grab(self) -> None:
         """Release. Body coasts with its current ``(v, ω)`` — the home
-        spring will pull it back. No fling impulse is injected; the
-        constraint already integrated cursor velocity into the body's
-        state every tick during the drag."""
+        spring catches any residual motion. No fling impulse is
+        injected; the constraint already integrated cursor velocity
+        into the body's state every tick during the drag.
+
+        Home is snapped to the current body position so the buddy
+        stays where he was dropped — without this the buddy springs
+        back to spawn on every release, which feels broken. Edge-dock
+        can still re-aim home at a screen edge afterward."""
         self._grab_local = None
         self._grab_target = None
-        self._grab_impulse_acc = (0.0, 0.0)
+        self._home = (self._x, self._y)
         self._wake()
 
     def apply_impulse(
@@ -368,27 +405,44 @@ class RigidBodySimulator:
         m = cfg.mass
         inertia = cfg.inertia
 
-        # Home spring: soft spring-damper on (x, y) toward home and
-        # rotational spring on θ toward 0. Applied as direct
-        # acceleration in semi-implicit Euler.
-        omega_h = 2.0 * math.pi * cfg.home_frequency_hz
-        k_lin = m * omega_h * omega_h
-        c_lin = 2.0 * m * cfg.home_damping_ratio * omega_h
-        k_rot = inertia * omega_h * omega_h
-        c_rot = 2.0 * inertia * cfg.home_damping_ratio * omega_h
-        hx, hy = self._home
-        ax = (-k_lin * (self._x - hx) - c_lin * self._vx) / m
-        ay = (-k_lin * (self._y - hy) - c_lin * self._vy) / m
-        alpha = (-k_rot * self._theta - c_rot * self._omega) / inertia
+        # Always-on damping (linear + angular, decoupled). Active
+        # during both grab and free fall. Linear is loose so post-
+        # toss inertia visibly slides; angular is tighter so the
+        # pendulum-while-held feels settled and a vigorous twirl
+        # bleeds off cleanly.
+        omega_d_lin = 2.0 * math.pi * cfg.linear_drag_frequency_hz
+        omega_d_rot = 2.0 * math.pi * cfg.angular_drag_frequency_hz
+        c_lin_drag = 2.0 * m * cfg.drag_damping_ratio * omega_d_lin
+        c_rot_drag = 2.0 * inertia * cfg.drag_damping_ratio * omega_d_rot
+        self._vx -= (c_lin_drag * self._vx / m) * dt
+        self._vy -= (c_lin_drag * self._vy / m) * dt
+        self._omega -= (c_rot_drag * self._omega / inertia) * dt
 
-        # Velocity update (semi-implicit).
-        self._vx += ax * dt
-        self._vy += ay * dt
-        self._omega += alpha * dt
+        # Gravity is only active during a grab — that's what gives the
+        # real-pendulum dangle (COM hangs below the grab point under
+        # the constraint pin). When not grabbed, the home spring
+        # owns position, and gravity would just sag the body below
+        # home with no benefit.
+        if self._grab_local is not None:
+            self._vy += cfg.gravity * dt
 
-        # Grab constraint, if active. Solved once per tick with γ
-        # regularization on the diagonal of K and warm-started via
-        # ``_grab_impulse_acc`` across ticks.
+        # Angular home spring: returns θ → 0 (upright) when not
+        # grabbed. NO linear home spring — body slides under inertia
+        # after release and settles wherever the always-on linear
+        # damping catches it (gives the "toss → slight slide" feel
+        # of a real object on a table). Mouse joints in real engines
+        # never have a competing return-to-origin force during a
+        # hold either, so this is gated on grab regardless.
+        if self._grab_local is None:
+            omega_h = 2.0 * math.pi * cfg.home_frequency_hz
+            k_rot = inertia * omega_h * omega_h
+            c_rot = 2.0 * inertia * cfg.home_damping_ratio * omega_h
+            alpha = (-k_rot * self._theta - c_rot * self._omega) / inertia
+            self._omega += alpha * dt
+
+        # Grab constraint, if active. Iterated to convergence inside
+        # the solver (Box2D-style, 8 sweeps) so the body holds against
+        # gravity and other persistent forces.
         if self._grab_local is not None and self._grab_target is not None:
             self._solve_grab_constraint(dt)
 
@@ -405,14 +459,21 @@ class RigidBodySimulator:
 
     # ----- internals -----
     def _solve_grab_constraint(self, dt: float) -> None:
-        """One Gauss-Seidel sweep of Catto's soft mouse-joint.
+        """Catto's soft mouse-joint, iterated to convergence.
 
         Computes effective mass ``K = J·M⁻¹·Jᵀ`` (2×2) at the world-
-        frame anchor offset ``r``, adds γ to the diagonal, solves for
-        the impulse ``P`` that drives anchor velocity to zero with bias
-        ``β·C`` (position correction) and warm-start ``γ·P_acc``, then
-        applies ``P`` to (v, ω). Off-COM rotation falls out of
+        frame anchor offset ``r``, adds γ to the diagonal, then runs
+        eight Gauss-Seidel sweeps that each compute a corrective
+        impulse ``P`` from the current ``(Cdot + β·C + γ·P_acc)`` and
+        accumulate it into ``P_acc``. Off-COM rotation falls out of
         ``ω += (r × P) / I`` automatically.
+
+        **Iteration count is load-bearing.** A single sweep can't
+        overcome a persistent external force like gravity — the soft
+        constraint is mathematically iterative. Box2D ships with 8
+        velocity iterations per `b2World::Step` for exactly this
+        reason; without iteration the body drifts under gravity by
+        ~3-4 px/tick. See research findings in plans/fling-me.md.
 
         Soft-constraint coefficients (Catto, Soft Constraints, GDC 2011)::
 
@@ -436,19 +497,17 @@ class RigidBodySimulator:
         gamma = 1.0 / denom
         beta = dt * k_eff * gamma
 
-        # World-frame offset COM → grab anchor.
+        # World-frame offset COM → grab anchor. Constant within the
+        # iteration loop — θ doesn't change until position update.
         rx, ry = self._world_offset(self._grab_local)
-        # Position error C and anchor velocity Cdot = v + ω × r.
+        # Position error C is also constant within the loop (position
+        # only updates after constraint solve). β·C is the Baumgarte
+        # bias driving the anchor back to the target over time.
         anchor_x = self._x + rx
         anchor_y = self._y + ry
         cx = anchor_x - self._grab_target[0]
         cy = anchor_y - self._grab_target[1]
-        v_anchor_x = self._vx - self._omega * ry
-        v_anchor_y = self._vy + self._omega * rx
-        # K_soft = K + γ·I, where
-        #   K[0][0] = 1/m + ry²/I
-        #   K[0][1] = K[1][0] = -rx·ry/I
-        #   K[1][1] = 1/m + rx²/I
+        # K_soft = K + γ·I, inverted once outside the loop.
         inv_m = 1.0 / m
         inv_inertia = 1.0 / inertia
         k11 = inv_m + ry * ry * inv_inertia + gamma
@@ -458,17 +517,33 @@ class RigidBodySimulator:
         if abs(det) < 1e-12:
             return
         inv_det = 1.0 / det
-        # P = -K_soft⁻¹ · (Cdot + β·C + γ·P_acc)
-        pacc_x, pacc_y = self._grab_impulse_acc
-        rhs_x = v_anchor_x + beta * cx + gamma * pacc_x
-        rhs_y = v_anchor_y + beta * cy + gamma * pacc_y
-        px = -(k22 * rhs_x - k12 * rhs_y) * inv_det
-        py = -(k11 * rhs_y - k12 * rhs_x) * inv_det
-        # Apply: v += P/m, ω += (r × P)/I.
-        self._vx += px * inv_m
-        self._vy += py * inv_m
-        self._omega += (rx * py - ry * px) * inv_inertia
-        self._grab_impulse_acc = (pacc_x + px, pacc_y + py)
+
+        # Impulse accumulator resets per tick. Box2D warm-starts
+        # across ticks but pairs that with a maxForce clamp to bound
+        # ``m_impulse``; without the clamp, γ·P_acc grows unbounded
+        # over many ticks under sustained external load (gravity)
+        # and the solver becomes unstable. Resetting per tick gives
+        # the same convergence behavior as ``b2World::Step`` with
+        # warm-starting disabled, which is what most tutorials
+        # default to.
+        pacc_x = 0.0
+        pacc_y = 0.0
+        for _ in range(_GRAB_VELOCITY_ITERATIONS):
+            # Cdot = v_anchor = v_COM + ω × r — recomputed each
+            # iteration so successive impulses see the corrected
+            # velocity from the previous sweep.
+            v_anchor_x = self._vx - self._omega * ry
+            v_anchor_y = self._vy + self._omega * rx
+            rhs_x = v_anchor_x + beta * cx + gamma * pacc_x
+            rhs_y = v_anchor_y + beta * cy + gamma * pacc_y
+            # P = -K_soft⁻¹ · rhs
+            px = -(k22 * rhs_x - k12 * rhs_y) * inv_det
+            py = -(k11 * rhs_y - k12 * rhs_x) * inv_det
+            self._vx += px * inv_m
+            self._vy += py * inv_m
+            self._omega += (rx * py - ry * px) * inv_inertia
+            pacc_x += px
+            pacc_y += py
 
     def _world_offset(self, local: tuple[float, float]) -> tuple[float, float]:
         cos_t = math.cos(self._theta)
@@ -504,18 +579,21 @@ class RigidBodySimulator:
             return
         cfg = self._cfg
         speed = math.hypot(self._vx, self._vy)
-        dist = math.hypot(self._x - self._home[0], self._y - self._home[1])
+        # No distance-from-home check — there's no linear home spring,
+        # so the body settles wherever its slide runs out. Settle on
+        # speed + angular state alone, then update ``home`` to the
+        # final resting position so edge-dock and external callers
+        # can still treat it as "where the buddy lives now."
         if (
             speed < cfg.settle_speed
             and abs(self._omega) < cfg.settle_omega
-            and dist < cfg.settle_distance
             and abs(self._theta) < cfg.settle_angle
         ):
             self._settled_ticks += 1
             if self._settled_ticks >= cfg.settle_ticks_required:
-                self._x, self._y = self._home
                 self._theta = 0.0
                 self._vx = self._vy = self._omega = 0.0
+                self._home = (self._x, self._y)
                 self._sleeping = True
         else:
             self._settled_ticks = 0

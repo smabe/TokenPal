@@ -282,17 +282,26 @@ def test_rigid_body_click_and_release_settles_quickly() -> None:
     assert ticks <= 120
 
 
-def test_rigid_body_home_spring_returns_displaced_body() -> None:
-    """Body displaced from home with no grab should return to home and
-    sleep within the home-spring settle time."""
+def test_rigid_body_post_impulse_settles_upright_in_place() -> None:
+    """A linear impulse should slide the body before it stops; angular
+    impulse should be caught by the rotational home spring so the body
+    finishes upright. There is no linear home spring, so the final
+    resting position will NOT be the original home — it'll be wherever
+    the slide ran out, and ``home`` updates to track."""
     sim = RigidBodySimulator(home=(100.0, 100.0))
-    # Push the body away.
-    sim.apply_impulse(px=200.0, py=-150.0)
+    sim.apply_impulse(px=200.0, py=-150.0, at_local=(20.0, 0.0))
     ticks = run_until_settled(sim, max_ticks=600)
     assert sim.sleeping
-    assert sim.position == (100.0, 100.0)
+    # Body slid before stopping — no spring to pull it back to (100, 100).
+    assert sim.position != (100.0, 100.0)
+    # Angular spring DOES bring θ back to upright.
     assert sim.theta == 0.0
-    # ζ=1 at f=2 Hz: settle time ~0.5 s = 30 ticks; allow 4× headroom.
+    # Home updates to current resting position so edge-dock + external
+    # callers see the final pose, not a stale launch point.
+    assert sim.home == sim.position
+    # Without a linear spring, settle is paced by drag damping alone;
+    # at default tuning (drag 1 Hz, ζ=1) the linear τ ≈ 0.16s, so even
+    # a hard whip settles in well under 4 s of budget.
     assert ticks < 240
 
 

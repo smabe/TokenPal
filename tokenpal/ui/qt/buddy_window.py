@@ -541,7 +541,13 @@ class BuddyWindow(QWidget):
         elif geom.bottom() - cy < _EDGE_DOCK_THRESHOLD:
             new_y = float(geom.bottom())
         if (new_x, new_y) != (cx, cy):
-            self._sim.set_home(new_x, new_y)
+            # Teleport-snap to the edge: the new model has no linear
+            # home spring, so ``set_home`` would just relocate the
+            # docking target without pulling the buddy there. Since
+            # edge-dock only fires when the user has clearly released
+            # near an edge, snapping is the intent — the buddy's
+            # residual slide momentum is acceptably forfeit.
+            self._sim.snap_home(new_x, new_y)
 
     # --- Render ----------------------------------------------------------
 
