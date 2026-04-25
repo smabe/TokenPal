@@ -324,3 +324,29 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 # search_depth = "advanced"   # "basic" = 1 credit/query, "advanced" = 2
 # max_results = 6
 # timeout_s = 15.0
+
+[audio]
+# Two independent opt-in toggles. Both default OFF — fresh installs match
+# existing behavior exactly. speak_ambient_enabled narrates random buddy
+# bubbles (output-only, no mic). voice_conversation_enabled adds wake-word
+# + ASR for "hey tokenpal" voice replies. Either toggle can be on alone.
+#
+# voice_conversation_enabled = false
+# speak_ambient_enabled = false
+#
+# Voice IDs are namespaced "<backend>:<voice>" so trained-voice backends
+# can register without colliding with Kokoro voice names.
+# tts_backend = "kokoro"
+# tts_voice = "kokoro:af_bella"
+#
+# int8 ~80MB / ~200MB resident — auto-selected on ≤8GB RAM by the
+# installer; fp16 is the quality default elsewhere.
+# kokoro_quantization = "fp16"
+#
+# wakeword_backend = "openwakeword"
+# wakeword_threshold = 0.7
+# trailing_window_s = 8.0    # hard close regardless of VAD state
+#
+# asr_backend = "local"      # "server" POSTs to the inference server
+# asr_server_url = ""
+# asr_model_size = "small.en"
