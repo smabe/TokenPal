@@ -15,15 +15,17 @@ import pkgutil
 from collections.abc import Callable
 from typing import TypeVar
 
-from tokenpal.audio.base import TTSBackend, WakeWordBackend
+from tokenpal.audio.base import ASRBackend, TTSBackend, WakeWordBackend
 
 log = logging.getLogger(__name__)
 
 _T = TypeVar("_T", bound=type[TTSBackend])
 _W = TypeVar("_W", bound=type[WakeWordBackend])
+_A = TypeVar("_A", bound=type[ASRBackend])
 
 _TTS_BACKENDS: dict[str, type[TTSBackend]] = {}
 _WAKE_BACKENDS: dict[str, type[WakeWordBackend]] = {}
+_ASR_BACKENDS: dict[str, type[ASRBackend]] = {}
 
 
 def register_tts_backend(name: str) -> Callable[[_T], _T]:
@@ -69,6 +71,27 @@ def registered_wakeword_backends() -> tuple[str, ...]:
     return tuple(sorted(_WAKE_BACKENDS))
 
 
+def register_asr_backend(name: str) -> Callable[[_A], _A]:
+    def decorator(cls: _A) -> _A:
+        if name in _ASR_BACKENDS:
+            log.debug("re-registering ASR backend %r", name)
+        _ASR_BACKENDS[name] = cls
+        return cls
+    return decorator
+
+
+def get_asr_backend(name: str) -> type[ASRBackend]:
+    if name not in _ASR_BACKENDS:
+        raise KeyError(
+            f"unknown ASR backend {name!r} — registered: {sorted(_ASR_BACKENDS)}",
+        )
+    return _ASR_BACKENDS[name]
+
+
+def registered_asr_backends() -> tuple[str, ...]:
+    return tuple(sorted(_ASR_BACKENDS))
+
+
 def discover_backends(*, include_input: bool = False) -> None:
     """Import each backend module so its decorator runs.
 
@@ -86,4 +109,7 @@ def discover_backends(*, include_input: bool = False) -> None:
         try:
             importlib.import_module(info.name)
         except ImportError as e:
+            # Don't let one missing-deps backend take the rest of discovery
+            # down. The remote ASR backend works without a server install,
+            # so a missing faster-whisper shouldn't hide it.
             log.warning("audio backend %s skipped: %s", info.name, e)

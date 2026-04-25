@@ -58,6 +58,23 @@ class TTSBackend(ABC):
         """Release model RAM on toggle-off."""
 
 
+class ASRBackend(ABC):
+    # Whisper variants all want 16kHz mono — backends with different
+    # requirements override. transcribe() is async because remote ASR
+    # over HTTP needs to await the request without blocking the FSM.
+    sample_rate: ClassVar[int] = 16000
+
+    @abstractmethod
+    async def transcribe(self, audio: bytes, *, language: str = "en") -> str:
+        """Take int16 PCM mono samples (sample_rate Hz) and return the
+        transcript text. Empty string is a valid result and the FSM treats
+        it as 'no speech' — the wakeword fired on noise."""
+
+    async def warmup(self) -> None: ...
+
+    async def aclose(self) -> None: ...
+
+
 @dataclass(frozen=True)
 class WakeEvent:
     # Which wakeword fired (e.g. "hey_jarvis", "hey_tokenpal") and its
