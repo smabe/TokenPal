@@ -69,3 +69,44 @@ def test_install_models_idempotent_when_present(tmp_path: Path) -> None:
         result = deps.install_models(tmp_path, quantization="fp16")
     assert result.ok
     assert "already present" in result.message
+
+
+def test_missing_input_models_lists_vad_and_wakeword(tmp_path: Path) -> None:
+    missing = deps.missing_input_models(tmp_path)
+    names = sorted(p.name for p in missing)
+    assert "silero_vad.onnx" in names
+    assert "hey_jarvis_v0.1.onnx" in names
+    assert "melspectrogram.onnx" in names
+    assert "embedding_model.onnx" in names
+
+
+def test_install_input_models_downloads_each_file(tmp_path: Path) -> None:
+    payload = b"x" * ((1 << 20) + 5)
+
+    def fake_urlopen(url: str, timeout: float) -> _FakeResponse:
+        return _FakeResponse(payload)
+
+    with mock.patch.object(deps.urllib.request, "urlopen", side_effect=fake_urlopen):
+        result = deps.install_input_models(tmp_path)
+    assert result.ok, result.message
+    assert (tmp_path / "audio" / "vad" / "silero_vad.onnx").exists()
+    wake_dir = tmp_path / "audio" / "wakeword"
+    assert (wake_dir / "hey_jarvis_v0.1.onnx").exists()
+    assert (wake_dir / "melspectrogram.onnx").exists()
+    assert (wake_dir / "embedding_model.onnx").exists()
+
+
+def test_install_input_models_idempotent(tmp_path: Path) -> None:
+    # Pre-create all files; urlopen-as-bomb proves no network fetch ran.
+    audio = tmp_path / "audio"
+    (audio / "vad").mkdir(parents=True)
+    (audio / "wakeword").mkdir()
+    (audio / "vad" / "silero_vad.onnx").write_bytes(b"x")
+    for name in ("hey_jarvis_v0.1.onnx", "melspectrogram.onnx", "embedding_model.onnx"):
+        (audio / "wakeword" / name).write_bytes(b"x")
+    with mock.patch.object(
+        deps.urllib.request, "urlopen", side_effect=AssertionError("no fetch"),
+    ):
+        result = deps.install_input_models(tmp_path)
+    assert result.ok
+    assert "already present" in result.message

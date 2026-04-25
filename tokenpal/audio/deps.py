@@ -228,16 +228,107 @@ def install_all(
     data_dir: Path,
     quantization: str = "fp16",
     timeout_s: float = 600.0,
+    *,
+    include_input: bool = True,
 ) -> InstallResult:
-    """Run wheels then models. Stops at the first failure so the message
-    points at the actual blocker instead of a downstream ImportError."""
+    """Run wheels then output models then input models.
+
+    Stops at the first failure so the message points at the actual
+    blocker instead of a downstream ImportError. ``include_input``
+    gates the wake/VAD model fetch — typed-only (audio off) callers
+    pass False; ambient-only doesn't need them either, but /voice-io
+    install routinely runs from a half-configured state so we default
+    to True and let it succeed even if voice mode flips on later.
+    """
     deps_result = install(timeout_s=timeout_s)
     if not deps_result.ok:
         return deps_result
     models_result = install_models(data_dir, quantization, timeout_s=timeout_s)
     if not models_result.ok:
         return models_result
+    if include_input:
+        input_result = install_input_models(data_dir, timeout_s=timeout_s)
+        if not input_result.ok:
+            return input_result
+        message = (
+            f"{deps_result.message} {models_result.message} "
+            f"{input_result.message}"
+        )
+    else:
+        message = f"{deps_result.message} {models_result.message}"
+    return InstallResult(ok=True, message=message.strip())
+
+
+# Silero VAD pre-exported onnx — same release as the python silero-vad
+# package, but we fetch the file directly to avoid the torch dependency
+# the pip package brings.
+_SILERO_VAD_URL: Final[str] = (
+    "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx"
+)
+# OpenWakeWord ships its stock models under the package's resources/
+# directory at install time. They sometimes lag the GitHub release; the
+# canonical source is the hf release on github.
+_OWW_MODEL_URLS: Final[dict[str, str]] = {
+    "hey_jarvis_v0.1.onnx": (
+        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
+        "resources/models/hey_jarvis_v0.1.onnx"
+    ),
+    "melspectrogram.onnx": (
+        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
+        "resources/models/melspectrogram.onnx"
+    ),
+    "embedding_model.onnx": (
+        "https://github.com/dscripka/openWakeWord/raw/main/openwakeword/"
+        "resources/models/embedding_model.onnx"
+    ),
+}
+
+
+def missing_input_models(data_dir: Path) -> tuple[Path, ...]:
+    """Return the input-side model files that aren't on disk yet.
+
+    Whisper weights are excluded — faster-whisper auto-downloads them on
+    first transcribe, and the file lives under download_root with a
+    nontrivial directory layout we don't want to predict here.
+    """
+    audio_dir = data_dir / "audio"
+    expected = [
+        audio_dir / "vad" / "silero_vad.onnx",
+        *(audio_dir / "wakeword" / name for name in _OWW_MODEL_URLS),
+    ]
+    return tuple(p for p in expected if not p.exists())
+
+
+def install_input_models(
+    data_dir: Path, timeout_s: float = 600.0,
+) -> InstallResult:
+    """Fetch Silero VAD + the OpenWakeWord model trio into <data_dir>/audio."""
+    audio_dir = data_dir / "audio"
+    targets: list[tuple[Path, str]] = []
+    if not (audio_dir / "vad" / "silero_vad.onnx").exists():
+        targets.append((audio_dir / "vad" / "silero_vad.onnx", _SILERO_VAD_URL))
+    for name, url in _OWW_MODEL_URLS.items():
+        path = audio_dir / "wakeword" / name
+        if not path.exists():
+            targets.append((path, url))
+
+    if not targets:
+        return InstallResult(ok=True, message="input models already present.")
+
+    fetched: list[str] = []
+    for path, url in targets:
+        log.info("Fetching %s -> %s", url, path)
+        try:
+            _download(url, path, timeout_s)
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            return InstallResult(
+                ok=False,
+                message=f"download {path.name} failed: {e}",
+            )
+        except KeyboardInterrupt:
+            return InstallResult(ok=False, message="input download cancelled.")
+        fetched.append(path.name)
     return InstallResult(
         ok=True,
-        message=f"{deps_result.message} {models_result.message}".strip(),
+        message=f"downloaded: {', '.join(fetched)}.",
     )

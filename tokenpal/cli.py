@@ -212,6 +212,19 @@ def _check_audio(config: TokenPalConfig) -> int:
             f"({audio_cfg.kokoro_quantization})",
         )
 
+    # Input-side models: only relevant when voice mode is on.
+    if audio_cfg.voice_conversation_enabled:
+        missing_input = deps.missing_input_models(data_dir)
+        if missing_input:
+            names = ", ".join(p.name for p in missing_input)
+            print(
+                f"  {_WARN} missing input models: {names} — "
+                f"run /voice-io install",
+            )
+            problems += 1
+        else:
+            print(f"  {_CHECK} wakeword + VAD models present")
+
     if audio_cfg.voice_conversation_enabled and platform.system() == "Darwin":
         # Mic permission on macOS is granted to the *parent terminal binary*
         # (Terminal.app, iTerm2, Cursor, ...), not the python interpreter.
