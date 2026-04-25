@@ -1,22 +1,12 @@
 # TokenPal
 
-A witty ASCII buddy that lives in your terminal, watches what you're doing, and has opinions about it. Powered by local LLMs via Ollama — run locally or on a remote GPU over your LAN.
+A witty ASCII buddy who lives on your desktop, watches what you're doing, and has opinions about it. Frameless translucent Qt window by default (drag him around, he swings like a pendulum), with a Textual TUI fallback for headless boxes. Powered by local LLMs via Ollama or llama.cpp-direct — run on-device or on a remote GPU over your LAN.
 
-```
-┌─ buddy ──────────────────────────┐  ┌─ chat log ─┐
-│                                  │  │ > hey buddy │
-│  ╭──────────────────────────╮    │  │ Oh great,   │
-│  │ Oh look, another terminal│    │  │ you again.  │
-│  │ window. How original.    │    │  │             │
-│  ╰──────────────────────────╯    │  │ > what's up │
-│       ▄███▄                      │  │ Not much,   │
-│      █ ○ ○ █                     │  │ just judging│
-│       ▀███▀                      │  │ your tabs.  │
-│                                  │  │             │
-│  Type a message or /command...   │  │             │
-│  playful | apollyon | BMO | 4s   │  │             │
-└──────────────────────────────────┘  └─────────────┘
-```
+<p align="center">
+  <img src="docs/images/hero-finn.png" alt="Finn buddy on the desktop with weather overlay and chat dock" width="420">
+</p>
+
+The buddy and his chat dock float on your desktop (always-on-top, frameless, translucent). The chat-history window is separate and toggleable. On macOS the app lives in the menu bar; on Windows/Linux it's in the system tray. Grab the buddy and he tilts like a rigid pendulum; release and he swings back with residual momentum. When it's raining in the real world, raindrops fall from a sky overlay in the top-right of your screen and splash on his head.
 
 ## Quick Start
 
@@ -199,7 +189,8 @@ Misconfigured or hallucinated backends fall back safely — you'll never get a h
 /cloud plan on|off                  also route /research planner through cloud (niche)
 /cloud anthropic disable            flip synth off (key retained)
 /cloud anthropic forget             wipe Anthropic key + disable
-/refine <follow-up>                 re-synthesize last /research with a follow-up (cloud)
+/refine <follow-up>                 local: re-synthesize last /research excerpts
+/followup <question>                cloud: escalate follow-up with cached Anthropic context (cheap, ~$0.02-0.05)
 ```
 
 Legacy bare subcommands (`/cloud enable`, `/cloud disable`, `/cloud forget`, `/cloud model`, `/cloud plan`, `/cloud deep`, `/cloud search`) continue to work as sugar for `/cloud anthropic …` with a deprecation log line.
@@ -224,7 +215,9 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 | **Inline tool use** | Ask the buddy naturally — "what's 47 * 83?", "what's the best fitness tracker for iPhone 17?" — and it picks the right tool (`do_math`, or the deeper `research` for anything web-touching) mid-conversation. Source URLs render as clickable links under the reply |
 | **Research** | `research` tool chainable inline, or `/research <question>` standalone — plan → parallel multi-backend search → read → synthesize with numbered citations. Multi-backend fan-out: DuckDuckGo (default, keyless), Hacker News + StackExchange (keyless, planner-routed for tech topics), Tavily (premium, preloaded content, `/cloud tavily`), Brave (free-tier 2k/mo, `/cloud brave`). Current-year-aware queries, grounded picks with hallucination stripping, thin-pool top-up to DDG on any planner-routed miss, URL-tracking-param dedup, end-of-run telemetry (`mode=<backends> tried=<backends> sources=N stopped=<reason>`). 24h cache on the standalone command. Opt-in Anthropic cloud modes via `/cloud anthropic`: Haiku synth of locally-fetched sources (~$0.024/run), Sonnet-driven web search (~$0.15/run), or full deep mode with server-side fetch for SPAs/paywalled sites (~$1-3/run). See [docs/research-architecture.md](docs/research-architecture.md) |
 | **Agent mode** | `/agent <goal>` — multi-step tool-calling loop with confirm gate, step cap, token budget, in-run result cache. See [docs/agents-and-tools.md](docs/agents-and-tools.md) |
-| **UI** | Textual TUI with split layout — buddy panel + scrollable chat log with timestamps, color-coded status bar, keyboard shortcuts (F1 help, F2 toggle chat log, F3 options, F4 voice, Ctrl+L clear). Chat log persists across restarts; tune the cap, wipe history, switch inference server, or pick a model via `/options` |
+| **UI** | Qt desktop overlay by default: frameless translucent buddy window that stays on top, a chat input dock that follows him around, and a separate transparent chat-history window with its own hide control. Tray/menu-bar icon holds Options (F3), Cloud, Voice, and show/hide toggles. Live Cmd/Ctrl-`+`/`-`/`0` font resize, per-user background + font colors for the chat surfaces, buddy/chat-log visibility persisted across restarts. Textual TUI, console, and Tk overlays still available via `--overlay` or `[ui] overlay` for headless/SSH boxes |
+| **Buddy physics** | Grab him and he tilts like a rigid pendulum pivoted at your cursor — grab his foot, he dangles upside down; release, he swings through rest with residual momentum before damping. Clicks trigger impact burst particles anchored on his head; shaking him makes him dizzy (swirl particles, canned reaction line) |
+| **Weather visualization** | Sky overlay in the top-right of your screen with sun/moon, overcast cloud stack, drifting rain/snow cloud, lightning strobe during storms, rare shooting star at night. Precipitation is per-cell hit-tested against the buddy's rotated art, so snow piles on his shoulders and rain splashes off his head |
 | **Voices** | Train character voices from Fandom wiki transcripts, with LLM-generated colored ASCII art per character. 10 hand-drawn skeleton templates + 5 addressable zones (headwear / facial_hair / body_motif / eye_region / trailing) mean one template serves thousands of character silhouettes. Optional cloud Haiku classifier path for stronger canonical-character recall |
 | **Moods** | Custom mood names per character, context-triggered shifts, mood-aware ASCII frame swaps (slit eyes when sleepy, wide eyes when impressed), easter eggs |
 | **Conversation** | Multi-turn memory within a session — TokenPal remembers what you said and riffs on it across turns |
@@ -244,6 +237,7 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 /server switch local     use local Ollama (restores that host's remembered model)
 /server switch hostname  switch to remote server (restores that host's remembered model)
 /zip 90210               set weather location (geocodes, writes config)
+/weather                 current conditions on demand (buddy riffs)
 /senses                  list senses with on/off + loaded status
 /senses enable <name>    turn a sense on in config.toml (restart to apply)
 /senses disable <name>   turn a sense off in config.toml (restart to apply)
@@ -257,13 +251,16 @@ See [docs/agents-and-tools.md#cloud-llm-opt-in-anthropic](docs/agents-and-tools.
 /gh issues               open issues
 /ask <question>          web search (DuckDuckGo + Wikipedia), buddy riffs on result
 /options                 umbrella settings modal (F3) — chat history cap + clear, server + model picker, launcher buttons for Cloud/Senses/Tools/Voice
+/chatlog                 chat-log controls (clear, cap) from the prompt
+/idle_tools              show/toggle idle-tool rolls (3 min cooldown, 6/hr cap)
 /tools                   open the Textual tool-picker modal (grouped sections)
 /tools list              plain-text list with on/off marks
 /tools describe <name>   full metadata for a tool (flags, consent, rate limit)
 /consent                 open the consent-category picker (web/location/keyed/research)
 /agent <goal>            multi-step agent loop (chains tools toward a goal)
 /research <question>     plan-search-read-synthesize with numbered citations
-/refine <follow-up>      re-analyze the last research with a follow-up question (cloud)
+/refine <follow-up>      re-synthesize last /research locally against cached excerpts
+/followup <question>     cheap cloud follow-up via cached Anthropic message history (~$0.02-0.05)
 /cloud                   open the cloud settings modal (Anthropic / Tavily / Brave)
 /cloud anthropic enable <key>  cloud synth via Sonnet/Haiku/Opus (legacy `/cloud enable` still works)
 /cloud tavily enable <key>     LLM-optimized search with preloaded content (~$0.05/run, free tier 1k/mo)
@@ -358,7 +355,11 @@ Config auto-discovered: `~/.tokenpal/config.toml` > project root > cwd.
 <summary>Key settings</summary>
 
 ```toml
+[ui]
+overlay = "qt"                         # qt (default desktop buddy) | textual | console | tkinter | auto
+
 [llm]
+inference_engine = "ollama"            # ollama (default) or llamacpp (AMD RDNA4 dGPU)
 api_url = "http://localhost:11434/v1"  # or remote server
 model_name = "gemma4"                  # fallback when a server has no remembered model
 max_tokens = 60                        # observation cap; auto-raised from server context_length on connect
@@ -451,10 +452,11 @@ tokenpal/
 ├── senses/          # App awareness, hardware, idle, time, weather, music, productivity, git, battery, network_state, process_heat, typing_cadence, filesystem_pulse
 ├── server/          # FastAPI inference proxy + training API
 ├── tools/           # Voice training, LoRA fine-tuning, wiki fetch
-├── ui/              # Textual TUI overlay (default), console + tkinter fallbacks
+├── ui/              # Qt desktop overlay (default) + Textual TUI / console / tkinter fallbacks
+│   └── qt/              # buddy window, chat dock + history, speech bubble, weather sky, modals, tray, pendulum physics
 ├── util/            # Shared utilities
 ├── commands.py      # Slash command dispatcher
-├── cli.py           # --check, --validate, --verbose, --config, --skip-welcome
+├── cli.py           # --check, --validate, --verbose, --config, --skip-welcome, --overlay, --headless
 ├── first_run.py     # First-run welcome wizard
 └── app.py           # Bootstrap and main loop
 
@@ -465,7 +467,9 @@ scripts/
 ├── install-macos.sh    # macOS installer (Python, Ollama, deps, client/server/both)
 ├── install-windows.ps1 # Windows installer (Python, Ollama, deps, client/server/both)
 ├── install-linux.sh    # Linux installer (Python, Ollama, deps, client/server/both)
-└── start-server.bat    # Start Ollama + server (Windows)
+├── download-model.ps1  # Interactive GGUF picker for llamacpp path (Windows)
+├── amd-hip-swap.ps1    # Swap ROCm/HIP runtime flavors on AMD dGPU boxes
+└── install-hooks.sh    # User-local pre-commit hook shim installer
 
 docs/
 ├── agents-and-tools.md          # /agent, /research, /tools, consent, rate limits, caches
@@ -485,13 +489,18 @@ docs/
 
 ```
 tokenpal                  # run the buddy (first-run wizard on fresh install)
-tokenpal --check          # quick: verify Ollama, model, senses, actions
-tokenpal --validate       # full: Python, platform deps, git, Ollama, config, permissions
+tokenpal --check          # quick: verify inference engine, model, senses, actions
+tokenpal --validate       # full: Python, platform deps, git, inference engine, config, permissions
 tokenpal --verbose        # debug logs in terminal
 tokenpal --config PATH    # specific config file
 tokenpal --skip-welcome   # bypass first-run wizard
+tokenpal --overlay qt|textual|console|tkinter|auto   # override [ui] overlay (e.g. textual on SSH)
+tokenpal --headless       # no-UI mode: brain runs, logs only (server/daemon use)
 tokenpal-server           # run the inference server
 tokenpal-finetune         # LoRA fine-tuning CLI
+
+./run.sh                  # day-to-day launcher at repo root (macOS/Linux) — activates venv, auto-syncs deps
+.\run.ps1                 # day-to-day launcher at repo root (Windows)
 ```
 
 ## Development
@@ -515,5 +524,5 @@ tail -f ~/.tokenpal/logs/tokenpal.log  # debug
 - Conversation history is ephemeral (in-memory only, cleared after ~2 min silence or on sensitive app detection)
 - Log files restricted to owner-only (0o600)
 - Local by default — LAN GPU server is the main optional network path
-- Cloud LLM (Anthropic) is **opt-in** and scoped to `/research` only — never observations, conversation, or any other path. Key at `~/.tokenpal/.secrets.json` (0o600), fingerprint-only in status output. Toggle anytime via `/cloud disable` or `/cloud forget`
+- Cloud integrations (Anthropic synth / Tavily search / Brave search) are **opt-in** and scoped to `/research` only — never observations, conversation, idle-tool rolls, `/ask`, or any sense. Keys at `~/.tokenpal/.secrets.json` (0o600, never echoed); `/cloud status` shows fingerprints only. Toggle anytime via `/cloud <backend> disable|forget`
 - Other opt-in network senses/commands (all free/keyless by default): weather (Open-Meteo), world_awareness (HN Algolia), `/ask` (DuckDuckGo + Wikipedia). Untrusted external text is wrapped in delimiters and content-filtered before reaching the prompt
