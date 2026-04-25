@@ -1,30 +1,20 @@
 """Voice-conversation FSM.
 
-Pure state machine — no I/O, no threads, no timers. The pipeline glue
-in stage 7 owns the mic / wake / VAD / ASR / TTS loops and drives this
-FSM by calling the ``on_*`` methods. Each call returns an
-``Action`` the caller dispatches: open_mic, close_mic, run_asr,
-submit_to_brain, close_session.
-
-Why split it this way: the "trailing window must hard-close at 8s"
-invariant + the "<2-token transcript closes silently" rule + the
-"sensitive app cancels everything" rule all interact, and they're
-easier to verify against a pure FSM than against a real pipeline with
-hardware. The plan calls for a three-test trailing-window suite
-upstream — those run in stage 7 against the full glue, exercising
-this FSM through the same surface.
+Pure state machine: no I/O, no threads, no timers. Driven by the input
+pipeline calling the ``on_*`` methods; each returns a ``Decision`` the
+caller dispatches.
 
 State diagram::
 
     IDLE  --wake-->  LISTENING
     LISTENING  --speech_ended-->  (run ASR)
-                    --transcript "" / <2 tokens-->  IDLE
-                    --transcript text-->  (submit) -> SPEAKING
+                    --transcript "" / <2 chars-->  IDLE
+                    --transcript text-->  SPEAKING (submit text)
     LISTENING  --listening_timeout-->  IDLE
     SPEAKING  --tts_done-->  TRAILING (deadline = now + window)
     TRAILING  --speech_started-->  LISTENING
-    TRAILING  --tick(now > deadline)-->  IDLE
-    *  --sensitive_app | typed_input-->  IDLE  (drains queues)
+    TRAILING  --tick(now > deadline)-->  IDLE  (hard close)
+    *  --sensitive_app | typed_input-->  IDLE  (drain queues)
 """
 
 from __future__ import annotations
@@ -45,125 +35,100 @@ class VoiceState(StrEnum):
 
 class Action(StrEnum):
     NONE = "none"
-    OPEN_MIC = "open_mic"
-    CLOSE_MIC = "close_mic"
-    RUN_ASR = "run_asr"
-    SUBMIT_TO_BRAIN = "submit_to_brain"  # paired with .submit_text below
-    CLOSE_SESSION = "close_session"
+    SUBMIT = "submit"          # caller hands transcript to the brain
+    CLOSE_SESSION = "close"    # caller drains queues + closes mic
 
+
+@dataclass(frozen=True)
+class Decision:
+    action: Action = Action.NONE
+    text: str = ""
+
+
+_NONE = Decision()
+_CLOSE = Decision(Action.CLOSE_SESSION)
 
 # Below this length the FSM treats an ASR transcript as a false fire and
-# closes silently. Plan calls for "<2 tokens" — using char count instead
-# avoids a tokenizer round-trip; "ok" / "go" still pass at len > 1, but
-# hum / cough fragments don't.
+# closes silently. Char count avoids a tokenizer round-trip; "ok" / "go"
+# still pass at len > 1, hum / cough fragments don't.
 _MIN_TRANSCRIPT_LEN = 2
 
 
 @dataclass
 class VoiceSession:
-    """Voice-conversation state machine.
-
-    Hold onto an instance per pipeline run. ``state`` is the current FSM
-    node; ``last_action`` is whatever the most recent transition decided
-    to do (for tests / observability). ``submit_text`` carries the
-    transcript when ``last_action == SUBMIT_TO_BRAIN``.
-    """
-
     trailing_window_s: float = 8.0
     state: VoiceState = VoiceState.IDLE
-    submit_text: str = ""
-    last_action: Action = Action.NONE
     _trailing_deadline: float | None = field(default=None, repr=False)
 
-    def _set(self, new_state: VoiceState, action: Action) -> Action:
-        log.debug("voice-fsm: %s -> %s (%s)", self.state, new_state, action)
+    def _set(self, new_state: VoiceState) -> None:
+        log.debug("voice-fsm: %s -> %s", self.state, new_state)
         self.state = new_state
-        self.last_action = action
-        return action
 
-    def on_wake(self) -> Action:
-        """Wake word fired. Idle → Listening (open mic if needed)."""
+    def on_wake(self) -> Decision:
+        # Wake during LISTENING / SPEAKING / TRAILING is ignored so a phantom
+        # retrigger doesn't interrupt an in-flight reply.
         if self.state == VoiceState.IDLE:
-            return self._set(VoiceState.LISTENING, Action.OPEN_MIC)
-        # Wake firing during LISTENING / SPEAKING / TRAILING is a no-op:
-        # the mic is already in the right state and we don't want a
-        # double-trigger to interrupt an in-flight reply.
-        log.debug("voice-fsm: wake ignored in state=%s", self.state)
-        self.last_action = Action.NONE
-        return Action.NONE
+            self._set(VoiceState.LISTENING)
+        return _NONE
 
-    def on_speech_ended(self) -> Action:
-        """VAD reports the user stopped talking. Run ASR on the buffer."""
-        if self.state != VoiceState.LISTENING:
-            self.last_action = Action.NONE
-            return Action.NONE
-        return self._set(VoiceState.LISTENING, Action.RUN_ASR)
+    def on_speech_ended(self) -> Decision:
+        # Caller runs ASR inline and feeds on_transcript; FSM only tracks state.
+        return _NONE
 
-    def on_transcript(self, text: str) -> Action:
-        """ASR returned. Empty / too-short → close silently. Else submit."""
+    def on_transcript(self, text: str) -> Decision:
         if self.state != VoiceState.LISTENING:
-            self.last_action = Action.NONE
-            return Action.NONE
+            return _NONE
         cleaned = text.strip()
         if len(cleaned) < _MIN_TRANSCRIPT_LEN:
-            # Wake fired on a noise; the user hasn't said anything
-            # meaningful. Close out and let the next wake try again.
             self._trailing_deadline = None
-            return self._set(VoiceState.IDLE, Action.CLOSE_MIC)
-        self.submit_text = cleaned
-        return self._set(VoiceState.SPEAKING, Action.SUBMIT_TO_BRAIN)
+            self._set(VoiceState.IDLE)
+            return _NONE
+        self._set(VoiceState.SPEAKING)
+        return Decision(Action.SUBMIT, cleaned)
 
-    def on_tts_done(self, *, now: float) -> Action:
-        """TTS finished. Open the trailing window for follow-up without re-wake."""
+    def on_tts_done(self, *, now: float) -> Decision:
         if self.state != VoiceState.SPEAKING:
-            self.last_action = Action.NONE
-            return Action.NONE
+            return _NONE
         self._trailing_deadline = now + self.trailing_window_s
-        return self._set(VoiceState.TRAILING, Action.OPEN_MIC)
+        self._set(VoiceState.TRAILING)
+        return _NONE
 
-    def on_speech_started(self) -> Action:
-        """Mid-trailing-window speech. Re-enter listening (no re-wake)."""
+    def on_speech_started(self) -> Decision:
         if self.state != VoiceState.TRAILING:
-            self.last_action = Action.NONE
-            return Action.NONE
+            return _NONE
         self._trailing_deadline = None
-        return self._set(VoiceState.LISTENING, Action.NONE)
+        self._set(VoiceState.LISTENING)
+        return _NONE
 
-    def tick(self, *, now: float) -> Action:
-        """Periodic tick — fires the trailing-window hard close.
-
-        Hard close at deadline regardless of VAD state — a TV / music in
-        the room would otherwise hold the window open forever. Per plan.
-        """
+    def tick(self, *, now: float) -> Decision:
+        # Hard close at deadline regardless of VAD — TV / music in the room
+        # would otherwise hold the window open forever.
         if (
             self.state == VoiceState.TRAILING
             and self._trailing_deadline is not None
             and now >= self._trailing_deadline
         ):
             self._trailing_deadline = None
-            return self._set(VoiceState.IDLE, Action.CLOSE_MIC)
-        self.last_action = Action.NONE
-        return Action.NONE
+            self._set(VoiceState.IDLE)
+            return _CLOSE
+        return _NONE
 
-    def on_listening_timeout(self) -> Action:
-        """Wake fired but no speech ever started — false alarm."""
+    def on_listening_timeout(self) -> Decision:
         if self.state != VoiceState.LISTENING:
-            self.last_action = Action.NONE
-            return Action.NONE
-        return self._set(VoiceState.IDLE, Action.CLOSE_MIC)
+            return _NONE
+        self._set(VoiceState.IDLE)
+        return _CLOSE
 
-    def on_sensitive_app(self) -> Action:
-        """Privacy: a sensitive app is foregrounded. Tear everything down."""
+    def on_sensitive_app(self) -> Decision:
         if self.state == VoiceState.IDLE:
-            self.last_action = Action.NONE
-            return Action.NONE
+            return _NONE
         self._trailing_deadline = None
-        return self._set(VoiceState.IDLE, Action.CLOSE_SESSION)
+        self._set(VoiceState.IDLE)
+        return _CLOSE
 
-    def on_typed_input(self) -> Action:
-        """User typed mid-session. Typed wins — kill the voice path."""
+    def on_typed_input(self) -> Decision:
         if self.state == VoiceState.IDLE:
-            self.last_action = Action.NONE
-            return Action.NONE
+            return _NONE
         self._trailing_deadline = None
-        return self._set(VoiceState.IDLE, Action.CLOSE_SESSION)
+        self._set(VoiceState.IDLE)
+        return _CLOSE

@@ -22,6 +22,8 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+import numpy as np
+
 from tokenpal.audio.base import WakeEvent, WakeWordBackend
 from tokenpal.audio.registry import register_wakeword_backend
 
@@ -30,10 +32,8 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# Quiet-frame suppression: skip predict() when the loudest sample in the
-# frame is below this threshold. ~200 corresponds to roughly -40dBFS for
-# int16 — quiet enough that the model would run on noise floor for free.
-# Saves CPU; the be-more-agent reference uses the same number.
+# Skip predict() when loudest sample is below this — ~-40dBFS, quiet
+# enough that the model would just run on noise floor.
 _VOLUME_GATE = 200
 
 
@@ -87,8 +87,7 @@ class OpenWakeWordBackend(WakeWordBackend):
 
         # openwakeword renamed the constructor kwarg between versions:
         # older builds use ``wakeword_model_paths=``, current uses
-        # ``wakeword_models=``. Try the current name first; fall back on
-        # TypeError (be-more-agent agent.py:249-256 has the same dance).
+        # ``wakeword_models=``. Try current first; TypeError → legacy.
         try:
             self._model = Model(
                 wakeword_models=[str(self.model_path)],
@@ -107,10 +106,6 @@ class OpenWakeWordBackend(WakeWordBackend):
     def detect(self, frame: bytes) -> WakeEvent | None:
         if self._model is None:
             return None
-        # Heavy import per-call, but numpy is already loaded once
-        # warmup() ran (kokoro path or here). Cheap thereafter.
-        import numpy as np
-
         samples = np.frombuffer(frame, dtype=np.int16)
         # Volume gate: int16 max abs in quiet rooms is well under 200.
         # openwakeword's mel + embedding pass costs CPU we save here.

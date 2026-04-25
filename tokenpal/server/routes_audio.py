@@ -1,15 +1,10 @@
 """OpenAI-compatible /v1/audio/transcriptions endpoint.
 
-Mounted by ``create_app`` at ``/v1`` so the path matches OpenAI exactly —
-that's what makes ``RemoteWhisperBackend`` (and any other whisper-server
-client) drop in without per-server URL juggling.
+Mounted at /v1 so the path matches OpenAI exactly — RemoteWhisperBackend
+and any other whisper-server client drop in without URL juggling.
+faster-whisper loads lazily; a server running without [audio] extras
+returns a clean 503. Compute is configurable via env:
 
-Faster-whisper is loaded lazily on the first request so a server
-running without [audio] extras stays cold (and returns 503 cleanly if
-anyone hits the route). Model + compute_type are read from env so the
-GPU box can pin its choices without editing code:
-
-    TOKENPAL_ASR_MODEL=small.en
     TOKENPAL_ASR_DEVICE=cuda
     TOKENPAL_ASR_COMPUTE_TYPE=float16
 """
@@ -24,6 +19,8 @@ import wave
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+
+from tokenpal.audio.util import pcm_int16_to_float32
 
 if TYPE_CHECKING:
     from faster_whisper import WhisperModel
@@ -50,13 +47,16 @@ def _get_lock() -> asyncio.Lock:
 
 async def _ensure_model(requested_size: str) -> WhisperModel:
     global _model, _model_size
+    # Fast path: lock-free read for the cached-hit case so concurrent
+    # requests don't serialize once the model is loaded.
+    if _model is not None and _model_size == requested_size:
+        return _model
     async with _get_lock():
         if _model is not None and _model_size == requested_size:
             return _model
         try:
             from faster_whisper import WhisperModel
         except ImportError as e:
-            # Server runs without [audio] extras → tell the client.
             raise HTTPException(
                 status_code=503,
                 detail=(
@@ -121,10 +121,7 @@ async def transcriptions(
     """
     payload = await file.read()
     pcm, sample_rate = _wav_bytes_to_pcm(payload)
-
-    import numpy as np
-
-    samples = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    samples = pcm_int16_to_float32(pcm)
 
     whisper = await _ensure_model(model)
     # Run inference off the loop — beam_size=1 keeps latency tight.

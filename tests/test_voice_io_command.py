@@ -139,7 +139,16 @@ def test_install_subcommand_invokes_installer(
         called["n"] += 1
         return InstallResult(ok=True, message="installed: x. Restart to activate.")
 
+    def fake_install_models(*args, **kwargs) -> InstallResult:
+        return InstallResult(ok=True, message="audio models already present.")
+
     monkeypatch.setattr("tokenpal.audio.deps.install", fake_install)
+    monkeypatch.setattr(
+        "tokenpal.audio.deps.install_models", fake_install_models,
+    )
+    monkeypatch.setattr(
+        "tokenpal.audio.deps.install_input_models", fake_install_models,
+    )
     result = _handle_voice_io_command("install", cfg)
     assert called["n"] == 1
     assert "installed: x" in result.message

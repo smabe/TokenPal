@@ -97,14 +97,9 @@ class AudioPipeline:
 
 
 def boot(config: AudioConfig, data_dir: Path) -> AudioPipeline:
-    # Walk the backends package so @register_tts_backend has fired for
-    # everything output-side. include_input is False — input-side modules
-    # (asr_/wake_) aren't loaded for an ambient-only boot.
     registry.discover_backends(include_input=False)
     if config.voice_conversation_enabled:
-        # Input-side gate: the wake-word wheel is the marker dep that's
-        # forbidden in an ambient-only boot. Import here is what trips the
-        # modularity anti-test. start_input() does the actual lazy-load
-        # of the input module — boot() just verifies the wheel is there.
+        # Marker import: forbidden under ambient-only by the modularity
+        # anti-test. start_input() does the real input-side lazy-load.
         import openwakeword  # noqa: F401
     return AudioPipeline(config=config, data_dir=data_dir)

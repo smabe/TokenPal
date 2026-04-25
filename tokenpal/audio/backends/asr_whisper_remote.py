@@ -1,14 +1,8 @@
 """Remote ASR backend — POST to OpenAI-compatible /v1/audio/transcriptions.
 
-The session FSM stays fast even when the GPU is across the network: the
-client takes a short connect timeout (2s default — plan calls it out as
-the load-bearing number) and raises ``ASRUnreachableError`` on failure. The
-asr.py facade catches that and falls back to LocalWhisperBackend so a
-dead remote doesn't lock the wake pipeline.
-
-Why httpx over urllib: we already use httpx elsewhere (cli health
-check, llm clients) and it gives us a proper async client with
-configurable timeouts without extra dependencies.
+2s connect timeout so a dead remote can't lock the wake pipeline; on
+failure raises ASRUnreachableError so the asr.py facade can fall back
+to LocalWhisperBackend.
 """
 
 from __future__ import annotations

@@ -48,19 +48,16 @@ def test_init_does_not_open_stream(tmp_path: Path) -> None:
     p._loop.close()
 
 
-def test_dispatch_submit_to_brain_calls_callback(tmp_path: Path) -> None:
+def test_handle_submit_calls_callback(tmp_path: Path) -> None:
     received: list[str] = []
 
     def on_voice_text(text: str) -> None:
         received.append(text)
 
     p = _make_pipeline(tmp_path, on_voice_text=on_voice_text)
-    # Walk the FSM to SUBMIT_TO_BRAIN, then dispatch.
     p._fsm.on_wake()
-    p._fsm.on_speech_ended()
-    action = p._fsm.on_transcript("hello there")
-    p._dispatch(action)
-    # call_soon_threadsafe defers; run one loop iteration.
+    decision = p._fsm.on_transcript("hello there")
+    p._handle(decision)
     p._loop.run_until_complete(asyncio.sleep(0))
     assert received == ["hello there"]
     p._loop.close()

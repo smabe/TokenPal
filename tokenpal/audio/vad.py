@@ -1,25 +1,12 @@
 """Silero VAD via onnxruntime — no torch dep.
 
-Silero ships a pre-exported ``silero_vad.onnx`` (~1.6MB) that the
-official pip package wraps with torch utilities. We skip torch and call
-the onnx session directly with manual hidden-state management and
-time-based hysteresis. Saves ~600MB of disk and one heavy import.
+Wraps the pre-exported silero_vad.onnx (~1.6MB). The pip package
+silero-vad pulls torch (~600MB) we don't need elsewhere; the onnx
+model + manual hidden-state management is functionally equivalent.
 
-Model contract (silero_vad.onnx, opset 16):
-  inputs:
-    input  float32  shape [1, 512]   -- 32ms @ 16kHz mono samples
-    state  float32  shape [2, 1, 128] -- hidden state, persists across calls
-    sr     int64    shape []          -- 16000 or 8000
-  outputs:
-    output float32  shape [1, 1]      -- speech probability
-    stateN float32  shape [2, 1, 128] -- new hidden state to feed next call
-
-The session FSM (stage 6) owns instances of this and responds to the
-emitted SPEECH_STARTED / SPEECH_ENDED events.
-
-The fetch path lands in stage 8's install_models(). Like the TTS / wake
-backends, calling warmup() before the file is on disk raises
-FileNotFoundError so the user gets a clean "run /voice-io install" hint.
+ONNX contract (opset 16):
+  inputs:  input float32 [1, 512] | state float32 [2,1,128] | sr int64
+  outputs: prob  float32 [1, 1]   | stateN float32 [2,1,128]
 """
 
 from __future__ import annotations
@@ -30,19 +17,21 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
+import numpy as np
+
+from tokenpal.audio.util import SAMPLE_RATE_HZ, VAD_CHUNK_SAMPLES
+
 if TYPE_CHECKING:
-    import numpy as np
     import onnxruntime as ort
 
 log = logging.getLogger(__name__)
 
 VAD_MODEL_FILENAME: Final[str] = "silero_vad.onnx"
 
-# Required by the silero onnx — anything else fails the dimension check.
-SAMPLE_RATE: Final[int] = 16000
-CHUNK_SAMPLES: Final[int] = 512
+# Re-exports for callers that import from vad directly.
+SAMPLE_RATE = SAMPLE_RATE_HZ
+CHUNK_SAMPLES = VAD_CHUNK_SAMPLES
 
-# State tensor shape from the silero export (LSTM-ish layout).
 _STATE_SHAPE: Final[tuple[int, int, int]] = (2, 1, 128)
 
 
@@ -53,24 +42,16 @@ class VadEvent(StrEnum):
 
 @dataclass
 class SileroVAD:
-    """Stateful Silero VAD scorer.
-
-    Feed PCM int16 frames of any length via ``process()``. Internally
-    chunked to 512 samples per inference. Emits events on hysteresis
-    crossings so the caller doesn't see the per-frame jitter.
-    """
-
     data_dir: Path
     threshold: float = 0.5
-    min_silence_s: float = 0.7   # sustained silence to fire SPEECH_ENDED
-    min_speech_s: float = 0.05   # sustained speech to fire SPEECH_STARTED
+    min_silence_s: float = 0.7
+    min_speech_s: float = 0.05
 
     def __post_init__(self) -> None:
         self._session: ort.InferenceSession | None = None
         self._state: np.ndarray | None = None
         self._sr_input: np.ndarray | None = None
         self._in_speech: bool = False
-        # Run-length counters in seconds, reset on every transition.
         self._speech_run_s: float = 0.0
         self._silence_run_s: float = 0.0
 
@@ -89,21 +70,16 @@ class SileroVAD:
                 f"Silero VAD model missing at {self.model_path}. "
                 f"Run /voice-io install to fetch it.",
             )
-        # Lazy: numpy + onnxruntime already in via kokoro/openwakeword paths.
-        import numpy as np
         import onnxruntime as ort
 
         self._session = ort.InferenceSession(
-            str(self.model_path),
-            providers=["CPUExecutionProvider"],
+            str(self.model_path), providers=["CPUExecutionProvider"],
         )
         self._state = np.zeros(_STATE_SHAPE, dtype=np.float32)
         self._sr_input = np.array(SAMPLE_RATE, dtype=np.int64)
         log.debug("silero-vad: warmed up (threshold=%.2f)", self.threshold)
 
     def reset(self) -> None:
-        """Clear hidden state — call between utterances so the next session
-        starts on a clean slate."""
         if self._state is not None:
             self._state.fill(0.0)
         self._in_speech = False
@@ -111,32 +87,22 @@ class SileroVAD:
         self._silence_run_s = 0.0
 
     def process(self, frame: bytes) -> VadEvent | None:
-        """Score a PCM int16 mono frame and return any hysteresis transition.
-
-        Frame may be longer than ``CHUNK_SAMPLES`` — internally split into
-        512-sample blocks. Trailing partial frames are dropped (caller
-        should keep them buffered if they care; the FSM uses ~80ms
-        chunks which divides cleanly).
-        """
         if self._session is None or self._state is None:
             return None
-        import numpy as np
 
-        samples = np.frombuffer(frame, dtype=np.int16)
+        # One float conversion for the whole frame, then slice. Trailing
+        # partial frames are dropped — 80ms FSM frames divide cleanly into
+        # 512 samples at 16kHz.
+        samples = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
         n_chunks = samples.size // CHUNK_SAMPLES
         if n_chunks == 0:
             return None
 
-        # Last transition wins — if a single 80ms frame straddles a
-        # speech-end + speech-start (rare), the more recent event is what
-        # the FSM should react to.
         emitted: VadEvent | None = None
         chunk_duration_s = CHUNK_SAMPLES / SAMPLE_RATE
         for i in range(n_chunks):
             start = i * CHUNK_SAMPLES
-            chunk = samples[start : start + CHUNK_SAMPLES].astype(np.float32)
-            chunk /= 32768.0  # int16 → [-1, 1] float32
-            chunk = chunk.reshape(1, -1)
+            chunk = samples[start : start + CHUNK_SAMPLES].reshape(1, -1)
             outputs = self._session.run(
                 None,
                 {
@@ -167,7 +133,6 @@ class SileroVAD:
                 self._speech_run_s = 0.0
                 return VadEvent.SPEECH_ENDED
             return None
-        # Currently in silence:
         if not is_speech:
             self._speech_run_s = 0.0
             return None

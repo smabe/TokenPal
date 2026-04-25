@@ -1,17 +1,14 @@
 """In-app installer for the [audio] optional-dependencies group.
 
-Output-side only at phase 2: kokoro-onnx + sounddevice. Input-side deps
-(openwakeword, faster-whisper, silero-vad) get added when phase 3 lands.
-
-The check uses ``importlib.util.find_spec`` so an absent package raises
-ImportError on first real use rather than at the top of any module —
-keeps the modularity test (ambient-only never loads sounddevice) honest.
-The installer shells out to ``pip`` in the same interpreter so editable
+``missing_deps()`` uses ``importlib.util.find_spec`` so an absent package
+raises ImportError on first real use rather than at module top — keeps
+the modularity test (ambient-only never loads sounddevice) honest.
+``install()`` shells out to ``pip`` in the same interpreter so editable
 installs and the venv launcher both work without extra glue.
 
-Model files (the .onnx weights + voices.bin) are not pip-shipped — they
-live on GitHub releases and land in ``<data_dir>/audio/``. ``install_models``
-fetches them so /voice-io install is a single end-to-end action.
+Model weights live on GitHub releases. ``install_models`` (output) +
+``install_input_models`` (wake/VAD) fetch them so /voice-io install is
+a single end-to-end action.
 """
 
 from __future__ import annotations
@@ -302,7 +299,14 @@ def missing_input_models(data_dir: Path) -> tuple[Path, ...]:
 def install_input_models(
     data_dir: Path, timeout_s: float = 600.0,
 ) -> InstallResult:
-    """Fetch Silero VAD + the OpenWakeWord model trio into <data_dir>/audio."""
+    """Fetch Silero VAD + the OpenWakeWord model trio into <data_dir>/audio.
+
+    Downloads run in parallel — they're network-bound and independent.
+    On any failure we still return a clean error; partial successes
+    leave .tmp atomicity intact for retry.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
     audio_dir = data_dir / "audio"
     targets: list[tuple[Path, str]] = []
     if not (audio_dir / "vad" / "silero_vad.onnx").exists():
@@ -315,20 +319,27 @@ def install_input_models(
     if not targets:
         return InstallResult(ok=True, message="input models already present.")
 
-    fetched: list[str] = []
-    for path, url in targets:
+    def _fetch(target: tuple[Path, str]) -> tuple[Path, Exception | None]:
+        path, url = target
         log.info("Fetching %s -> %s", url, path)
         try:
             _download(url, path, timeout_s)
+            return path, None
         except (urllib.error.URLError, TimeoutError, OSError) as e:
+            return path, e
+
+    try:
+        with ThreadPoolExecutor(max_workers=len(targets)) as pool:
+            results = list(pool.map(_fetch, targets))
+    except KeyboardInterrupt:
+        return InstallResult(ok=False, message="input download cancelled.")
+
+    for path, err in results:
+        if err is not None:
             return InstallResult(
-                ok=False,
-                message=f"download {path.name} failed: {e}",
+                ok=False, message=f"download {path.name} failed: {err}",
             )
-        except KeyboardInterrupt:
-            return InstallResult(ok=False, message="input download cancelled.")
-        fetched.append(path.name)
     return InstallResult(
         ok=True,
-        message=f"downloaded: {', '.join(fetched)}.",
+        message=f"downloaded: {', '.join(p.name for p, _ in results)}.",
     )
