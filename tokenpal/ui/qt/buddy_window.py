@@ -46,7 +46,6 @@ _TICK_MS = int(1000 / _PHYSICS_HZ)
 _FLING_SAMPLE_WINDOW_S = 0.08  # how much recent cursor motion counts as fling
 _FLING_SAMPLE_MAX = 32          # ring-buffer cap
 _EDGE_DOCK_THRESHOLD = 20       # px from screen edge triggers snap
-_ART_MARGIN = 6                 # breathing room around the unrotated art
 # Head-heavy center of mass. In art-frame y-fraction: 0.0 is the crown,
 # 1.0 is the feet. 0.30 puts the COM in the chest/upper-torso region —
 # so grabs at the geometric center still have a lever arm (the body
@@ -172,13 +171,11 @@ class BuddyWindow(QWidget):
         # top-center so the default hang matches the pre-swing-it look.
         self._pivot_art: tuple[float, float] = (0.0, 0.0)
         # Set inside _recompute_geometry.
-        self._art_offset: tuple[int, int] = (0, 0)
         self._pivot_widget: tuple[int, int] = (0, 0)
 
         self._measure_cells()
         # Default pivot = art top-center (between the antennae).
         self._pivot_art = (self._art_w / 2.0, 0.0)
-        self._recompute_geometry()
 
         length = self._pendulum_length(self._pivot_art)
         self._sim = PendulumSimulator(
@@ -186,6 +183,8 @@ class BuddyWindow(QWidget):
             length=length,
             config=physics_config,
         )
+        # _recompute_geometry reads _sim.theta, so order matters here.
+        self._recompute_geometry()
         self._move_to_pivot()
 
         self._drag_active = False
@@ -295,33 +294,42 @@ class BuddyWindow(QWidget):
         return math.atan2(dx, dy)
 
     def _recompute_geometry(self) -> None:
-        """Size the widget to fit the art rotated any amount around the
-        current pivot, and cache the art-draw offset + widget-local pivot
-        coord. Called on init, on ``set_frame``, and on every press when
-        the pivot changes."""
+        """Size the widget to the AABB of the *rotated* art at the
+        current body angle, then place the pivot inside the widget so
+        the rotated corners just fit. At rest (θ = 0, default head
+        pivot) this collapses to exactly art_w × art_h with no padding;
+        during a swing the AABB grows so the painter never clips."""
+        angle_deg = math.degrees(
+            self._sim.theta + self._angle_of_com_offset(),
+        )
         px, py = self._pivot_art
-        # Furthest art corner from pivot — rotation around pivot reaches
-        # no further than this, so padding by this amount on all sides
-        # guarantees the rotated art never clips.
+        # Rotate art corners around pivot_art using Qt's own transform
+        # so the AABB matches what paintEvent will draw.
+        rot = QTransform()
+        rot.translate(px, py)
+        rot.rotate(angle_deg)
+        rot.translate(-px, -py)
         corners = (
-            (0.0, 0.0),
-            (float(self._art_w), 0.0),
-            (0.0, float(self._art_h)),
-            (float(self._art_w), float(self._art_h)),
+            rot.map(QPointF(0.0, 0.0)),
+            rot.map(QPointF(float(self._art_w), 0.0)),
+            rot.map(QPointF(0.0, float(self._art_h))),
+            rot.map(QPointF(float(self._art_w), float(self._art_h))),
         )
-        radius = max(
-            math.hypot(cx - px, cy - py) for cx, cy in corners
-        )
-        radius = max(radius, 1.0) + _ART_MARGIN
-        size = int(math.ceil(2 * radius))
-        pivot_widget_x = int(radius)
-        pivot_widget_y = int(radius)
-        self._art_offset = (
-            pivot_widget_x - int(px),
-            pivot_widget_y - int(py),
-        )
-        self._pivot_widget = (pivot_widget_x, pivot_widget_y)
-        self.resize(size, size)
+        xs = [p.x() for p in corners]
+        ys = [p.y() for p in corners]
+        # 1 px slack so antialiased glyph edges at AABB corners don't
+        # clip during rotation. Same convention as the click mask.
+        min_x = int(math.floor(min(xs))) - 1
+        min_y = int(math.floor(min(ys))) - 1
+        max_x = int(math.ceil(max(xs))) + 1
+        max_y = int(math.ceil(max(ys))) + 1
+        width = max(max_x - min_x, 1)
+        height = max(max_y - min_y, 1)
+        # pivot_widget shifts pivot_art so the rotated AABB sits at
+        # widget origin; _build_transform applied to the corners then
+        # lands them in [0, width] × [0, height].
+        self._pivot_widget = (int(px) - min_x, int(py) - min_y)
+        self.resize(width, height)
 
     def _move_to_pivot(self) -> None:
         """Position the top-left so ``_pivot_widget`` lands on the
@@ -454,33 +462,14 @@ class BuddyWindow(QWidget):
         return t
 
     def _update_click_mask(self) -> None:
-        """Restrict clickable area to the axis-aligned bounding box of
-        the rotated art. The widget rect is a rotation-padded square
-        that's much larger than the art itself; without a mask, the
-        transparent padding intercepts clicks and starves the chat dock
-        underneath (``event.ignore()`` on a top-level Qt window doesn't
-        fall through to sibling windows on macOS).
+        """Mask the buddy to its widget rect so clicks fall through to
+        whatever's behind any antialias slack. Since ``_recompute_geometry``
+        sizes the widget to the rotated-art AABB, the widget rect is
+        already the tightest legal mask — no per-tick corner math needed.
+        Without a mask, ``event.ignore()`` on a top-level Qt window
+        doesn't fall through to sibling windows on macOS.
         """
-        t = self._build_transform()
-        corners = (
-            t.map(QPointF(0.0, 0.0)),
-            t.map(QPointF(float(self._art_w), 0.0)),
-            t.map(QPointF(0.0, float(self._art_h))),
-            t.map(QPointF(float(self._art_w), float(self._art_h))),
-        )
-        xs = [p.x() for p in corners]
-        ys = [p.y() for p in corners]
-        # Pad by a pixel so antialiased glyph edges at the rotation-
-        # bounding corners stay inside the mask. No clamp to widget
-        # size: on macOS ``self.width()`` can report zero during the
-        # show cycle before the native window's backing store is sized,
-        # which collapses the mask to 1×1 and makes the buddy
-        # uninteractive. Qt clips regions that extend past the widget.
-        x = int(math.floor(min(xs))) - 1
-        y = int(math.floor(min(ys))) - 1
-        x2 = int(math.ceil(max(xs))) + 1
-        y2 = int(math.ceil(max(ys))) + 1
-        self.setMask(QRegion(QRect(x, y, max(x2 - x, 1), max(y2 - y, 1))))
+        self.setMask(QRegion(self.rect()))
 
     # --- Tick / timer ---------------------------------------------------
 
@@ -492,6 +481,7 @@ class BuddyWindow(QWidget):
             self._sim.tick(min(dt, 1.0 / 30.0))  # clamp dt to survive stalls
         # Rigid drag: θ was zeroed at drag start and snap_pivot keeps
         # the sim's velocity state quiescent — nothing to tick.
+        self._recompute_geometry()
         self._move_to_pivot()
         self._update_click_mask()
         # Rotation changed → repaint even if the widget didn't move.
