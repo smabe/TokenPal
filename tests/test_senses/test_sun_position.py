@@ -109,7 +109,7 @@ async def test_poll_emits_only_on_phase_transition():
         await sense.setup()
 
     events = _events(sunrise_h=6, sunset_h=18)
-    sense._cached_date = fixed_now.date()
+    sense._cached_date = fixed_now.astimezone(sense._solar_tz).date()
     sense._cached_events = events
 
     first = await sense.poll()
@@ -119,22 +119,36 @@ async def test_poll_emits_only_on_phase_transition():
 
 
 async def test_poll_emits_after_phase_change():
-    times = iter([
-        dt.datetime(2026, 4, 25, 12, 0, tzinfo=dt.UTC),
-        dt.datetime(2026, 4, 25, 17, 35, tzinfo=dt.UTC),
-    ])
+    t1 = dt.datetime(2026, 4, 25, 12, 0, tzinfo=dt.UTC)
+    t2 = dt.datetime(2026, 4, 25, 17, 35, tzinfo=dt.UTC)
+    times = iter([t1, t2])
     sense = SunPositionSense({}, now_fn=lambda: next(times))
     with patch(
         "tokenpal.config.loader.load_config", return_value=_config_with_weather(41.1, -74.0),
     ):
         await sense.setup()
-    sense._cached_date = dt.date(2026, 4, 25)
+    sense._cached_date = t1.astimezone(sense._solar_tz).date()
     sense._cached_events = _events(sunrise_h=6, sunset_h=18)
 
     first = await sense.poll()
     second = await sense.poll()
     assert first is not None and first.data["phase"] == "day"
     assert second is not None and second.data["phase"] == "golden_evening"
+
+
+async def test_poll_uses_observer_local_day_not_utc_day():
+    """Regression: at lon -74 the local 'Sunday evening dusk' is on Monday UTC.
+    Computing astral with date=UTC-day picks Saturday-evening's dusk, which
+    misclassifies Sunday-morning local time as night."""
+    sunday_morning_utc = dt.datetime(2026, 4, 26, 13, 5, tzinfo=dt.UTC)
+    sense = SunPositionSense({}, now_fn=lambda: sunday_morning_utc)
+    with patch(
+        "tokenpal.config.loader.load_config", return_value=_config_with_weather(41.1, -74.0),
+    ):
+        await sense.setup()
+    reading = await sense.poll()
+    assert reading is not None
+    assert reading.data["phase"] != "night"
 
 
 async def test_poll_returns_none_when_disabled():
@@ -165,4 +179,4 @@ def test_events_for_returns_none_at_polar_latitude():
         raise ValueError("no sun on this date")
 
     with patch("tokenpal.senses.sun_position.sense._astral_sun", raise_value_error):
-        assert sense._events_for(dt.date(2026, 6, 21)) is None
+        assert sense._events_for(dt.date(2026, 6, 21), dt.UTC) is None

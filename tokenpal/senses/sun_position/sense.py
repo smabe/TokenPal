@@ -79,6 +79,7 @@ class SunPositionSense(AbstractSense):
         super().__init__(config)
         self._now_fn = now_fn
         self._observer: Any = None
+        self._solar_tz: dt.tzinfo = dt.UTC
         self._cached_date: dt.date | None = None
         self._cached_events: dict[str, dt.datetime] | None = None
         self._prev_phase: Phase | None = None
@@ -98,6 +99,10 @@ class SunPositionSense(AbstractSense):
             return
 
         self._observer = LocationInfo(latitude=lat, longitude=lon).observer
+        # Solar tz from longitude (15 deg = 1 hour). Anchors astral's calendar
+        # day to the observer's actual day so dawn/dusk land in the right
+        # 24h window regardless of host timezone.
+        self._solar_tz = dt.timezone(dt.timedelta(hours=lon / 15.0))
         log.info("Sun position sense ready — %.1f, %.1f", lat, lon)
 
     async def poll(self) -> SenseReading | None:
@@ -105,7 +110,8 @@ class SunPositionSense(AbstractSense):
             return None
 
         now = self._now_fn()
-        events = self._events_for(now.date())
+        solar = now.astimezone(self._solar_tz)
+        events = self._events_for(solar.date(), self._solar_tz)
         if events is None:
             return None
 
@@ -124,12 +130,14 @@ class SunPositionSense(AbstractSense):
             confidence=1.0,
         )
 
-    def _events_for(self, date: dt.date) -> dict[str, dt.datetime] | None:
+    def _events_for(
+        self, date: dt.date, tzinfo: dt.tzinfo | None,
+    ) -> dict[str, dt.datetime] | None:
         if self._cached_date == date and self._cached_events is not None:
             return self._cached_events
         try:
             self._cached_events = _astral_sun(
-                self._observer, date=date, tzinfo=dt.UTC,
+                self._observer, date=date, tzinfo=tzinfo or dt.UTC,
             )
         except ValueError:
             # astral raises at extreme latitudes (polar day/night) — no events.
