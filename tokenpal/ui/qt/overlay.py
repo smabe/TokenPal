@@ -831,7 +831,7 @@ class QtOverlay(AbstractOverlay):
             return None
 
     def _buddy_world_rect_for_sim(self) -> QRectF | None:
-        if self._buddy is None:
+        if self._buddy is None or not self._buddy_user_visible:
             return None
         r = self._buddy.buddy_occlusion_rect_world()
         if r.width() <= 0 or r.height() <= 0:
