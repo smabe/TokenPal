@@ -72,7 +72,12 @@ class ChatDock(QWidget):
         # parent is NoFocus so tabbing or clicking the strip never pulls
         # activation.
         self._input.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        apply_drop_shadow(self._input, blur=10, offset=(0, 2))
+        apply_drop_shadow(
+            self._input,
+            blur=4,
+            offset=(0, 0),
+            color=QColor(0, 0, 0, 255),
+        )
         layout.addWidget(self._input, 0)
 
         self._status = QLabel("ready", self)
