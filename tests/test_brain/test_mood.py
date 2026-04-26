@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from unittest.mock import patch
 
-from tokenpal.brain.personality import Mood, PersonalityEngine, _ENUM_TO_ROLE
+from tokenpal.brain.personality import _ENUM_TO_ROLE, Mood, PersonalityEngine
 from tokenpal.tools.voice_profile import VoiceProfile
 
 

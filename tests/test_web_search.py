@@ -567,11 +567,11 @@ def test_search_many_routes_to_tavily_backend():
 
 def test_search_route_tavily_no_key_returns_empty():
     """The dispatcher shouldn't crash when routed to tavily with no key."""
-    from tokenpal.senses.web_search.client import search_many
-
     # TavilyBackend returns [] when api_key is empty — dispatcher passes
     # through cleanly.
     import os
+
+    from tokenpal.senses.web_search.client import search_many
     with patch.dict(os.environ, {}, clear=False):
         os.environ.pop("TOKENPAL_TAVILY_KEY", None)
         hits = search_many("q", backend="tavily", limit=3, tavily_api_key="")

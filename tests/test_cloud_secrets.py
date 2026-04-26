@@ -10,7 +10,6 @@ from pathlib import Path
 import pytest
 
 from tokenpal.config.secrets import (
-    clear_brave_key,
     clear_cloud_key,
     clear_tavily_key,
     fingerprint,

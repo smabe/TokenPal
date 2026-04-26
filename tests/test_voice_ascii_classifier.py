@@ -15,10 +15,10 @@ import pytest
 
 from tokenpal.tools import train_voice
 from tokenpal.tools.train_voice import (
+    _DEFAULT_CLASSIFICATION,
     _build_classifier_prompt,
     _classify_character_for_skeleton,
     _classify_via_cloud,
-    _DEFAULT_CLASSIFICATION,
     _parse_classification_json,
     _render_skeleton_frames,
 )

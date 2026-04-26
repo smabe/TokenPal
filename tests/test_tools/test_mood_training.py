@@ -8,12 +8,10 @@ from pathlib import Path
 
 from tokenpal.tools.train_voice import _parse_custom_moods
 from tokenpal.tools.voice_profile import (
-    VoiceProfile,
     load_profile,
     make_profile,
     save_profile,
 )
-
 
 # ---------------------------------------------------------------
 # _parse_custom_moods

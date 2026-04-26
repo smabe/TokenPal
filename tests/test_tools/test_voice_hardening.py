@@ -11,9 +11,8 @@ from tokenpal.tools.train_voice import (
     _validate_persona,
     audit_profile,
 )
-from tokenpal.util.text_guards import is_clean_english
 from tokenpal.tools.voice_profile import VoiceProfile, save_profile
-
+from tokenpal.util.text_guards import is_clean_english
 
 # ---------------------------------------------------------------
 # is_clean_english

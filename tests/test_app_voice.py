@@ -26,7 +26,6 @@ import pytest
 from tokenpal.app import _handle_voice_command
 from tokenpal.tools.voice_profile import VoiceProfile, save_profile
 
-
 # --- Fixtures ---------------------------------------------------------------
 
 

@@ -2,11 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from types import SimpleNamespace
-
-import pytest
-
 from tokenpal.senses.filesystem_pulse.sense import (
     _BURST_THRESHOLD,
     FilesystemPulse,
