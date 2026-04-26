@@ -36,6 +36,12 @@ from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_cont
 from tokenpal.brain.idle_tools_m3 import LLMInitiatedRoller
 from tokenpal.brain.intent import DriftSignal, IntentStore
 from tokenpal.brain.memory import MemoryStore
+from tokenpal.brain.news_buffer import (
+    NEWS_SOURCES,
+    NewsBuffer,
+    NewsItem,
+    extract_news_items,
+)
 from tokenpal.brain.observation_enricher import ObservationEnricher
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
@@ -235,6 +241,7 @@ class Brain:
         personality: PersonalityEngine,
         status_callback: Callable[[str], None] | None = None,
         mood_callback: Callable[[str], None] | None = None,
+        news_callback: Callable[[list[NewsItem]], None] | None = None,
         memory: MemoryStore | None = None,
         actions: list[AbstractAction] | None = None,
         poll_interval_s: float = 2.0,
@@ -286,6 +293,8 @@ class Brain:
         self._personality = personality
         self._status_callback = status_callback
         self._mood_callback = mood_callback
+        self._news_callback = news_callback
+        self._news_buffer = NewsBuffer()
         self._last_mood_role: str = self._personality.mood_role
         self._memory = memory
         self._last_recorded_app: str = ""
@@ -597,6 +606,7 @@ class Brain:
                 readings = await self._poll_all_senses()
                 if readings:
                     self._context.ingest(readings)
+                    self._dispatch_news(readings)
 
                 snapshot = self._context.snapshot()
                 log.debug("Context: %s", snapshot.replace("\n", " | "))
@@ -728,6 +738,23 @@ class Brain:
                 log.exception("Error in brain loop")
 
             await asyncio.sleep(self._poll_interval)
+
+    def _dispatch_news(self, readings: list[SenseReading]) -> None:
+        if self._news_callback is None:
+            return
+        items: list[NewsItem] = []
+        for r in readings:
+            if r.sense_name in NEWS_SOURCES:
+                items.extend(extract_news_items(r))
+        if not items:
+            return
+        new = self._news_buffer.add(items)
+        if not new:
+            return
+        try:
+            self._news_callback(new)
+        except Exception:
+            log.exception("news_callback raised")
 
     async def _poll_all_senses(self) -> list[SenseReading]:
         now = time.monotonic()

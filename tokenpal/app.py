@@ -305,6 +305,7 @@ def main() -> None:
                 lambda: overlay.set_mood(role)
             )
         ),
+        news_callback=overlay.add_news_items,
         memory=memory,
         actions=actions,
         poll_interval_s=config.brain.poll_interval_s,
