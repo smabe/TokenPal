@@ -10,12 +10,16 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtGui import QKeySequence, QMouseEvent, QShortcut
-from PySide6.QtWidgets import QLabel, QWidget
+from PySide6.QtGui import QColor, QKeySequence, QMouseEvent, QPainter, QPaintEvent, QShortcut
+from PySide6.QtWidgets import QLabel, QSizeGrip, QWidget
 
 from tokenpal.ui.qt._text_fx import apply_drop_shadow, glass_button_stylesheet
 
 DRAG_HANDLE_HEIGHT = 22
+SIZE_GRIP_SIDE = 16
+GRIP_DOT_ROWS = 3
+GRIP_DOT_SPACING = 5
+GRIP_DOT_INSET = 3
 
 
 class DragHandle(QLabel):
@@ -65,6 +69,27 @@ class DragHandle(QLabel):
             return
         self._drag_offset = None
         event.accept()
+
+
+class GlassSizeGrip(QSizeGrip):
+    """``QSizeGrip`` with a soft-white dotted paint that fits the glass aesthetic."""
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.setFixedSize(SIZE_GRIP_SIDE, SIZE_GRIP_SIDE)
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+
+    def paintEvent(self, _event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor.fromRgbF(1.0, 1.0, 1.0, 0.4))
+        for row in range(GRIP_DOT_ROWS):
+            for col in range(GRIP_DOT_ROWS - row):
+                cx = SIZE_GRIP_SIDE - GRIP_DOT_INSET - col * GRIP_DOT_SPACING
+                cy = SIZE_GRIP_SIDE - GRIP_DOT_INSET - row * GRIP_DOT_SPACING
+                painter.drawEllipse(QPoint(cx, cy), 1, 1)
+        painter.end()
 
 
 def install_zoom_shortcuts(

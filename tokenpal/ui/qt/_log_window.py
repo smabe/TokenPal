@@ -27,7 +27,7 @@ from tokenpal.config.chatlog_writer import (
     clamp_background_opacity,
     normalize_hex_color,
 )
-from tokenpal.ui.qt._chrome import DragHandle, install_zoom_shortcuts
+from tokenpal.ui.qt._chrome import DragHandle, GlassSizeGrip, install_zoom_shortcuts
 from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
     glass_button_stylesheet,
@@ -103,6 +103,11 @@ class TranslucentLogWindow(QWidget):
         self._hide_button.clicked.connect(self._handle_hide_clicked)
         row.addWidget(self._hide_button, 0, Qt.AlignmentFlag.AlignLeft)
         row.addStretch(1)
+        self._size_grip = GlassSizeGrip(self)
+        row.addWidget(
+            self._size_grip, 0,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom,
+        )
         layout.addLayout(row)
 
     def _handle_hide_clicked(self) -> None:

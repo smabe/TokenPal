@@ -15,7 +15,9 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from tokenpal.ui.qt._chrome import GlassSizeGrip  # noqa: E402
 from tokenpal.ui.qt.chat_window import ChatHistoryWindow  # noqa: E402
+from tokenpal.ui.qt.news_window import NewsHistoryWindow  # noqa: E402
 from tokenpal.ui.qt.speech_bubble import (  # noqa: E402
     _BUBBLE_BG_ALPHA,
     SpeechBubble,
@@ -97,6 +99,17 @@ def test_bubble_set_background_color_keeps_fixed_alpha(
     ) == (0x44, 0x55, 0x66)
     # Bubble alpha is decoupled from the chat_log opacity slider.
     assert bubble._bg_color.alpha() == _BUBBLE_BG_ALPHA
+
+
+def test_log_windows_have_resize_grip(qapp: QApplication) -> None:
+    # QSizeGrip mouseMove routes through startSystemResize; not synchronous
+    # cross-platform, so we assert programmatic resize instead.
+    for win in (ChatHistoryWindow(), NewsHistoryWindow()):
+        grip = win.findChild(GlassSizeGrip)
+        assert grip is not None
+        win.resize(640, 480)
+        assert win.size().width() == 640
+        assert win.size().height() == 480
 
 
 def test_bubble_set_font_color_normalizes(qapp: QApplication) -> None:
