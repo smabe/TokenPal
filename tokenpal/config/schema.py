@@ -27,6 +27,7 @@ class SensesConfig:
     filesystem_pulse: bool = False
     lobsters: bool = False
     github_trending: bool = False
+    sun_position: bool = False
 
 
 @dataclass

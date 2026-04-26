@@ -24,9 +24,11 @@ Per sense (mirror `tokenpal/senses/world_awareness/` shape):
 - `tokenpal/senses/github_trending/_client.py` — new
 
 Cross-cutting:
-- `tokenpal/config/schema.py` — add 3 fields to `SensesConfig` (default False)
-- `config.default.toml` — add 3 lines under `[senses]` (default false, with one-line opt-in comment)
-- `config.toml` — add 3 lines (set to true, since user wants them on)
+- `tokenpal/config/schema.py` — add 3 fields to `SensesConfig` (default False) + new `SunPositionConfig` dataclass
+- `tokenpal/config/loader.py` — register `[sun_position]` → `SunPositionConfig` in `_SECTION_MAP`
+- `tokenpal/app.py` — wire `sense_configs["sun_position"]` from `config.sun_position` (mirror weather)
+- `config.default.toml` — add 3 lines under `[senses]` (default false, with one-line opt-in comment) + commented-out `[sun_position]` block
+- `config.toml` — add 3 lines (set to true, since user wants them on) + `[sun_position]` lat/lon
 - `tokenpal/brain/orchestrator.py` — add 3 entries to `_TOPIC_FOCUS_HINTS`
 
 Tests:
@@ -60,4 +62,12 @@ Tests:
 Each phase: code → /simplify → tests → commit → push (the user has standing approval for these via the auto-mode pattern).
 
 ## Parking lot
-(empty)
+- **`run_in_executor` for keyless polling senses** — efficiency review flagged
+  that `http_json` blocks the asyncio loop. Pattern-wide (all three new senses
+  + world_awareness all do it). Worth one cross-cutting wrap at the
+  `tokenpal/util/http_json.py` layer rather than per-sense. File as issue when
+  this plan ships.
+- ~~Shared `[location]` config block~~ — RESOLVED in phase 3 simplify pass:
+  sun_position reads `config.weather.latitude/longitude` directly via the same
+  `load_config()` pattern that `actions/utilities/sunrise_sunset.py` uses. No
+  duplication, no new config table.
