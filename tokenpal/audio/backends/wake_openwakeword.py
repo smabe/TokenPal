@@ -75,28 +75,39 @@ class OpenWakeWordBackend(WakeWordBackend):
     async def warmup(self) -> None:
         if self._model is not None:
             return
-        if not self.models_present():
-            raise FileNotFoundError(
-                f"OpenWakeWord model {self._model_name!r} missing under "
-                f"{self._wake_dir}. Run /voice-io install to fetch it.",
-            )
+        for required in (
+            self.model_path,
+            self._wake_dir / "melspectrogram.onnx",
+            self._wake_dir / "embedding_model.onnx",
+        ):
+            if not required.exists():
+                raise FileNotFoundError(
+                    f"OpenWakeWord file missing: {required}. "
+                    f"Run /voice-io install to fetch it.",
+                )
 
-        # Lazy import — top-level import would trip the modularity
-        # contract for any caller that walked the backends package.
         from openwakeword.model import Model
 
-        # openwakeword renamed the constructor kwarg between versions:
-        # older builds use ``wakeword_model_paths=``, current uses
-        # ``wakeword_models=``. Try current first; TypeError → legacy.
+        # openwakeword's Model() defaults the shared melspec + embedding
+        # paths to its own package's resources/models/ dir, which is
+        # empty by default — the package ships without bundled weights.
+        # Pass explicit paths so it loads from <data_dir>/audio/wakeword/.
+        common_kwargs: dict[str, object] = {
+            "inference_framework": "onnx",
+            "melspec_model_path": str(self._wake_dir / "melspectrogram.onnx"),
+            "embedding_model_path": str(self._wake_dir / "embedding_model.onnx"),
+        }
+        # openwakeword renamed wakeword_models / wakeword_model_paths
+        # between versions; try current name first, fall back on TypeError.
         try:
             self._model = Model(
                 wakeword_models=[str(self.model_path)],
-                inference_framework="onnx",
+                **common_kwargs,
             )
         except TypeError:
             self._model = Model(
                 wakeword_model_paths=[str(self.model_path)],
-                inference_framework="onnx",
+                **common_kwargs,
             )
         log.debug(
             "openwakeword: warmed up %s (threshold=%.2f)",
