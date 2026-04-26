@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from tokenpal.brain.orchestrator import Brain, ConversationSession
-from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.brain.personality import _CONFUSED_QUIPS, PersonalityEngine
 from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
 
@@ -355,22 +355,89 @@ class TestBrainConversation:
         assert len(brain._conversation.history) == 2
         assert brain._conversation.history[1]["content"] == "[no response]"
 
-    async def test_reply_near_duplicate_suppressed(self):
-        """Two identical-enough replies in a row: second one swaps in a quip."""
+    async def test_reply_near_duplicate_triggers_retry_with_stripped_context(self):
+        """Near-dup in conv mode should retry the LLM with observation context
+        stripped (conv history preserved) and emit the retry's reply, not a
+        confused/offline quip."""
         dup = "Yeah buddy, sounds totally rad to me!"
-        llm = _MockLLM([dup, dup])
+        fresh = "Different reply that is plenty long for the filter to keep."
+        llm = _MockLLM([dup, dup, fresh])
         brain = _make_brain(llm=llm)
 
+        # Inject a recognizable context sentinel so we can verify the retry
+        # call drops observation context but keeps conv history.
+        sentinel = "SENTINEL_APP_NAME_FOR_RETRY_ASSERT"
+        brain._context.ingest([
+            MagicMock(
+                sense_name="app_awareness",
+                summary=f"App: {sentinel}",
+                confidence=1.0,
+                timestamp=time.monotonic(),
+                changed_from=None,
+            )
+        ])
+
         await brain._handle_user_input("say that thing")
         await brain._handle_user_input("say that thing")
 
+        # Three LLM calls: turn1, turn2-initial, turn2-retry.
+        assert len(llm.calls) == 3, (
+            f"expected 3 LLM calls (turn1, turn2-initial, turn2-retry), got {len(llm.calls)}"
+        )
+
+        # Turn 2's initial call should include the sentinel (observation context).
+        turn2_initial_blob = "\n".join(m["content"] for m in llm.calls[1]["messages"])
+        assert sentinel in turn2_initial_blob, "turn2 initial call should carry observation context"
+
+        # Turn 2's retry call should NOT include the sentinel (context stripped on retry)…
+        retry_messages = llm.calls[2]["messages"]
+        retry_blob = "\n".join(m["content"] for m in retry_messages)
+        assert sentinel not in retry_blob, "retry call should strip observation context"
+
+        # …but conv history (turn 1's user message and assistant reply) MUST still be there.
+        retry_contents = [m["content"] for m in retry_messages]
+        assert "say that thing" in retry_contents, "retry call should keep user history"
+        assert dup in retry_contents, "retry call should keep assistant history"
+
+        # The fresh retry reply lands as turn 2's assistant turn.
         assert brain._conversation is not None
-        # Four history turns: user, assistant(dup), user, assistant(quip).
         assert len(brain._conversation.history) == 4
         assert brain._conversation.history[1]["content"] == dup
-        assert brain._conversation.history[3]["content"] != dup
-        # Successful reply landed in _recent_outputs so the gate can see it.
+        assert brain._conversation.history[3]["content"] == fresh
+        # Original successful reply is still in the shared deque so observation
+        # paths remain aware of what the buddy said in conversation.
         assert dup in brain._recent_outputs
+
+    async def test_retry_also_near_duplicate_emits_retry_reply_anyway(self):
+        """If the retry's reply ALSO trips near-dup, emit it anyway. No
+        fall-through to _CONFUSED_QUIPS / offline-style quips."""
+        dup = "Yeah buddy, sounds totally rad to me!"
+        # All three responses near-dup with each other → retry can't escape the lock.
+        llm = _MockLLM([dup, dup, dup])
+        brain = _make_brain(llm=llm)
+        ui = brain._ui_callback
+
+        await brain._handle_user_input("hey buddy")
+        await brain._handle_user_input("hey buddy")
+
+        # Three calls: turn1, turn2-initial, turn2-retry. No infinite loop.
+        assert len(llm.calls) == 3
+
+        # User-visible output for turn 2 is the retry's reply (emitted anyway),
+        # NOT a hardcoded confused quip.
+        last_emitted = ui.call_args_list[-1][0][0]
+        assert last_emitted not in _CONFUSED_QUIPS, (
+            f"retry-also-near-dup should emit retry reply, "
+            f"not a confused quip; got {last_emitted!r}"
+        )
+        assert last_emitted == dup, (
+            f"expected retry reply emitted anyway, got {last_emitted!r}"
+        )
+
+        # History records the retry reply as the assistant turn.
+        assert brain._conversation is not None
+        assert len(brain._conversation.history) == 4
+        assert brain._conversation.history[3]["content"] == dup
 
     async def test_failed_generation_removes_user_turn(self):
         class _FailLLM(_MockLLM):

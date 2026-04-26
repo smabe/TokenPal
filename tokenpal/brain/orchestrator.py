@@ -170,6 +170,13 @@ _PREFIX_LOCK_TOKEN_COUNT = 3
 _PREFIX_LOCK_MIN_MATCHES = 3
 _RECENT_OUTPUTS_MAX = 10
 
+# Appended to the conversation system message when retrying after a near-dup
+# trip. Observation context is stripped on the retry to break the lock.
+_RETRY_NEAR_DUP_INSTRUCTION = (
+    "\n\nIMPORTANT: Your previous reply was too similar to recent output. "
+    "Rephrase with fresh wording. Avoid the opening structure you just used."
+)
+
 class BrainMode(StrEnum):
     """Heavyweight mode of the brain. Conversation isn't a mode because it
     carries history state on ``_conversation`` rather than a flag."""
@@ -2689,12 +2696,24 @@ class Brain:
 
             filtered = self._personality.filter_conversation_response(reply_text)
             if filtered and self._is_near_duplicate(filtered):
-                log.info("TokenPal (reply suppressed near-duplicate): %s", filtered)
-                quip = self._personality.get_confused_quip()
-                self._conversation.add_assistant_turn(quip)
-                await _emit_reply(quip)
-                self._last_comment_time = time.monotonic()
-                return
+                log.info("TokenPal (reply near-duplicate, retrying): %s", filtered)
+                retry_messages: list[dict[str, Any]] = [
+                    {"role": "system", "content": system_msg + _RETRY_NEAR_DUP_INSTRUCTION},
+                    *self._conversation.history[:-1],
+                    {"role": "user", "content": user_message},
+                ]
+                retry_text = await self._reply_with_continuation(
+                    retry_messages, effective_max_tokens,
+                )
+                retry_filtered = self._personality.filter_conversation_response(retry_text)
+                filtered = retry_filtered
+                if retry_filtered and self._is_near_duplicate(retry_filtered):
+                    log.info(
+                        "TokenPal (reply retry-also-near-duplicate, emitting anyway): %s",
+                        retry_filtered,
+                    )
+                elif not retry_filtered:
+                    log.debug("Retry response filtered out: %r", retry_text[:80])
             if filtered:
                 char_cap = effective_max_tokens * 4 * (self._MAX_CONTINUATIONS + 1)
                 if len(filtered) > char_cap:
