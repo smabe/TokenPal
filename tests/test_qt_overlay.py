@@ -167,6 +167,41 @@ def test_history_window_hidden_by_default(qapp: QApplication) -> None:
         overlay.teardown()
 
 
+def test_news_window_mirrors_chat_styling(qapp: QApplication) -> None:
+    """Font / background opacity / background color / font color setters
+    are shared between the chat history window and the news history
+    window — both should react to the same setter calls."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._history is not None
+        assert overlay._news is not None
+
+        overlay.set_chat_history_opacity(0.42)
+        overlay.set_chat_history_background_color("#112233")
+        overlay.set_chat_history_font_color("#aabbcc")
+        # Drain the queued UI-thread dispatches.
+        _pump(qapp, ms=20)
+
+        assert overlay._history._background_opacity == pytest.approx(0.42)
+        assert overlay._news._background_opacity == pytest.approx(0.42)
+        assert overlay._history._background_color.name() == "#112233"
+        assert overlay._news._background_color.name() == "#112233"
+        assert overlay._history._font_color == "#aabbcc"
+        assert overlay._news._font_color == "#aabbcc"
+
+        from tokenpal.config.schema import FontConfig
+        overlay.set_chat_font(FontConfig(family="Menlo", size_pt=18))
+        _pump(qapp, ms=20)
+
+        history_font = overlay._history._log.font()
+        news_font = overlay._news._log.font()
+        assert history_font.pointSize() == news_font.pointSize() == 18
+        assert history_font.family() == news_font.family() == "Menlo"
+    finally:
+        overlay.teardown()
+
+
 def test_toggle_chat_log_flips_history_visibility(qapp: QApplication) -> None:
     """toggle_chat_log alternates the history window's hidden state.
 

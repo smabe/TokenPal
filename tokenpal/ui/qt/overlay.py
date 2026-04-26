@@ -639,12 +639,16 @@ class QtOverlay(AbstractOverlay):
         def apply() -> None:
             if self._history is not None:
                 self._history.set_background_opacity(opacity)
+            if self._news is not None:
+                self._news.set_background_opacity(opacity)
         self._post(apply)
 
     def set_chat_history_background_color(self, hex_color: str) -> None:
         def apply() -> None:
             if self._history is not None:
                 self._history.set_background_color(hex_color)
+            if self._news is not None:
+                self._news.set_background_color(hex_color)
             if self._bubble is not None:
                 self._bubble.set_background_color(hex_color)
         self._post(apply)
@@ -653,6 +657,8 @@ class QtOverlay(AbstractOverlay):
         def apply() -> None:
             if self._history is not None:
                 self._history.set_font_color(hex_color)
+            if self._news is not None:
+                self._news.set_font_color(hex_color)
             if self._bubble is not None:
                 self._bubble.set_font_color(hex_color)
         self._post(apply)
@@ -679,6 +685,8 @@ class QtOverlay(AbstractOverlay):
             self._dock.apply_font(font)
         if self._history is not None:
             self._history.apply_font(font)
+        if self._news is not None:
+            self._news.apply_font(font)
 
     def _apply_bubble_font_live(self) -> None:
         if self._bubble is not None:

@@ -99,7 +99,7 @@ arrive, in-memory only, with clickable URLs. Toggleable from the tray.
   `_rebuild_background_brush` / `_apply_log_stylesheet` / `_trim_to_cap`
   are ~95% identical between the two windows, ~55 lines total. Surfaced
   by phase-2 simplify pass; deferred because it's a separate refactor.
-- Wire news-window opacity / bg / font-color setters through
-  `AbstractOverlay` + `OptionsDialog` so the news window shares the
-  chat panel's user-tunable styling. Currently the methods exist on
-  `NewsHistoryWindow` but no UI plumbs them.
+- ~~Wire news-window opacity / bg / font-color setters through the
+  chat panel's user-tunable styling~~ — done as a follow-up: the news
+  window now mirrors `set_chat_history_*` and `set_chat_font` directly
+  in `QtOverlay`. Single set of OptionsDialog controls drives both.
