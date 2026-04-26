@@ -57,7 +57,7 @@ Load the relevant doc on demand rather than reading all of them.
 - During active conversations, user messages are held in memory (not saved to disk) until the session times out (~2 min of silence). Conversation buffer is cleared on sensitive app detection. User input truncated to 30 chars in log output
 - Log files and memory.db at 0o600 (owner-only)
 - Music track names redacted from DEBUG logs
-- Network senses/commands — all opt-in, all keyless by default: `weather` (Open-Meteo), `world_awareness` (HN Algolia), `/ask` (DuckDuckGo + Wikipedia; Brave via `TOKENPAL_BRAVE_KEY` env var stubbed). All untrusted external text wrapped in delimiters + filtered via `contains_sensitive_term` before any prompt composition. `/ask` shows an explicit first-use consent warning; queries never persisted to disk
+- Network senses/commands — all opt-in, all keyless by default: `weather` (Open-Meteo), `world_awareness` (HN Algolia), `lobsters` (lobste.rs hottest), `github_trending` (GitHub Search API), `/ask` (DuckDuckGo + Wikipedia; Brave via `TOKENPAL_BRAVE_KEY` env var stubbed). All keyless polling routes through `tokenpal/util/http_json.py`. All untrusted external text wrapped in delimiters + filtered via `contains_sensitive_term` before any prompt composition. `/ask` shows an explicit first-use consent warning; queries never persisted to disk
 - Lat/lon rounded to 1 decimal. No ip-api.com. No clipboard monitoring
 - Audio I/O is opt-in via `[audio]` toggles, both default off. Voice conversation requires `AUDIO_INPUT` + `AUDIO_OUTPUT` consent; ambient narration requires `AUDIO_OUTPUT` only and never opens a mic. No cloud STT/TTS — all audio stays local
 
