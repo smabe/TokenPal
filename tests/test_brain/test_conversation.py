@@ -442,7 +442,7 @@ class TestBrainConversation:
     async def test_observation_in_shared_deque_does_not_poison_conv_reply(self):
         """Observations live in `_recent_outputs`. A first conversation reply
         that happens to match a recent observation must NOT trip the conv
-        suppression check — the conv path reads from its own isolated window."""
+        suppression check; the conv path reads from its own isolated window."""
         observation_template = "Yeah buddy, sounds totally rad to me!"
         # Pre-load the SHARED deque (as if an observation said this 2 minutes ago).
         llm = _MockLLM([observation_template])
@@ -453,7 +453,7 @@ class TestBrainConversation:
 
         await brain._handle_user_input("hey buddy")
 
-        # Only one LLM call — no retry triggered, because the conv check reads
+        # Only one LLM call. No retry triggered because the conv check reads
         # from `_conversation_recent_outputs`, which is empty.
         assert len(llm.calls) == 1
         ui = brain._ui_callback

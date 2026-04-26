@@ -343,7 +343,7 @@ class Brain:
         # Near-duplicate guard — drops observation/freeform lines that rhyme
         # too closely with recent output (prevents prompt-cache template lock-in).
         self._recent_outputs: deque[str] = deque(maxlen=_RECENT_OUTPUTS_MAX)
-        # Conv-only mirror — observation pollution would make a fresh chat reply
+        # Conv-only mirror. Observation pollution would make a fresh chat reply
         # look like a duplicate, so the conv suppression check reads from here.
         self._conversation_recent_outputs: deque[str] = deque(
             maxlen=_CONV_RECENT_OUTPUTS_MAX

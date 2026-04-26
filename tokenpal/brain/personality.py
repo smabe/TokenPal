@@ -1307,7 +1307,7 @@ class PersonalityEngine:
         if self.is_finetuned:
             return (
                 "You are in RESPONSE mode. Reply to the user's last message. "
-                "Do NOT narrate the background context — that's for your awareness, "
+                "Do NOT narrate the background context; it's for your awareness, "
                 "not something to comment on.\n\n"
                 "The user is talking to you directly. Respond in character.\n\n"
                 "Rules:\n"
