@@ -64,9 +64,10 @@ _DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
 _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
 # Park position for the real ``ChatDock`` while the swing-mock is up.
 # Off-screen but alive — hiding the NSWindow instead was breaking the
-# QLineEdit focus chain on macOS.
-_DOCK_PARK_X = -20000
-_DOCK_PARK_Y = -20000
+# QLineEdit focus chain on macOS. Windows clamps window coords at
+# ±32767; stay well inside that to avoid QWindowsWindow warnings.
+_DOCK_PARK_X = -10000
+_DOCK_PARK_Y = -10000
 
 # Stable registry keys for the overlay's toggleable log windows.
 # These names go to disk via UiState, so don't rename without a

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import sys
 
+from tokenpal.util.platform import current_platform
+
 
 def ensure_qapplication(existing: object | None = None) -> object:
     """Return the live ``QApplication`` — reuse if the caller supplied one,
@@ -31,4 +33,13 @@ def ensure_qapplication(existing: object | None = None) -> object:
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough,
     )
+    # The "windows11" style (PySide6 6.9+) paints opaque widget
+    # backgrounds that bleed through WA_TranslucentBackground, giving
+    # every frameless overlay a visible gray bounding box. Fusion
+    # respects the alpha channel correctly. Only override when the user
+    # hasn't already requested a style via the command line.
+    if current_platform() == "windows" and not any(
+        a.startswith(("-style", "--style")) for a in sys.argv
+    ):
+        QApplication.setStyle("fusion")
     return QApplication(sys.argv)

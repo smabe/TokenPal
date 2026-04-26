@@ -29,7 +29,7 @@ if ($env:TOKENPAL_FORCE_SYNC -eq "1") {
 }
 
 if ($needsSync) {
-    $extras = if ($env:TOKENPAL_EXTRAS) { $env:TOKENPAL_EXTRAS } else { "windows,dev" }
+    $extras = if ($env:TOKENPAL_EXTRAS) { $env:TOKENPAL_EXTRAS } else { "windows,desktop,dev" }
     Write-Host "Syncing tokenpal[$extras]..." -ForegroundColor Yellow
     & $Pip install -e "$ScriptDir[$extras]" --quiet
     if ($LASTEXITCODE -eq 0) {
