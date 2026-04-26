@@ -492,6 +492,10 @@ class AudioConfig:
     # installer; fp16 is the quality-leaning default elsewhere.
     kokoro_quantization: Literal["int8", "fp16", "fp32"] = "fp16"
     wakeword_backend: str = "openwakeword"
+    # OpenWakeWord-side stem (matches the .onnx filename stem under
+    # <data_dir>/audio/wakeword/). "hey_jarvis" is the stock placeholder;
+    # swap to "hey_tokenpal" once tools/wakeword-training/ produces one.
+    wakeword_model_name: str = "hey_jarvis"
     wakeword_threshold: float = 0.7
     # Silero VAD probability threshold. Lower for low-amplitude mics
     # (network KVM, USB conferencing, distant lavalier) where speech

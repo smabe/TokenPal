@@ -26,11 +26,11 @@ _SILENT_MARKERS = ["[SILENT]", "[silent]", "SILENT"]
 _MAX_RUNNING_BITS = 3
 
 
-class FilterReason(str, enum.Enum):
+class FilterReason(enum.StrEnum):
     """Why filter_response dropped (or kept) a response.
 
-    Inherits from str so .value is usable wherever a stable string key
-    is needed (telemetry JSON, log lines) without `.value` boilerplate.
+    StrEnum: .value usable wherever a stable string key is needed
+    (telemetry JSON, log lines) without `.value` boilerplate.
     """
 
     OK = ""

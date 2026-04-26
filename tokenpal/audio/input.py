@@ -62,7 +62,7 @@ class InputPipeline:
 
         self._wake: WakeWordBackend = OpenWakeWordBackend(
             data_dir,
-            model_name="hey_jarvis",
+            model_name=config.wakeword_model_name,
             threshold=config.wakeword_threshold,
         )
         self._vad = SileroVAD(data_dir, threshold=config.vad_threshold)

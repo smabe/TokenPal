@@ -65,8 +65,8 @@ All writes go through `tokenpal/config/audio_writer.py:set_audio_field` and upda
 ## Modularity contract (`tests/test_audio/test_modularity.py`)
 Ambient-only boot (`voice_conversation_enabled=False, speak_ambient_enabled=True`) must NOT import `pyaudio`, `openwakeword`, `faster_whisper`. Anti-test: voice-on under the same blocker MUST fail. `sounddevice` is intentionally NOT in the blocker — its `OutputStream` is the ambient sink. The blocker plus `missing_deps(include_input=False)` split keeps spec-finder probes from tripping the contract on innocent presence-checks.
 
-## Custom activation — status: `hey_jarvis` placeholder
-Currently boots with the stock `hey_jarvis_v0.1.onnx` from openWakeWord's release. Custom-trained `hey_tokenpal.onnx` has not landed. To train: see `tools/wakeword-training/README.md` (Colab notebook, ~1h on free T4). Once trained, drop the .onnx into `~/.tokenpal/audio/wakeword/` and set `wakeword_model = "hey_tokenpal"` (config field doesn't exist yet — `OpenWakeWordBackend.__init__` takes `model_name` and the input pipeline currently hardcodes `"hey_jarvis"` at `tokenpal/audio/input.py`; a one-line config wire-up is the only blocker on the runtime side).
+## Custom activation — status: `hey_jarvis` placeholder, runtime ready
+Currently defaults to the stock `hey_jarvis_v0.1.onnx` from openWakeWord's release. `[audio] wakeword_model_name` is config-driven — the runtime is ready for any custom model. To train `hey_tokenpal`: see `tools/wakeword-training/README.md` (Colab notebook, ~1h on free T4). After training, drop the .onnx into `~/.tokenpal/audio/wakeword/` and set `wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml` under `[audio]`.
 
 ## Known limitations
 - Live-toggle of voice mode requires restart — `start_input` / `stop_input` exist but the orchestrator only calls `start_input` once at brain bootup.

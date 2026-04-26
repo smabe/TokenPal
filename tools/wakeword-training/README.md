@@ -14,7 +14,7 @@ The upstream maintainer ships a Google Colab notebook that trains a wakeword mod
 2. Set `target_phrase = "hey tokenpal"`. Default training params (`n_samples=2000`, `steps=10000`) produce a usable model with 5-15% FRR and 1-3 false-fires/hour at threshold 0.7. For tighter results scale to `n_samples=30000`, `steps=50000` (~3-4h on T4).
 3. Run all cells. Download the resulting `hey_tokenpal.onnx`.
 4. Drop the file at `~/.tokenpal/audio/wakeword/hey_tokenpal.onnx`.
-5. Set `[audio] wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml`. (One-line wire-up needed in `tokenpal/audio/input.py` — the model name is currently hardcoded; see `OpenWakeWordBackend(data_dir, model_name=..., ...)`.)
+5. Set `[audio] wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml`.
 6. Restart the buddy. `tokenpal --validate` should now show `wakeword + VAD models present`. Say "hey tokenpal" — log line `voice: wake (hey_tokenpal @ 0.XX)` confirms it fires.
 
 ## Quality expectations (synthetic-data baseline)

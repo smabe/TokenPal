@@ -346,6 +346,8 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 # kokoro_quantization = "fp16"
 #
 # wakeword_backend = "openwakeword"
+# wakeword_model_name = "hey_jarvis"   # filename stem under
+#                                       # <data_dir>/audio/wakeword/
 # wakeword_threshold = 0.7
 # vad_threshold = 0.5        # lower for low-amplitude mics (network KVM,
 #                            # USB conferencing). 0.3 is a safe floor.

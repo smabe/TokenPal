@@ -16,19 +16,19 @@ def hex_to_hue_bucket(hex_str: str) -> str:
     """
     h = hex_str.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    m, M = min(r, g, b), max(r, g, b)
-    if M - m < 25:
-        if M > 220:
+    lo, hi = min(r, g, b), max(r, g, b)
+    if hi - lo < 25:
+        if hi > 220:
             return "white"
-        if M < 40:
+        if hi < 40:
             return "black"
         return "gray"
-    if M == r:
-        hue = (60 * (g - b) / (M - m)) % 360
-    elif M == g:
-        hue = 60 * (b - r) / (M - m) + 120
+    if hi == r:
+        hue = (60 * (g - b) / (hi - lo)) % 360
+    elif hi == g:
+        hue = 60 * (b - r) / (hi - lo) + 120
     else:
-        hue = 60 * (r - g) / (M - m) + 240
+        hue = 60 * (r - g) / (hi - lo) + 240
     if hue < 15 or hue >= 345:
         return "red"
     if hue < 45:
