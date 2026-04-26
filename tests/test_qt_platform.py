@@ -170,11 +170,17 @@ def test_wayland_warning_silent_off_linux(
 def test_tray_click_does_not_toggle_buddy(qapp: QApplication) -> None:
     """Clicking the tray icon should only pop the menu — no direct
     toggle. The user explicitly picks Show/Hide from the menu."""
+    from tokenpal.ui.qt.tray import TrayWindow
+
     calls: list[int] = []
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
-        on_toggle_chat=lambda: None,
-        on_toggle_news=lambda: None,
+        windows=[
+            TrayWindow(
+                name="chat", show_label="Show chat log",
+                hide_label="Hide chat log", on_toggle=lambda: None,
+            ),
+        ],
         on_options=lambda: None,
         on_quit=lambda: None,
     )
@@ -191,16 +197,28 @@ def test_tray_chat_toggle_label_flips_with_visibility(
 ) -> None:
     """The 'Show chat' / 'Hide chat' menu label must track whatever the
     overlay reports, otherwise the menu lies about the current state."""
+    from tokenpal.ui.qt.tray import TrayWindow
+
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: None,
-        on_toggle_chat=lambda: None,
-        on_toggle_news=lambda: None,
+        windows=[
+            TrayWindow(
+                name="chat", show_label="Show chat log",
+                hide_label="Hide chat log", on_toggle=lambda: None,
+            ),
+            TrayWindow(
+                name="news", show_label="Show news",
+                hide_label="Hide news", on_toggle=lambda: None,
+            ),
+        ],
         on_options=lambda: None,
         on_quit=lambda: None,
     )
-    tray.set_chat_visible(True)
-    assert tray._toggle_chat_action.text() == "Hide chat log"
-    tray.set_chat_visible(False)
-    assert tray._toggle_chat_action.text() == "Show chat log"
+    tray.set_window_visible("chat", True)
+    assert tray._window_actions["chat"].text() == "Hide chat log"
+    tray.set_window_visible("chat", False)
+    assert tray._window_actions["chat"].text() == "Show chat log"
+    tray.set_window_visible("news", True)
+    assert tray._window_actions["news"].text() == "Hide news"
 
 

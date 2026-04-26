@@ -91,19 +91,19 @@ def test_dock_placement_follows_buddy_and_history_state(
         assert overlay._dock is not None
         assert overlay._history is not None
         assert not overlay._dock_docked
-        assert not overlay._history_user_visible
+        assert not overlay._user_visible.get("chat", False)
 
         # Buddy hidden + history still hidden → dock hides (state D).
         overlay._buddy_user_visible = False
         overlay._update_dock_placement()
         assert not overlay._dock_docked
-        assert not overlay._history_user_visible, (
+        assert not overlay._user_visible.get("chat", False), (
             "hiding buddy must not force history open"
         )
 
         # User opens history → dock embeds.
         overlay._do_toggle_chat()
-        assert overlay._history_user_visible
+        assert overlay._user_visible.get("chat", False)
         assert overlay._dock_docked, "dock should embed when buddy hidden + history shown"
         assert overlay._dock.parent() is overlay._history
 
@@ -112,7 +112,7 @@ def test_dock_placement_follows_buddy_and_history_state(
         overlay._update_dock_placement()
         assert not overlay._dock_docked
         assert overlay._dock.parent() is None
-        assert overlay._history_user_visible, (
+        assert overlay._user_visible.get("chat", False), (
             "showing buddy must not close history"
         )
     finally:

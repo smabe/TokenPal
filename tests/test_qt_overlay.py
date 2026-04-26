@@ -169,22 +169,22 @@ def test_history_window_hidden_by_default(qapp: QApplication) -> None:
 
 def test_news_toggle_persists_and_restores(qapp: QApplication) -> None:
     """Toggling the news window fires the persistence callback with the
-    new state, and restore_visibility_state honors news_visible across
-    a re-construct."""
+    new {name: visible} dict, and restore_visibility_state honors that
+    same dict across a re-construct."""
     overlay = QtOverlay(config={})
     overlay.setup()
-    saved: list[tuple[bool, bool, bool]] = []
+    saved: list[tuple[bool, dict[str, bool]]] = []
     overlay.set_ui_state_persist_callback(
-        lambda b, c, n: saved.append((b, c, n)),
+        lambda b, w: saved.append((b, dict(w))),
     )
     try:
-        overlay._do_toggle_news()
-        assert overlay._news_user_visible is True
-        assert saved[-1][2] is True
+        overlay._do_toggle_window("news")
+        assert overlay._user_visible["news"] is True
+        assert saved[-1][1]["news"] is True
 
-        overlay._do_toggle_news()
-        assert overlay._news_user_visible is False
-        assert saved[-1][2] is False
+        overlay._do_toggle_window("news")
+        assert overlay._user_visible["news"] is False
+        assert saved[-1][1]["news"] is False
     finally:
         overlay.teardown()
 
@@ -192,11 +192,38 @@ def test_news_toggle_persists_and_restores(qapp: QApplication) -> None:
     overlay2.setup()
     try:
         overlay2.restore_visibility_state(
-            buddy_visible=True, chat_log_visible=False, news_visible=True,
+            buddy_visible=True, windows={"chat": False, "news": True},
         )
-        assert overlay2._news_user_visible is True
+        assert overlay2._user_visible["news"] is True
     finally:
         overlay2.teardown()
+
+
+def test_arbitrary_window_can_be_registered(qapp: QApplication) -> None:
+    """The registry accepts any name; persistence + tray label sync
+    flow without code changes here. This is the load-bearing claim of
+    the refactor — adding a third window is a register call, not a
+    refactor."""
+    from tokenpal.ui.qt._log_window import TranslucentLogWindow
+
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[dict[str, bool]] = []
+    overlay.set_ui_state_persist_callback(lambda _b, w: saved.append(dict(w)))
+    try:
+        extra = TranslucentLogWindow(title="extra")
+        overlay._log_windows["extra"] = extra
+        overlay._user_visible.setdefault("extra", False)
+
+        overlay._do_toggle_window("extra")
+        assert overlay._user_visible["extra"] is True
+        assert saved[-1]["extra"] is True
+
+        overlay._do_toggle_window("extra")
+        assert overlay._user_visible["extra"] is False
+        assert saved[-1]["extra"] is False
+    finally:
+        overlay.teardown()
 
 
 def test_news_window_mirrors_chat_styling(qapp: QApplication) -> None:

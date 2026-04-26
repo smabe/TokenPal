@@ -6,13 +6,10 @@ import time
 from typing import Any
 from unittest.mock import MagicMock
 
-import pytest
-
 from tokenpal.brain.orchestrator import Brain, ConversationSession
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.config.schema import ConversationConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
-
 
 # ---------------------------------------------------------------------------
 # Helpers

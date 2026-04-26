@@ -30,6 +30,7 @@ from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
+from tokenpal.ui.qt._log_window import TranslucentLogWindow
 from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
@@ -45,7 +46,7 @@ from tokenpal.ui.qt.platform import (
     warn_wayland_limitations,
 )
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
-from tokenpal.ui.qt.tray import BuddyTrayIcon
+from tokenpal.ui.qt.tray import BuddyTrayIcon, TrayWindow
 from tokenpal.ui.qt.voice_dialog import VoiceDialog
 from tokenpal.ui.qt.weather import (
     BuddyRainOverlay,
@@ -66,6 +67,12 @@ _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
 # QLineEdit focus chain on macOS.
 _DOCK_PARK_X = -20000
 _DOCK_PARK_Y = -20000
+
+# Stable registry keys for the overlay's toggleable log windows.
+# These names go to disk via UiState, so don't rename without a
+# migration step.
+_WINDOW_CHAT = "chat"
+_WINDOW_NEWS = "news"
 
 
 def _to_font_config(raw: Any) -> FontConfig:
@@ -143,6 +150,13 @@ class QtOverlay(AbstractOverlay):
         self._buddy: BuddyWindow | None = None
         self._bubble: BubbleWidget | None = None
         self._dock: ChatDock | None = None
+        # Registry of toggleable log windows. Source of truth for
+        # iteration (run_loop show/hide, teardown, persist, font/color
+        # apply). The named refs ``_history`` / ``_news`` below point at
+        # the same instances and are kept for typed call sites that
+        # need subclass-specific methods (``embed_dock``, ``append_items``).
+        self._log_windows: dict[str, TranslucentLogWindow] = {}
+        self._user_visible: dict[str, bool] = {}
         self._history: ChatHistoryWindow | None = None
         self._news: NewsHistoryWindow | None = None
         self._tray: BuddyTrayIcon | None = None
@@ -171,7 +185,7 @@ class QtOverlay(AbstractOverlay):
             Callable[[FontConfig], None] | None
         ) = None
         self._ui_state_persist_callback: (
-            Callable[[bool, bool, bool], None] | None
+            Callable[[bool, dict[str, bool]], None] | None
         ) = None
 
         # Pre-setup buffers. The brain may call any adapter method before
@@ -255,11 +269,6 @@ class QtOverlay(AbstractOverlay):
         # — macOS auto-hides frameless translucent windows on app
         # deactivate, but we only reparent on explicit user toggles.
         self._buddy_user_visible: bool = True
-        self._history_user_visible: bool = False
-        # Same macOS auto-hide rationale as `_history_user_visible`:
-        # frameless translucent NSWindows lose visibility on app
-        # deactivate, so we track user intent independently.
-        self._news_user_visible: bool = False
         self._history = ChatHistoryWindow(
             buddy_name=self._buddy_name,
             on_hide=self._do_toggle_chat,
@@ -267,9 +276,18 @@ class QtOverlay(AbstractOverlay):
         )
         self._news = NewsHistoryWindow(
             title=f"{self._buddy_name} — news",
-            on_hide=self._do_toggle_news,
+            on_hide=lambda: self._do_toggle_window(_WINDOW_NEWS),
             on_zoom=self._handle_chat_zoom,
         )
+        # Register both windows. The chat window keeps its own typed
+        # toggle path (``_do_toggle_chat``) because it has to drive the
+        # dock-embed + focus-input sequence after toggling; the news
+        # window goes through the generic ``_do_toggle_window``.
+        # Keep any visibility intent already restored from disk.
+        self._log_windows[_WINDOW_CHAT] = self._history
+        self._log_windows[_WINDOW_NEWS] = self._news
+        self._user_visible.setdefault(_WINDOW_CHAT, False)
+        self._user_visible.setdefault(_WINDOW_NEWS, False)
         self._apply_chat_font_live()
 
         # Weather overlay — sky + buddy-rain overlay + shared sim. The
@@ -334,22 +352,13 @@ class QtOverlay(AbstractOverlay):
             # key events.
             if (
                 not new_visible
-                and self._history_user_visible
+                and self._user_visible.get(_WINDOW_CHAT, False)
                 and self._history is not None
             ):
                 self._history.activateWindow()
                 if self._dock is not None:
                     self._dock.focus_input()
             self._persist_ui_state()
-
-        def _toggle_chat() -> None:
-            # Funnel through _do_toggle_chat so the tray and the slash
-            # command path share one implementation and the tray label
-            # stays in sync with the window's actual visibility.
-            self._do_toggle_chat()
-
-        def _toggle_news() -> None:
-            self._do_toggle_news()
 
         def _launch_options() -> None:
             # Route through the existing slash-command dispatcher in
@@ -366,8 +375,20 @@ class QtOverlay(AbstractOverlay):
 
         self._tray = BuddyTrayIcon(
             on_toggle_buddy=_toggle_buddy,
-            on_toggle_chat=_toggle_chat,
-            on_toggle_news=_toggle_news,
+            windows=[
+                TrayWindow(
+                    name=_WINDOW_CHAT,
+                    show_label="Show chat log",
+                    hide_label="Hide chat log",
+                    on_toggle=self._do_toggle_chat,
+                ),
+                TrayWindow(
+                    name=_WINDOW_NEWS,
+                    show_label="Show news",
+                    hide_label="Hide news",
+                    on_toggle=lambda: self._do_toggle_window(_WINDOW_NEWS),
+                ),
+            ],
             on_options=_launch_options,
             on_quit=_quit,
         )
@@ -411,22 +432,14 @@ class QtOverlay(AbstractOverlay):
                 apply_macos_click_through(self._buddy_rain_overlay)
                 self._buddy_rain_overlay.reanchor()
             QTimer.singleShot(150, self._reanchor_weather)
-        if self._history is not None:
-            if self._history_user_visible:
-                self._history.show()
-                apply_macos_stay_visible(self._history)
-                self._history.raise_()
-                self._history.activateWindow()
+        for name, window in self._log_windows.items():
+            if self._user_visible.get(name, False):
+                window.show()
+                apply_macos_stay_visible(window)
+                window.raise_()
+                window.activateWindow()
             else:
-                self._history.hide()
-        if self._news is not None:
-            if self._news_user_visible:
-                self._news.show()
-                apply_macos_stay_visible(self._news)
-                self._news.raise_()
-                self._news.activateWindow()
-            else:
-                self._news.hide()
+                window.hide()
         if self._dock is not None:
             # Pre-position so the dock doesn't flash at (0, 0) when
             # _update_dock_placement decides to float it.
@@ -444,8 +457,10 @@ class QtOverlay(AbstractOverlay):
         self._update_dock_placement()
         if self._tray is not None:
             self._tray.set_buddy_visible(self._buddy_user_visible)
-            self._tray.set_chat_visible(self._history_user_visible)
-            self._tray.set_news_visible(self._news_user_visible)
+            for name in self._log_windows:
+                self._tray.set_window_visible(
+                    name, self._user_visible.get(name, False),
+                )
             self._tray.show()
         self._app.exec()
 
@@ -467,12 +482,9 @@ class QtOverlay(AbstractOverlay):
         if self._dock is not None:
             self._dock.close()
             self._dock.deleteLater()
-        if self._history is not None:
-            self._history.close()
-            self._history.deleteLater()
-        if self._news is not None:
-            self._news.close()
-            self._news.deleteLater()
+        for window in self._log_windows.values():
+            window.close()
+            window.deleteLater()
         if self._buddy is not None:
             self._buddy.close()
             self._buddy.deleteLater()
@@ -645,28 +657,22 @@ class QtOverlay(AbstractOverlay):
 
     def set_chat_history_opacity(self, opacity: float) -> None:
         def apply() -> None:
-            if self._history is not None:
-                self._history.set_background_opacity(opacity)
-            if self._news is not None:
-                self._news.set_background_opacity(opacity)
+            for window in self._log_windows.values():
+                window.set_background_opacity(opacity)
         self._post(apply)
 
     def set_chat_history_background_color(self, hex_color: str) -> None:
         def apply() -> None:
-            if self._history is not None:
-                self._history.set_background_color(hex_color)
-            if self._news is not None:
-                self._news.set_background_color(hex_color)
+            for window in self._log_windows.values():
+                window.set_background_color(hex_color)
             if self._bubble is not None:
                 self._bubble.set_background_color(hex_color)
         self._post(apply)
 
     def set_chat_history_font_color(self, hex_color: str) -> None:
         def apply() -> None:
-            if self._history is not None:
-                self._history.set_font_color(hex_color)
-            if self._news is not None:
-                self._news.set_font_color(hex_color)
+            for window in self._log_windows.values():
+                window.set_font_color(hex_color)
             if self._bubble is not None:
                 self._bubble.set_font_color(hex_color)
         self._post(apply)
@@ -691,10 +697,8 @@ class QtOverlay(AbstractOverlay):
         )
         if self._dock is not None:
             self._dock.apply_font(font)
-        if self._history is not None:
-            self._history.apply_font(font)
-        if self._news is not None:
-            self._news.apply_font(font)
+        for window in self._log_windows.values():
+            window.apply_font(font)
 
     def _apply_bubble_font_live(self) -> None:
         if self._bubble is not None:
@@ -801,13 +805,14 @@ class QtOverlay(AbstractOverlay):
         self._chat_font_persist_callback = persist
 
     def set_ui_state_persist_callback(
-        self, persist: Callable[[bool, bool, bool], None],
+        self, persist: Callable[[bool, dict[str, bool]], None],
     ) -> None:
         """Register a callback invoked on every visibility toggle.
 
-        Args are ``(buddy_visible, chat_log_visible, news_visible)``. The
-        callback runs synchronously on the Qt main thread, so keep it
-        cheap: app.py uses it to write a small JSON file.
+        Args are ``(buddy_visible, windows)``, where ``windows`` is a
+        ``{name: visible}`` dict covering every registered log window.
+        The callback runs synchronously on the Qt main thread, so keep
+        it cheap: app.py uses it to write a small JSON file.
         """
         self._ui_state_persist_callback = persist
 
@@ -815,18 +820,19 @@ class QtOverlay(AbstractOverlay):
         self,
         *,
         buddy_visible: bool,
-        chat_log_visible: bool,
-        news_visible: bool = False,
+        windows: dict[str, bool] | None = None,
     ) -> None:
         """Override the defaults before ``run_loop`` decides what to show.
 
-        Must be called after ``setup()`` (flags are created there) and
-        before ``run_loop()`` (which consumes them). Calling mid-run
-        won't reparent widgets on its own.
+        ``windows`` is a ``{name: visible}`` map matching the registry
+        keys. Unknown keys are ignored; missing keys keep their default.
+        Safe to call before ``setup()`` populates the registry — the
+        intent is stashed and consumed via ``setdefault`` at register time.
         """
         self._buddy_user_visible = bool(buddy_visible)
-        self._history_user_visible = bool(chat_log_visible)
-        self._news_user_visible = bool(news_visible)
+        if windows is not None:
+            for name, visible in windows.items():
+                self._user_visible[name] = bool(visible)
 
     def _persist_ui_state(self) -> None:
         cb = self._ui_state_persist_callback
@@ -835,8 +841,7 @@ class QtOverlay(AbstractOverlay):
         try:
             cb(
                 self._buddy_user_visible,
-                self._history_user_visible,
-                self._news_user_visible,
+                {name: bool(v) for name, v in self._user_visible.items()},
             )
         except Exception:
             log.exception("ui_state persist callback failed")
@@ -989,24 +994,33 @@ class QtOverlay(AbstractOverlay):
         if self._dock is not None:
             self._dock.set_status(text)
 
-    def _do_toggle_chat(self) -> None:
-        if self._history is None:
+    def _do_toggle_window(self, name: str) -> None:
+        """Generic show/hide for a registered log window. Window-
+        specific post-toggle work (dock embed, focus_input) lives in
+        callers like ``_do_toggle_chat`` and reads back ``_user_visible``."""
+        window = self._log_windows.get(name)
+        if window is None:
             return
-        new_visible = not self._history_user_visible
-        self._history_user_visible = new_visible
+        new_visible = not self._user_visible.get(name, False)
+        self._user_visible[name] = new_visible
         if new_visible:
-            self._history.show()
-            apply_macos_stay_visible(self._history)
-            self._history.raise_()
-            self._history.activateWindow()
+            window.show()
+            apply_macos_stay_visible(window)
+            window.raise_()
+            window.activateWindow()
         else:
-            self._history.hide()
+            window.hide()
         if self._tray is not None:
-            self._tray.set_chat_visible(new_visible)
-        self._update_dock_placement()
-        if new_visible and self._dock is not None:
-            self._dock.focus_input()
+            self._tray.set_window_visible(name, new_visible)
         self._persist_ui_state()
+
+    def _do_toggle_chat(self) -> None:
+        self._do_toggle_window(_WINDOW_CHAT)
+        # Chat owns the dock-embedding handshake when buddy is hidden;
+        # the generic toggle can't know about that.
+        self._update_dock_placement()
+        if self._user_visible.get(_WINDOW_CHAT, False) and self._dock is not None:
+            self._dock.focus_input()
 
     def add_news_items(self, items: list[NewsItem]) -> None:
         if not items:
@@ -1020,27 +1034,11 @@ class QtOverlay(AbstractOverlay):
         self._post(lambda: self._do_add_news_items(payload))
 
     def toggle_news_history(self) -> None:
-        self._post(self._do_toggle_news)
+        self._post(lambda: self._do_toggle_window(_WINDOW_NEWS))
 
     def _do_add_news_items(self, items: list[NewsItem]) -> None:
         if self._news is not None:
             self._news.append_items(items)
-
-    def _do_toggle_news(self) -> None:
-        if self._news is None:
-            return
-        new_visible = not self._news_user_visible
-        self._news_user_visible = new_visible
-        if new_visible:
-            self._news.show()
-            apply_macos_stay_visible(self._news)
-            self._news.raise_()
-            self._news.activateWindow()
-        else:
-            self._news.hide()
-        if self._tray is not None:
-            self._tray.set_news_visible(new_visible)
-        self._persist_ui_state()
 
     def _on_user_submit(self, text: str) -> None:
         # Called on the Qt main thread — safe to touch widgets.
@@ -1063,7 +1061,7 @@ class QtOverlay(AbstractOverlay):
             return
         if self._buddy_user_visible:
             target = "floating"
-        elif self._history_user_visible:
+        elif self._user_visible.get(_WINDOW_CHAT, False):
             target = "embedded"
         else:
             target = "hidden"

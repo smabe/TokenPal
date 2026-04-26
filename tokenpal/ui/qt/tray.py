@@ -1,12 +1,15 @@
-"""System tray / menu-bar icon with a stub right-click menu.
+"""System tray / menu-bar icon.
 
-Phase 2: Show/Hide buddy · Quit. Voice ▸ / Mood ▸ / Options / Pause
-all land in Phase 4 (parity pass) once they have real data to drive them.
+The tray menu is generated from a list of registered toggleable
+windows handed in at construction (chat log, news, plus whatever
+future window plugs in). Adding a new toggleable window means
+appending one entry to the list — no new method on the tray.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from PySide6.QtGui import QAction, QIcon, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon, QWidget
@@ -15,12 +18,16 @@ from tokenpal.ui.palette import BUDDY_GREEN
 
 _HIDE_BUDDY_LABEL = "Hide buddy"
 _SHOW_BUDDY_LABEL = "Show buddy"
-# "chat log" (not just "chat") — the dock's input line is always
-# visible under the buddy; this action only toggles the history window.
-_HIDE_CHAT_LABEL = "Hide chat log"
-_SHOW_CHAT_LABEL = "Show chat log"
-_HIDE_NEWS_LABEL = "Hide news"
-_SHOW_NEWS_LABEL = "Show news"
+
+
+@dataclass(frozen=True)
+class TrayWindow:
+    """One toggleable log/info window the tray should expose."""
+
+    name: str
+    show_label: str
+    hide_label: str
+    on_toggle: Callable[[], None]
 
 
 def _fallback_icon() -> QIcon:
@@ -36,8 +43,7 @@ class BuddyTrayIcon(QSystemTrayIcon):
     def __init__(
         self,
         on_toggle_buddy: Callable[[], None],
-        on_toggle_chat: Callable[[], None],
-        on_toggle_news: Callable[[], None],
+        windows: list[TrayWindow],
         on_options: Callable[[], None],
         on_quit: Callable[[], None],
         parent: QWidget | None = None,
@@ -52,13 +58,14 @@ class BuddyTrayIcon(QSystemTrayIcon):
         self._toggle_buddy_action.triggered.connect(on_toggle_buddy)
         menu.addAction(self._toggle_buddy_action)
 
-        self._toggle_chat_action = QAction(_HIDE_CHAT_LABEL, menu)
-        self._toggle_chat_action.triggered.connect(on_toggle_chat)
-        menu.addAction(self._toggle_chat_action)
-
-        self._toggle_news_action = QAction(_SHOW_NEWS_LABEL, menu)
-        self._toggle_news_action.triggered.connect(on_toggle_news)
-        menu.addAction(self._toggle_news_action)
+        self._window_actions: dict[str, QAction] = {}
+        self._window_labels: dict[str, tuple[str, str]] = {}
+        for spec in windows:
+            action = QAction(spec.show_label, menu)
+            action.triggered.connect(spec.on_toggle)
+            menu.addAction(action)
+            self._window_actions[spec.name] = action
+            self._window_labels[spec.name] = (spec.show_label, spec.hide_label)
 
         menu.addSeparator()
 
@@ -82,12 +89,9 @@ class BuddyTrayIcon(QSystemTrayIcon):
             _HIDE_BUDDY_LABEL if visible else _SHOW_BUDDY_LABEL,
         )
 
-    def set_chat_visible(self, visible: bool) -> None:
-        self._toggle_chat_action.setText(
-            _HIDE_CHAT_LABEL if visible else _SHOW_CHAT_LABEL,
-        )
-
-    def set_news_visible(self, visible: bool) -> None:
-        self._toggle_news_action.setText(
-            _HIDE_NEWS_LABEL if visible else _SHOW_NEWS_LABEL,
-        )
+    def set_window_visible(self, name: str, visible: bool) -> None:
+        action = self._window_actions.get(name)
+        if action is None:
+            return
+        show_label, hide_label = self._window_labels[name]
+        action.setText(hide_label if visible else show_label)

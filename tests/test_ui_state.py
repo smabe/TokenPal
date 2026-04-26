@@ -8,11 +8,7 @@ from pathlib import Path
 
 from tokenpal.config.ui_state import load_ui_state, save_ui_state
 
-_DEFAULTS = {
-    "buddy_visible": True,
-    "chat_log_visible": False,
-    "news_visible": False,
-}
+_DEFAULTS = {"buddy_visible": True, "windows": {}}
 
 
 def test_load_missing_returns_defaults(tmp_path: Path) -> None:
@@ -23,13 +19,23 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
 def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     save_ui_state(
         tmp_path,
-        {"buddy_visible": False, "chat_log_visible": True, "news_visible": True},
+        {"buddy_visible": False, "windows": {"chat": True, "news": True}},
     )
     assert load_ui_state(tmp_path) == {
         "buddy_visible": False,
-        "chat_log_visible": True,
-        "news_visible": True,
+        "windows": {"chat": True, "news": True},
     }
+
+
+def test_arbitrary_window_names_persist(tmp_path: Path) -> None:
+    """Adding a new toggleable window must NOT require a schema bump:
+    the persistence layer accepts any registered name."""
+    save_ui_state(
+        tmp_path,
+        {"buddy_visible": True, "windows": {"chat": True, "stats_dashboard": True}},
+    )
+    state = load_ui_state(tmp_path)
+    assert state["windows"]["stats_dashboard"] is True
 
 
 def test_save_chmods_0o600(tmp_path: Path) -> None:
@@ -50,19 +56,33 @@ def test_corrupt_file_returns_defaults(tmp_path: Path) -> None:
 
 
 def test_missing_keys_get_defaults(tmp_path: Path) -> None:
-    (tmp_path / ".ui_state.json").write_text('{"buddy_visible": false}', encoding="utf-8")
-    state = load_ui_state(tmp_path)
-    assert state["buddy_visible"] is False
-    assert state["chat_log_visible"] is False
-    assert state["news_visible"] is False
-
-
-def test_legacy_file_without_news_key_loads_clean(tmp_path: Path) -> None:
-    """A pre-news-window ui_state.json must still load — the news key is
-    new and old installs should pick up the default (hidden)."""
     (tmp_path / ".ui_state.json").write_text(
-        '{"buddy_visible": true, "chat_log_visible": true}', encoding="utf-8",
+        '{"buddy_visible": false}', encoding="utf-8",
     )
     state = load_ui_state(tmp_path)
-    assert state["chat_log_visible"] is True
-    assert state["news_visible"] is False
+    assert state["buddy_visible"] is False
+    assert state["windows"] == {}
+
+
+def test_legacy_flat_keys_migrate_into_windows_dict(tmp_path: Path) -> None:
+    """Pre-registry installs wrote ``chat_log_visible`` / ``news_visible``
+    at the top level. Loaders migrate those into ``windows`` so a user
+    upgrading doesn't lose their saved layout."""
+    (tmp_path / ".ui_state.json").write_text(
+        '{"buddy_visible": true, "chat_log_visible": true, "news_visible": false}',
+        encoding="utf-8",
+    )
+    state = load_ui_state(tmp_path)
+    assert state["windows"] == {"chat": True, "news": False}
+
+
+def test_explicit_windows_dict_wins_over_legacy_keys(tmp_path: Path) -> None:
+    """If a file contains BOTH the new ``windows`` dict and the legacy
+    flat keys (mid-migration write), the explicit dict wins."""
+    (tmp_path / ".ui_state.json").write_text(
+        '{"buddy_visible": true, "chat_log_visible": false, '
+        '"windows": {"chat": true}}',
+        encoding="utf-8",
+    )
+    state = load_ui_state(tmp_path)
+    assert state["windows"] == {"chat": True}

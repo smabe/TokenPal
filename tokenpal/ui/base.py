@@ -145,11 +145,12 @@ class AbstractOverlay(abc.ABC):
         persisted chat log no-op."""
 
     def set_ui_state_persist_callback(
-        self, persist: Callable[[bool, bool, bool], None],
+        self, persist: Callable[[bool, dict[str, bool]], None],
     ) -> None:
         """Wire visibility-state write-through. Args are
-        ``(buddy_visible, chat_log_visible, news_visible)``. Optional —
-        overlays without per-window toggles no-op."""
+        ``(buddy_visible, windows)`` where ``windows`` maps each
+        toggleable window's registered name to its show/hide intent.
+        Optional — overlays without per-window toggles no-op."""
 
     def set_chat_history_background_color(self, hex_color: str) -> None:
         """Recolor the chat history panel background. Optional."""

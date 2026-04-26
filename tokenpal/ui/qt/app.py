@@ -54,12 +54,12 @@ def build_shell(app: QApplication | None = None) -> QtShell:
     def _quit() -> None:
         qapp.quit()
 
-    # Pre-brain shell has no chat window or options dispatcher; make
-    # those actions harmless no-ops so the menu still renders.
+    # Pre-brain shell has no log windows or options dispatcher; the
+    # tray's ``windows`` list is empty, so the menu only shows
+    # buddy + Options + Quit until the real overlay registers windows.
     tray = BuddyTrayIcon(
         on_toggle_buddy=_toggle_buddy,
-        on_toggle_chat=lambda: None,
-        on_toggle_news=lambda: None,
+        windows=[],
         on_options=lambda: None,
         on_quit=_quit,
     )
