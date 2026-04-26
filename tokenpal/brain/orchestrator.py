@@ -201,6 +201,13 @@ _TOPIC_FOCUS_HINTS: dict[str, str] = {
     "app_awareness": "Comment on what they're doing right now.",
     "time_awareness": "Comment on the time of day or how long they've been working.",
     "idle": "Comment on them returning from being away.",
+    "world_awareness": "React to the top HN headline shown in the snapshot.",
+    "process_heat": "Call out which process is hogging the CPU.",
+    "typing_cadence": "Comment on their typing rhythm or recent burst.",
+    "network_state": "Comment on the network change.",
+    "battery": "Comment on the battery state or transition.",
+    "filesystem_pulse": "Comment on what they just dropped in or pulled out of a watched folder.",
+    "git": "Comment on their recent git activity.",
 }
 
 
@@ -1664,6 +1671,7 @@ class Brain:
 
         # Topic roulette: pick what to focus on and hint the LLM
         topic = self._pick_topic()
+        log.debug("Topic pick: %s", topic)
         snapshot = self._apply_topic_focus(snapshot, topic)
 
         memory_lines = self._memory.get_history_lines(10) if self._memory else None

@@ -114,17 +114,6 @@ def enabled_config() -> dict[str, Any]:
     return {"enabled": True}
 
 
-@pytest.fixture
-def disabled_config() -> dict[str, Any]:
-    return {"enabled": False}
-
-
-async def test_setup_disables_when_config_disabled(disabled_config: dict[str, Any]):
-    sense = WorldAwarenessSense(disabled_config)
-    await sense.setup()
-    assert sense.enabled is False
-
-
 async def test_setup_enabled_config_leaves_sense_enabled(enabled_config: dict[str, Any]):
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
@@ -240,12 +229,3 @@ async def test_poll_silent_on_fetch_failure_after_prior_success(
         assert "hn" not in second.summary.lower() or "top hn" in second.summary.lower()
 
 
-async def test_poll_returns_none_when_sense_disabled(disabled_config: dict[str, Any]):
-    sense = WorldAwarenessSense(disabled_config)
-    await sense.setup()
-    # Even if fetch somehow returned a story, disabled sense must return None.
-    with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=HNStory(title="x", points=1, url="", author="", created_at=""),
-    ):
-        assert await sense.poll() is None

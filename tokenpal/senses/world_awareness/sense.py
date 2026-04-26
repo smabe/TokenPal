@@ -28,10 +28,6 @@ class WorldAwarenessSense(AbstractSense):
         self._prev_summary: str = ""
 
     async def setup(self) -> None:
-        if not bool(self._config.get("enabled", False)):
-            log.info("World awareness sense: disabled in config")
-            self.disable()
-            return
         log.info("World awareness sense ready — HN front page, poll 30min")
 
     async def poll(self) -> SenseReading | None:
