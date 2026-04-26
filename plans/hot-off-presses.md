@@ -93,13 +93,12 @@ arrive, in-memory only, with clickable URLs. Toggleable from the tray.
 - `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
 
 ## Parking lot
-- Extract a `TranslucentLogWindow` base class (or `TranslucentLogStyle`
-  helper) shared by `ChatHistoryWindow` and `NewsHistoryWindow`. Real
-  duplication: `paintEvent` / `set_background_*` / `set_font_color` /
-  `_rebuild_background_brush` / `_apply_log_stylesheet` / `_trim_to_cap`
-  are ~95% identical between the two windows, ~55 lines total. Surfaced
-  by phase-2 simplify pass; deferred because it's a separate refactor.
+- ~~Extract a `TranslucentLogWindow` base class~~ — done. Plus the
+  follow-on registry refactor: `QtOverlay._log_windows` /
+  `_user_visible`, `BuddyTrayIcon(windows=[...])`, `UiState.windows`
+  dict. Adding window N+1 is one register call, no fan-out edits.
+  Deferring this the first time was a mistake — it would have folded
+  the styling-mirror, persistence, and tray-entry changes into one
+  diff each instead of three separate touch-ups.
 - ~~Wire news-window opacity / bg / font-color setters through the
-  chat panel's user-tunable styling~~ — done as a follow-up: the news
-  window now mirrors `set_chat_history_*` and `set_chat_font` directly
-  in `QtOverlay`. Single set of OptionsDialog controls drives both.
+  chat panel's user-tunable styling~~ — done.
