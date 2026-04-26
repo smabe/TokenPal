@@ -79,6 +79,7 @@ class OptionsModalState:
     bubble_font: FontConfig = field(default_factory=FontConfig)
     voice_conversation_enabled: bool = False
     speak_ambient_enabled: bool = False
+    speak_typed_replies_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class OptionsModalResult:
     set_bubble_font: FontConfig | None = None
     voice_conversation_enabled: bool = False
     speak_ambient_enabled: bool = False
+    speak_typed_replies_enabled: bool = False
 
 
 class OptionsModal(ModalScreen[OptionsModalResult | None]):
@@ -380,6 +382,11 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
                 id="audio-speak-ambient",
                 value=s.speak_ambient_enabled,
             )
+            yield WrappingCheckbox(
+                "Speak typed replies (narrate the buddy's answers when you type)",
+                id="audio-speak-typed",
+                value=s.speak_typed_replies_enabled,
+            )
 
             # --------------------------------------------------------------
             # Settings shortcuts — launchers for existing modals
@@ -472,6 +479,10 @@ class OptionsModal(ModalScreen[OptionsModalResult | None]):
             speak_ambient_enabled=self._read_checkbox(
                 "#audio-speak-ambient",
                 self._state.speak_ambient_enabled,
+            ),
+            speak_typed_replies_enabled=self._read_checkbox(
+                "#audio-speak-typed",
+                self._state.speak_typed_replies_enabled,
             ),
         )
 

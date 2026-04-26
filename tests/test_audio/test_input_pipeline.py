@@ -19,8 +19,6 @@ import threading
 from pathlib import Path
 from unittest import mock
 
-import pytest
-
 from tokenpal.audio.input import InputPipeline
 from tokenpal.audio.session import VoiceState
 from tokenpal.config.schema import AudioConfig

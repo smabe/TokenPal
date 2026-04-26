@@ -24,3 +24,10 @@ def set_speak_ambient_enabled(enabled: bool) -> Path:
         data.setdefault("audio", {})["speak_ambient_enabled"] = enabled
 
     return update_config(mutate)
+
+
+def set_speak_typed_replies_enabled(enabled: bool) -> Path:
+    def mutate(data: dict[str, Any]) -> None:
+        data.setdefault("audio", {})["speak_typed_replies_enabled"] = enabled
+
+    return update_config(mutate)

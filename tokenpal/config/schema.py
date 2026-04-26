@@ -480,6 +480,10 @@ class AudioConfig:
     # AUDIO_INPUT consent gate. See plans/say-what.md for the four-state matrix.
     voice_conversation_enabled: bool = False
     speak_ambient_enabled: bool = False
+    # Output-only opt-out from the type-in/type-out symmetry rule —
+    # narrate replies even when the user typed the question. AUDIO_OUTPUT
+    # only, no mic.
+    speak_typed_replies_enabled: bool = False
     # Voice IDs are namespaced "<backend>:<voice>" so future trained-voice
     # backends can register without colliding with Kokoro voice names.
     tts_backend: str = "kokoro"

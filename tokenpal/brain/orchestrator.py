@@ -2586,16 +2586,18 @@ class Brain:
             ap.input.notify_typed_input()
 
         async def _emit_reply(text: str) -> None:
-            # Render bubble + speak when source is voice. Typed turns stay
-            # text-only per the routing contract; ambient never reaches
-            # this path so this branch is safe. Voice replies are awaited
-            # so notify_tts_done lands AFTER playback drains.
+            # Voice replies are awaited so notify_tts_done lands AFTER
+            # playback drains; typed replies fire-and-forget through speak()
+            # — the routing rule in tts.py gates on
+            # speak_typed_replies_enabled so off-by-default just no-ops.
             self._ui_callback(text)
-            if (
-                source == "voice"
-                and getattr(self, "_audio_pipeline", None) is not None
-            ):
+            ap = getattr(self, "_audio_pipeline", None)
+            if ap is None:
+                return
+            if source == "voice":
                 await self._speak_voice_reply(text)
+            elif source == "typed":
+                self._speak_async(text, source="typed")
 
         # PRIVACY: check sensitive apps BEFORE building prompt or touching history
         snapshot = self._context.snapshot()

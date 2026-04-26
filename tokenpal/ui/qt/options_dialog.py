@@ -411,6 +411,13 @@ class OptionsDialog(QDialog, _OneShotCallback):
         )
         self._speak_ambient_cb.setChecked(self._state.speak_ambient_enabled)
         parent.addWidget(self._speak_ambient_cb)
+        self._speak_typed_cb = QCheckBox(
+            "Speak typed replies (narrate the buddy's answers when you type)",
+        )
+        self._speak_typed_cb.setChecked(
+            self._state.speak_typed_replies_enabled,
+        )
+        parent.addWidget(self._speak_typed_cb)
 
     def _build_launchers(self, parent: QVBoxLayout) -> None:
         parent.addWidget(_section_header("Settings shortcuts"))
@@ -679,6 +686,7 @@ class OptionsDialog(QDialog, _OneShotCallback):
             set_bubble_font=self._read_font_if_changed(self._bubble_font_widgets),
             voice_conversation_enabled=self._voice_conversation_cb.isChecked(),
             speak_ambient_enabled=self._speak_ambient_cb.isChecked(),
+            speak_typed_replies_enabled=self._speak_typed_cb.isChecked(),
         )
 
     def _read_font_if_changed(

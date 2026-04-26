@@ -19,7 +19,6 @@ from tokenpal.audio.vad import (
     VadEvent,
 )
 
-
 CHUNK_S = CHUNK_SAMPLES / SAMPLE_RATE
 
 

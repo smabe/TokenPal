@@ -333,6 +333,8 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 #
 # voice_conversation_enabled = false
 # speak_ambient_enabled = false
+# speak_typed_replies_enabled = false   # narrate replies even when you typed
+                                        # the question (output-only, no mic)
 #
 # Voice IDs are namespaced "<backend>:<voice>" so trained-voice backends
 # can register without colliding with Kokoro voice names.

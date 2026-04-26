@@ -721,6 +721,7 @@ def main() -> None:
             bubble_font=config.ui.bubble_font,
             voice_conversation_enabled=config.audio.voice_conversation_enabled,
             speak_ambient_enabled=config.audio.speak_ambient_enabled,
+            speak_typed_replies_enabled=config.audio.speak_typed_replies_enabled,
         )
 
         def on_open_subdialog(target: str) -> None:
@@ -899,6 +900,7 @@ def main() -> None:
             from tokenpal.audio.deps import format_warning
             from tokenpal.config.audio_writer import (
                 set_speak_ambient_enabled,
+                set_speak_typed_replies_enabled,
                 set_voice_conversation_enabled,
             )
             audio_changed_to_on = False
@@ -914,6 +916,12 @@ def main() -> None:
                     result.speak_ambient_enabled,
                     "ambient narration",
                     set_speak_ambient_enabled,
+                ),
+                (
+                    "speak_typed_replies_enabled",
+                    result.speak_typed_replies_enabled,
+                    "typed-reply narration",
+                    set_speak_typed_replies_enabled,
                 ),
             ):
                 if new_value == getattr(config.audio, field_name):
@@ -2459,6 +2467,7 @@ def _handle_voice_io_command(
     from tokenpal.audio.deps import format_warning, install_all
     from tokenpal.config.audio_writer import (
         set_speak_ambient_enabled,
+        set_speak_typed_replies_enabled,
         set_voice_conversation_enabled,
     )
 
@@ -2469,9 +2478,10 @@ def _handle_voice_io_command(
     def _state_line() -> str:
         v = "on" if config.audio.voice_conversation_enabled else "off"
         a = "on" if config.audio.speak_ambient_enabled else "off"
+        t = "on" if config.audio.speak_typed_replies_enabled else "off"
         warning = format_warning()
         suffix = f"  ({warning})" if warning else ""
-        return f"voice-io: voice {v}, ambient {a}.{suffix}"
+        return f"voice-io: voice {v}, ambient {a}, typed-speak {t}.{suffix}"
 
     if subcmd == "":
         return CommandResult(_state_line())
@@ -2520,9 +2530,17 @@ def _handle_voice_io_command(
             set_speak_ambient_enabled,
         )
 
+    if subcmd == "typed-speak" and rest in ("on", "off"):
+        return _apply(
+            "speak_typed_replies_enabled",
+            "typed-speak",
+            rest == "on",
+            set_speak_typed_replies_enabled,
+        )
+
     return CommandResult(
-        "Usage: /voice-io [on|off|ambient on|ambient off|install]  "
-        "(bare = show state)"
+        "Usage: /voice-io [on|off|ambient on|ambient off"
+        "|typed-speak on|typed-speak off|install]  (bare = show state)"
     )
 
 

@@ -42,6 +42,16 @@ async def test_typed_source_is_no_op(tmp_path: Path) -> None:
     await tts.speak("hello", source="typed", pipeline=pipeline)
 
 
+async def test_typed_speaks_when_toggle_enabled(tmp_path: Path) -> None:
+    # Toggle on but no models on disk — routing accepts the call, then the
+    # missing-deps / missing-models guard returns silently. Same shape as
+    # ambient: opt-in lets the source through, environment determines
+    # whether audio actually plays.
+    cfg = AudioConfig(speak_typed_replies_enabled=True)
+    pipeline = boot(cfg, tmp_path)
+    await tts.speak("hello", source="typed", pipeline=pipeline)
+
+
 async def test_ambient_off_skips(tmp_path: Path) -> None:
     cfg = AudioConfig(speak_ambient_enabled=False)
     pipeline = boot(cfg, tmp_path)

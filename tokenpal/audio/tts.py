@@ -1,7 +1,7 @@
 """TTS speak facade — output-only routing + sentence-streaming playback.
 
 Routing rules:
-* ``typed`` source never speaks.
+* ``typed`` requires ``speak_typed_replies_enabled`` (off by default).
 * ``ambient`` requires ``speak_ambient_enabled``.
 * ``voice`` requires ``voice_conversation_enabled``.
 
@@ -67,7 +67,7 @@ async def speak(
 ) -> None:
     """Speak ``text`` if the routing rules permit it."""
     cfg = pipeline.config
-    if source == "typed":
+    if source == "typed" and not cfg.speak_typed_replies_enabled:
         return
     if source == "ambient" and not cfg.speak_ambient_enabled:
         return
