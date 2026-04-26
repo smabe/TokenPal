@@ -1,4 +1,4 @@
-"""World awareness sense — polls HN front page for ambient tech context."""
+"""GitHub trending sense — top new repo this week."""
 
 from __future__ import annotations
 
@@ -7,18 +7,18 @@ from typing import Any
 
 from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.senses.base import AbstractSense, SenseReading
+from tokenpal.senses.github_trending._client import fetch_top_repo
 from tokenpal.senses.registry import register_sense
-from tokenpal.senses.world_awareness.hn_client import fetch_top_story
 from tokenpal.util.text_guards import truncate_ellipsis
 
 log = logging.getLogger(__name__)
 
-_TITLE_MAX_CHARS = 80
+_DESC_MAX_CHARS = 80
 
 
 @register_sense
-class WorldAwarenessSense(AbstractSense):
-    sense_name = "world_awareness"
+class GitHubTrendingSense(AbstractSense):
+    sense_name = "github_trending"
     platforms = ("windows", "darwin", "linux")
     priority = 50
     poll_interval_s = 1800.0
@@ -29,36 +29,39 @@ class WorldAwarenessSense(AbstractSense):
         self._prev_summary: str = ""
 
     async def setup(self) -> None:
-        log.info("World awareness sense ready — HN front page, poll 30min")
+        log.info("GitHub trending sense ready — search API, poll 30min")
 
     async def poll(self) -> SenseReading | None:
         if not self.enabled:
             return None
 
-        story = fetch_top_story()
-        if story is None:
+        repo = fetch_top_repo()
+        if repo is None:
             return None
 
-        if contains_sensitive_content_term(story.title):
-            log.debug("HN story dropped (sensitive term): %s", story.title[:_TITLE_MAX_CHARS])
+        if contains_sensitive_content_term(f"{repo.full_name} {repo.description}"):
+            log.debug("GitHub repo dropped (sensitive term): %s", repo.full_name)
             return None
 
+        desc = truncate_ellipsis(repo.description, _DESC_MAX_CHARS)
+        lang = f" ({repo.language})" if repo.language else ""
+        suffix = f" — {desc}" if desc else ""
         summary = (
-            f"Top HN: '{truncate_ellipsis(story.title, _TITLE_MAX_CHARS)}' "
-            f"— {story.points} points"
+            f"Trending GitHub: {repo.full_name} — {repo.stars} stars (last 7d)"
+            f"{lang}{suffix}"
         )
+
         if summary == self._prev_summary:
             return None
         self._prev_summary = summary
 
         data: dict[str, Any] = {
-            "title": story.title,
-            "points": story.points,
-            "url": story.url,
-            "author": story.author,
-            "created_at": story.created_at,
+            "full_name": repo.full_name,
+            "stars": repo.stars,
+            "description": repo.description,
+            "language": repo.language,
+            "url": repo.url,
         }
-
         return self._reading(data=data, summary=summary, confidence=1.0)
 
     async def teardown(self) -> None:

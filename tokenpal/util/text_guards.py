@@ -23,6 +23,13 @@ _META_MARKERS = (
 )
 
 
+def truncate_ellipsis(text: str, max_chars: int) -> str:
+    """Cap *text* at *max_chars* and append an ellipsis if truncated."""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
+
+
 def is_clean_english(
     text: str, *, max_nonascii_ratio: float = 0.10,
 ) -> bool:

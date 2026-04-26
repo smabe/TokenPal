@@ -40,11 +40,6 @@ def test_client_unescapes_html_entities():
     assert story.title == 'Foo & Bar "baz"'
 
 
-@pytest.fixture
-def enabled_config() -> dict[str, Any]:
-    return {"enabled": True}
-
-
 async def test_poll_emits_reading_with_expected_summary(enabled_config: dict[str, Any]):
     story = LobstersStory(title="Cool thing", score=42, url="u")
     sense = LobstersSense(enabled_config)

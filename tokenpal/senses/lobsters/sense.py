@@ -9,6 +9,7 @@ from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.lobsters._client import fetch_top_story
 from tokenpal.senses.registry import register_sense
+from tokenpal.util.text_guards import truncate_ellipsis
 
 log = logging.getLogger(__name__)
 
@@ -45,11 +46,10 @@ class LobstersSense(AbstractSense):
             )
             return None
 
-        truncated = story.title
-        if len(truncated) > _TITLE_MAX_CHARS:
-            truncated = truncated[: _TITLE_MAX_CHARS - 1].rstrip() + "…"
-
-        summary = f"Top Lobsters: '{truncated}' — {story.score} points"
+        summary = (
+            f"Top Lobsters: '{truncate_ellipsis(story.title, _TITLE_MAX_CHARS)}' "
+            f"— {story.score} points"
+        )
         if summary == self._prev_summary:
             return None
         self._prev_summary = summary

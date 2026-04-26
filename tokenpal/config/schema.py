@@ -26,6 +26,7 @@ class SensesConfig:
     typing_cadence: bool = False
     filesystem_pulse: bool = False
     lobsters: bool = False
+    github_trending: bool = False
 
 
 @dataclass
