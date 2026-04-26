@@ -22,6 +22,7 @@ import abc
 from collections.abc import Callable
 from typing import Any, ClassVar
 
+from tokenpal.brain.news_buffer import NewsItem
 from tokenpal.config.schema import FontConfig
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
@@ -104,6 +105,13 @@ class AbstractOverlay(abc.ABC):
     def toggle_chat_log(self) -> None:
         """Show/hide the chat log widget. Optional — overlays without a
         separate chat pane no-op."""
+
+    def add_news_items(self, items: list[NewsItem]) -> None:
+        """Append fresh world-news headlines to the news history window.
+        Optional — overlays without a news pane no-op."""
+
+    def toggle_news_history(self) -> None:
+        """Show/hide the news history window. Optional."""
 
     def set_chat_history_opacity(self, opacity: float) -> None:
         """Set the chat history window's background opacity (0.0–1.0).

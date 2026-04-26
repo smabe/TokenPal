@@ -23,6 +23,7 @@ from typing import Any, ClassVar
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QDialog
 
+from tokenpal.brain.news_buffer import NewsItem
 from tokenpal.config.chatlog_writer import clamp_font_size
 from tokenpal.config.schema import FontConfig
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
@@ -35,6 +36,7 @@ from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
 from tokenpal.ui.qt.cloud_dialog import CloudDialog
 from tokenpal.ui.qt.dock_mock import DockMock
 from tokenpal.ui.qt.modals import ConfirmDialog, SelectionDialog, _focus_dialog
+from tokenpal.ui.qt.news_window import NewsHistoryWindow
 from tokenpal.ui.qt.options_dialog import OptionsDialog
 from tokenpal.ui.qt.platform import (
     apply_macos_accessory_mode,
@@ -142,6 +144,7 @@ class QtOverlay(AbstractOverlay):
         self._bubble: BubbleWidget | None = None
         self._dock: ChatDock | None = None
         self._history: ChatHistoryWindow | None = None
+        self._news: NewsHistoryWindow | None = None
         self._tray: BuddyTrayIcon | None = None
         self._weather_sim: WeatherSim | None = None
         self._sky_window: SkyWindow | None = None
@@ -180,6 +183,7 @@ class QtOverlay(AbstractOverlay):
         self._pending_chat_history: (
             list[tuple[float, str, str, str | None]] | None
         ) = None
+        self._pending_news_items: list[NewsItem] | None = None
         self._pending_status: str | None = None
         self._pending_voice_name: str | None = None
 
@@ -252,9 +256,18 @@ class QtOverlay(AbstractOverlay):
         # deactivate, but we only reparent on explicit user toggles.
         self._buddy_user_visible: bool = True
         self._history_user_visible: bool = False
+        # Same macOS auto-hide rationale as `_history_user_visible`:
+        # frameless translucent NSWindows lose visibility on app
+        # deactivate, so we track user intent independently.
+        self._news_user_visible: bool = False
         self._history = ChatHistoryWindow(
             buddy_name=self._buddy_name,
             on_hide=self._do_toggle_chat,
+            on_zoom=self._handle_chat_zoom,
+        )
+        self._news = NewsHistoryWindow(
+            title=f"{self._buddy_name} — news",
+            on_hide=self._do_toggle_news,
             on_zoom=self._handle_chat_zoom,
         )
         self._apply_chat_font_live()
@@ -335,6 +348,9 @@ class QtOverlay(AbstractOverlay):
             # stays in sync with the window's actual visibility.
             self._do_toggle_chat()
 
+        def _toggle_news() -> None:
+            self._do_toggle_news()
+
         def _launch_options() -> None:
             # Route through the existing slash-command dispatcher in
             # app.py — it already knows how to assemble OptionsModalState
@@ -351,6 +367,7 @@ class QtOverlay(AbstractOverlay):
         self._tray = BuddyTrayIcon(
             on_toggle_buddy=_toggle_buddy,
             on_toggle_chat=_toggle_chat,
+            on_toggle_news=_toggle_news,
             on_options=_launch_options,
             on_quit=_quit,
         )
@@ -420,6 +437,7 @@ class QtOverlay(AbstractOverlay):
         if self._tray is not None:
             self._tray.set_buddy_visible(self._buddy_user_visible)
             self._tray.set_chat_visible(self._history_user_visible)
+            self._tray.set_news_visible(self._news_user_visible)
             self._tray.show()
         self._app.exec()
 
@@ -444,6 +462,9 @@ class QtOverlay(AbstractOverlay):
         if self._history is not None:
             self._history.close()
             self._history.deleteLater()
+        if self._news is not None:
+            self._news.close()
+            self._news.deleteLater()
         if self._buddy is not None:
             self._buddy.close()
             self._buddy.deleteLater()
@@ -962,6 +983,39 @@ class QtOverlay(AbstractOverlay):
             self._dock.focus_input()
         self._persist_ui_state()
 
+    def add_news_items(self, items: list[NewsItem]) -> None:
+        if not items:
+            return
+        if self._news is None:
+            if self._pending_news_items is None:
+                self._pending_news_items = []
+            self._pending_news_items.extend(items)
+            return
+        payload = list(items)
+        self._post(lambda: self._do_add_news_items(payload))
+
+    def toggle_news_history(self) -> None:
+        self._post(self._do_toggle_news)
+
+    def _do_add_news_items(self, items: list[NewsItem]) -> None:
+        if self._news is not None:
+            self._news.append_items(items)
+
+    def _do_toggle_news(self) -> None:
+        if self._news is None:
+            return
+        new_visible = not self._news_user_visible
+        self._news_user_visible = new_visible
+        if new_visible:
+            self._news.show()
+            apply_macos_stay_visible(self._news)
+            self._news.raise_()
+            self._news.activateWindow()
+        else:
+            self._news.hide()
+        if self._tray is not None:
+            self._tray.set_news_visible(new_visible)
+
     def _on_user_submit(self, text: str) -> None:
         # Called on the Qt main thread — safe to touch widgets.
         self._do_log(time.time(), "you", text, None, persist=True)
@@ -1148,6 +1202,10 @@ class QtOverlay(AbstractOverlay):
             entries = self._pending_chat_history
             self._pending_chat_history = None
             self._history.load_history(entries)
+        if self._pending_news_items is not None and self._news is not None:
+            items = self._pending_news_items
+            self._pending_news_items = None
+            self._news.append_items(items)
         if self._pending_status is not None and self._dock is not None:
             self._dock.set_status(self._pending_status)
             self._pending_status = None

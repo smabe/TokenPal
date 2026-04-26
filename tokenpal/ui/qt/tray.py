@@ -19,6 +19,8 @@ _SHOW_BUDDY_LABEL = "Show buddy"
 # visible under the buddy; this action only toggles the history window.
 _HIDE_CHAT_LABEL = "Hide chat log"
 _SHOW_CHAT_LABEL = "Show chat log"
+_HIDE_NEWS_LABEL = "Hide news"
+_SHOW_NEWS_LABEL = "Show news"
 
 
 def _fallback_icon() -> QIcon:
@@ -35,6 +37,7 @@ class BuddyTrayIcon(QSystemTrayIcon):
         self,
         on_toggle_buddy: Callable[[], None],
         on_toggle_chat: Callable[[], None],
+        on_toggle_news: Callable[[], None],
         on_options: Callable[[], None],
         on_quit: Callable[[], None],
         parent: QWidget | None = None,
@@ -52,6 +55,10 @@ class BuddyTrayIcon(QSystemTrayIcon):
         self._toggle_chat_action = QAction(_HIDE_CHAT_LABEL, menu)
         self._toggle_chat_action.triggered.connect(on_toggle_chat)
         menu.addAction(self._toggle_chat_action)
+
+        self._toggle_news_action = QAction(_SHOW_NEWS_LABEL, menu)
+        self._toggle_news_action.triggered.connect(on_toggle_news)
+        menu.addAction(self._toggle_news_action)
 
         menu.addSeparator()
 
@@ -78,4 +85,9 @@ class BuddyTrayIcon(QSystemTrayIcon):
     def set_chat_visible(self, visible: bool) -> None:
         self._toggle_chat_action.setText(
             _HIDE_CHAT_LABEL if visible else _SHOW_CHAT_LABEL,
+        )
+
+    def set_news_visible(self, visible: bool) -> None:
+        self._toggle_news_action.setText(
+            _HIDE_NEWS_LABEL if visible else _SHOW_NEWS_LABEL,
         )

@@ -59,6 +59,7 @@ def build_shell(app: QApplication | None = None) -> QtShell:
     tray = BuddyTrayIcon(
         on_toggle_buddy=_toggle_buddy,
         on_toggle_chat=lambda: None,
+        on_toggle_news=lambda: None,
         on_options=lambda: None,
         on_quit=_quit,
     )

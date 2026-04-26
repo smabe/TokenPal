@@ -174,6 +174,7 @@ def test_tray_click_does_not_toggle_buddy(qapp: QApplication) -> None:
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: calls.append(1),
         on_toggle_chat=lambda: None,
+        on_toggle_news=lambda: None,
         on_options=lambda: None,
         on_quit=lambda: None,
     )
@@ -193,6 +194,7 @@ def test_tray_chat_toggle_label_flips_with_visibility(
     tray = BuddyTrayIcon(
         on_toggle_buddy=lambda: None,
         on_toggle_chat=lambda: None,
+        on_toggle_news=lambda: None,
         on_options=lambda: None,
         on_quit=lambda: None,
     )
