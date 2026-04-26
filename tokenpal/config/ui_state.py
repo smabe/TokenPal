@@ -1,12 +1,12 @@
 """Runtime UI state persisted at ``$data_dir/.ui_state.json``.
 
-Tracks whether the buddy window and chat-log window are shown or
-hidden, so the user's toggles survive a restart. Position is not
+Tracks whether the buddy / chat-log / news windows are shown or
+hidden so the user's toggles survive a restart. Position is not
 persisted (Qt already remembers frame geometry via the stay-visible
 path), only the boolean show/hide intent.
 
 Written at ``0o600``. Corrupt or missing files fall back to defaults
-(buddy visible, chat log hidden), matching the first-launch behavior.
+(buddy visible, chat log + news hidden), matching first-launch behavior.
 """
 
 from __future__ import annotations
@@ -25,10 +25,11 @@ _FILENAME = ".ui_state.json"
 class UiState(TypedDict):
     buddy_visible: bool
     chat_log_visible: bool
+    news_visible: bool
 
 
 def _default_state() -> UiState:
-    return {"buddy_visible": True, "chat_log_visible": False}
+    return {"buddy_visible": True, "chat_log_visible": False, "news_visible": False}
 
 
 def _path_for(data_dir: Path) -> Path:
@@ -51,6 +52,7 @@ def load_ui_state(data_dir: Path) -> UiState:
         "chat_log_visible": bool(
             raw.get("chat_log_visible", defaults["chat_log_visible"]),
         ),
+        "news_visible": bool(raw.get("news_visible", defaults["news_visible"])),
     }
 
 
@@ -61,6 +63,7 @@ def save_ui_state(data_dir: Path, state: UiState) -> Path:
     payload = {
         "buddy_visible": bool(state.get("buddy_visible", True)),
         "chat_log_visible": bool(state.get("chat_log_visible", False)),
+        "news_visible": bool(state.get("news_visible", False)),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.chmod(path, 0o600)

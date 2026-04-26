@@ -218,13 +218,17 @@ def _format_row(item: NewsItem, font_color: str) -> str:
     extras_html = ""
     if extras:
         extras_html = (
-            f'<div style="color:#bbbbbb; margin-left: 56px; '
-            f'font-size: 11px">{" · ".join(extras)}</div>'
+            f'<br><span style="color:#bbbbbb; font-size: small">'
+            f'{" · ".join(extras)}</span>'
         )
+    # Single block per item: QTextBrowser appends each call as a paragraph,
+    # and CSS block-margin tricks (margin-left on a child div) leak indent
+    # into subsequent paragraphs. A flat span + <br> renders cleanly.
     return (
-        '<div style="margin: 4px 0">'
+        '<p style="margin: 4px 0">'
         f'<span style="color:{badge_color}; font-weight: bold">'
         f"[{escape(label)}]</span> "
         f"{title_html}"
-        f"</div>{extras_html}"
+        f"{extras_html}"
+        "</p>"
     )

@@ -213,21 +213,28 @@ def main() -> None:
 
         overlay.set_chat_font_persist_callback(_persist_chat_font_bump)
 
-    # Restore the buddy/chat-log show-hide state from the last session so
-    # a user who closed with only the chat log open reopens the same way.
+    # Restore the buddy / chat-log / news show-hide state from the last
+    # session so a user who closed with a particular layout reopens the
+    # same way.
     if hasattr(overlay, "restore_visibility_state"):
         ui_state = load_ui_state(data_dir)
         overlay.restore_visibility_state(
             buddy_visible=ui_state["buddy_visible"],
             chat_log_visible=ui_state["chat_log_visible"],
+            news_visible=ui_state["news_visible"],
         )
 
-        def _persist_ui_state(buddy_visible: bool, chat_log_visible: bool) -> None:
+        def _persist_ui_state(
+            buddy_visible: bool,
+            chat_log_visible: bool,
+            news_visible: bool,
+        ) -> None:
             save_ui_state(
                 data_dir,
                 {
                     "buddy_visible": buddy_visible,
                     "chat_log_visible": chat_log_visible,
+                    "news_visible": news_visible,
                 },
             )
 

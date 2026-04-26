@@ -167,6 +167,38 @@ def test_history_window_hidden_by_default(qapp: QApplication) -> None:
         overlay.teardown()
 
 
+def test_news_toggle_persists_and_restores(qapp: QApplication) -> None:
+    """Toggling the news window fires the persistence callback with the
+    new state, and restore_visibility_state honors news_visible across
+    a re-construct."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[tuple[bool, bool, bool]] = []
+    overlay.set_ui_state_persist_callback(
+        lambda b, c, n: saved.append((b, c, n)),
+    )
+    try:
+        overlay._do_toggle_news()
+        assert overlay._news_user_visible is True
+        assert saved[-1][2] is True
+
+        overlay._do_toggle_news()
+        assert overlay._news_user_visible is False
+        assert saved[-1][2] is False
+    finally:
+        overlay.teardown()
+
+    overlay2 = QtOverlay(config={})
+    overlay2.setup()
+    try:
+        overlay2.restore_visibility_state(
+            buddy_visible=True, chat_log_visible=False, news_visible=True,
+        )
+        assert overlay2._news_user_visible is True
+    finally:
+        overlay2.teardown()
+
+
 def test_news_window_mirrors_chat_styling(qapp: QApplication) -> None:
     """Font / background opacity / background color / font color setters
     are shared between the chat history window and the news history

@@ -171,7 +171,7 @@ class QtOverlay(AbstractOverlay):
             Callable[[FontConfig], None] | None
         ) = None
         self._ui_state_persist_callback: (
-            Callable[[bool, bool], None] | None
+            Callable[[bool, bool, bool], None] | None
         ) = None
 
         # Pre-setup buffers. The brain may call any adapter method before
@@ -419,6 +419,14 @@ class QtOverlay(AbstractOverlay):
                 self._history.activateWindow()
             else:
                 self._history.hide()
+        if self._news is not None:
+            if self._news_user_visible:
+                self._news.show()
+                apply_macos_stay_visible(self._news)
+                self._news.raise_()
+                self._news.activateWindow()
+            else:
+                self._news.hide()
         if self._dock is not None:
             # Pre-position so the dock doesn't flash at (0, 0) when
             # _update_dock_placement decides to float it.
@@ -793,18 +801,22 @@ class QtOverlay(AbstractOverlay):
         self._chat_font_persist_callback = persist
 
     def set_ui_state_persist_callback(
-        self, persist: Callable[[bool, bool], None],
+        self, persist: Callable[[bool, bool, bool], None],
     ) -> None:
         """Register a callback invoked on every visibility toggle.
 
-        Args are ``(buddy_visible, chat_log_visible)``. The callback
-        runs synchronously on the Qt main thread, so keep it cheap:
-        app.py uses it to write a small JSON file.
+        Args are ``(buddy_visible, chat_log_visible, news_visible)``. The
+        callback runs synchronously on the Qt main thread, so keep it
+        cheap: app.py uses it to write a small JSON file.
         """
         self._ui_state_persist_callback = persist
 
     def restore_visibility_state(
-        self, *, buddy_visible: bool, chat_log_visible: bool,
+        self,
+        *,
+        buddy_visible: bool,
+        chat_log_visible: bool,
+        news_visible: bool = False,
     ) -> None:
         """Override the defaults before ``run_loop`` decides what to show.
 
@@ -814,13 +826,18 @@ class QtOverlay(AbstractOverlay):
         """
         self._buddy_user_visible = bool(buddy_visible)
         self._history_user_visible = bool(chat_log_visible)
+        self._news_user_visible = bool(news_visible)
 
     def _persist_ui_state(self) -> None:
         cb = self._ui_state_persist_callback
         if cb is None:
             return
         try:
-            cb(self._buddy_user_visible, self._history_user_visible)
+            cb(
+                self._buddy_user_visible,
+                self._history_user_visible,
+                self._news_user_visible,
+            )
         except Exception:
             log.exception("ui_state persist callback failed")
 
@@ -1023,6 +1040,7 @@ class QtOverlay(AbstractOverlay):
             self._news.hide()
         if self._tray is not None:
             self._tray.set_news_visible(new_visible)
+        self._persist_ui_state()
 
     def _on_user_submit(self, text: str) -> None:
         # Called on the Qt main thread — safe to touch widgets.

@@ -81,3 +81,18 @@ def test_clear_resets_to_empty_state(qapp: QApplication) -> None:
     win.append_items([_item()])
     win.clear()
     assert "Headlines will land here" in win._log.toHtml()
+
+
+def test_meta_renders_as_inline_break_not_indented_block(
+    qapp: QApplication,
+) -> None:
+    """The meta line must live inside the same paragraph as the title
+    (separated by <br>) — sibling block elements with margin-left on
+    the meta caused QTextBrowser to leak indent into subsequent rows.
+    """
+    from tokenpal.ui.qt.news_window import _format_row
+
+    item = _item(meta="42 pts", description="hello")
+    html = _format_row(item, font_color="#ffffff")
+    assert "<br>" in html
+    assert "margin-left" not in html
