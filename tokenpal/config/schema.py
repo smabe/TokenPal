@@ -25,6 +25,7 @@ class SensesConfig:
     process_heat: bool = False
     typing_cadence: bool = False
     filesystem_pulse: bool = False
+    lobsters: bool = False
 
 
 @dataclass

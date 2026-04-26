@@ -17,7 +17,7 @@ import logging
 import urllib.parse
 from typing import Any
 
-from tokenpal.senses.web_search._http import http_json
+from tokenpal.util.http_json import http_json
 
 log = logging.getLogger(__name__)
 

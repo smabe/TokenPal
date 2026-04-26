@@ -202,6 +202,7 @@ _TOPIC_FOCUS_HINTS: dict[str, str] = {
     "time_awareness": "Comment on the time of day or how long they've been working.",
     "idle": "Comment on them returning from being away.",
     "world_awareness": "React to the top HN headline shown in the snapshot.",
+    "lobsters": "React to the top Lobsters story shown in the snapshot.",
     "process_heat": "Call out which process is hogging the CPU.",
     "typing_cadence": "Comment on their typing rhythm or recent burst.",
     "network_state": "Comment on the network change.",

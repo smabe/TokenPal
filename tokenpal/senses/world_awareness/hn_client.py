@@ -8,18 +8,16 @@ before feeding them to any LLM prompt.
 from __future__ import annotations
 
 import html
-import json
 import logging
-import urllib.error
-import urllib.request
 from dataclasses import dataclass
+
+from tokenpal.util.http_json import http_json
 
 log = logging.getLogger(__name__)
 
 _HN_FRONT_PAGE_URL = (
     "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=5"
 )
-_TIMEOUT_S = 10.0
 
 
 @dataclass
@@ -32,24 +30,15 @@ class HNStory:
 
 
 def _normalize_title(raw: str) -> str:
-    """Strip/normalize a title string — decode HTML entities, collapse whitespace."""
     if not raw:
         return ""
-    decoded = html.unescape(raw)
-    # Collapse any whitespace runs (incl. newlines) to single spaces.
-    return " ".join(decoded.split()).strip()
+    return " ".join(html.unescape(raw).split())
 
 
 def fetch_top_story() -> HNStory | None:
     """Fetch HN front page and return the top story, or None on failure."""
-    try:
-        with urllib.request.urlopen(_HN_FRONT_PAGE_URL, timeout=_TIMEOUT_S) as resp:
-            raw = json.loads(resp.read())
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
-        log.debug("HN fetch failed: %s", exc)
-        return None
-    except (ValueError, json.JSONDecodeError) as exc:
-        log.debug("HN response parse failed: %s", exc)
+    raw = http_json(_HN_FRONT_PAGE_URL)
+    if not isinstance(raw, dict):
         return None
 
     hits = raw.get("hits") or []

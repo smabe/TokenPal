@@ -1,8 +1,8 @@
-"""Shared HTTP-JSON helper for web_search backends.
+"""Shared HTTP-JSON helper for outbound polling.
 
-All outbound network calls in the web_search package go through this helper
-so the error-handling, timeout, and User-Agent posture stays consistent.
-Returns None on any network, HTTP, parse, or schema failure — backends
+All keyless network calls in TokenPal route through this helper so the
+error-handling, timeout, and User-Agent posture stays consistent.
+Returns None on any network, HTTP, parse, or schema failure — callers
 never see exceptions from this module.
 """
 

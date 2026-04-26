@@ -2,32 +2,17 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from tokenpal.senses.world_awareness import hn_client as hn_mod
 from tokenpal.senses.world_awareness.hn_client import HNStory, fetch_top_story
 from tokenpal.senses.world_awareness.sense import WorldAwarenessSense
 
 # ---------------------------------------------------------------------------
 # HN client — network / parsing
 # ---------------------------------------------------------------------------
-
-
-def _mock_urlopen(payload: Any) -> MagicMock:
-    """Return a MagicMock suitable for patching urllib.request.urlopen as a
-    context manager returning an object with .read() -> JSON bytes."""
-    body = json.dumps(payload).encode("utf-8") if not isinstance(payload, bytes) else payload
-    resp = MagicMock()
-    resp.read.return_value = body
-    cm = MagicMock()
-    cm.__enter__.return_value = resp
-    cm.__exit__.return_value = False
-    opener = MagicMock(return_value=cm)
-    return opener
 
 
 def test_hn_client_parses_front_page_response():
@@ -43,44 +28,25 @@ def test_hn_client_parses_front_page_response():
             {"title": "Second story", "points": 10, "url": "", "author": "x"},
         ]
     }
-    with patch.object(hn_mod.urllib.request, "urlopen", _mock_urlopen(payload)):
+    with patch(
+        "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
+    ):
         story = fetch_top_story()
 
-    assert story is not None
-    assert isinstance(story, HNStory)
-    assert story.title == "Show HN: A neat little project"
-    assert story.points == 321
-    assert story.url == "https://example.com/project"
-    assert story.author == "pg"
-    assert story.created_at == "2026-04-14T12:00:00Z"
+    assert story == HNStory(
+        title="Show HN: A neat little project",
+        points=321,
+        url="https://example.com/project",
+        author="pg",
+        created_at="2026-04-14T12:00:00Z",
+    )
 
 
-def test_hn_client_returns_none_on_network_failure():
-    def raiser(*a: Any, **kw: Any) -> Any:
-        raise OSError("network unreachable")
-
-    with patch.object(hn_mod.urllib.request, "urlopen", side_effect=raiser):
-        assert fetch_top_story() is None
-
-
-def test_hn_client_returns_none_on_malformed_json():
-    resp = MagicMock()
-    resp.read.return_value = b"this is not json {{{"
-    cm = MagicMock()
-    cm.__enter__.return_value = resp
-    cm.__exit__.return_value = False
-
-    with patch.object(hn_mod.urllib.request, "urlopen", MagicMock(return_value=cm)):
-        assert fetch_top_story() is None
-
-
-def test_hn_client_returns_none_on_empty_hits():
-    with patch.object(hn_mod.urllib.request, "urlopen", _mock_urlopen({"hits": []})):
-        assert fetch_top_story() is None
-
-
-def test_hn_client_returns_none_on_missing_hits_key():
-    with patch.object(hn_mod.urllib.request, "urlopen", _mock_urlopen({})):
+@pytest.mark.parametrize("payload", [None, {}, {"hits": []}, "not json"])
+def test_hn_client_returns_none_on_bad_response(payload: Any):
+    with patch(
+        "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
+    ):
         assert fetch_top_story() is None
 
 
@@ -96,12 +62,13 @@ def test_hn_client_unescapes_html_entities_in_title():
             }
         ]
     }
-    with patch.object(hn_mod.urllib.request, "urlopen", _mock_urlopen(payload)):
+    with patch(
+        "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
+    ):
         story = fetch_top_story()
 
     assert story is not None
     assert story.title == 'Foo & Bar <3 "things"'
-    assert "&amp;" not in story.title
 
 
 # ---------------------------------------------------------------------------
