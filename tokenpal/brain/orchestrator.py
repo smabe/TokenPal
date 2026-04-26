@@ -2586,12 +2586,11 @@ class Brain:
             ap.input.notify_typed_input()
 
         async def _emit_reply(text: str) -> None:
-            # Voice replies are awaited so notify_tts_done lands AFTER
-            # playback drains; typed replies fire-and-forget through speak()
-            # — the routing rule in tts.py gates on
-            # speak_typed_replies_enabled so off-by-default just no-ops.
+            # Voice awaits speak() so notify_tts_done lands after playback
+            # drains. Typed fire-and-forgets — there's no FSM state to
+            # transition, and the speak() routing rule no-ops when
+            # speak_typed_replies_enabled is off.
             self._ui_callback(text)
-            ap = getattr(self, "_audio_pipeline", None)
             if ap is None:
                 return
             if source == "voice":

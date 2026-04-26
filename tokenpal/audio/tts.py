@@ -39,6 +39,19 @@ log = logging.getLogger(__name__)
 # capturing group keeps the delimiter in the output list.
 _SENTENCE_SPLIT = re.compile(r"([.!?\n]+)")
 
+# Two simultaneous OutputStreams on the same device produces unpredictable
+# audio on macOS PortAudio. Serialize speak() calls — typed fire-and-forget
+# + voice await can race when both toggles are on; lock makes them queue.
+# Lazy-init so module import doesn't require a running event loop.
+_PLAYBACK_LOCK: asyncio.Lock | None = None
+
+
+def _playback_lock() -> asyncio.Lock:
+    global _PLAYBACK_LOCK
+    if _PLAYBACK_LOCK is None:
+        _PLAYBACK_LOCK = asyncio.Lock()
+    return _PLAYBACK_LOCK
+
 
 def _sentences(text: str) -> list[str]:
     parts = _SENTENCE_SPLIT.split(text)
@@ -94,26 +107,27 @@ async def speak(
     dtype = "float32" if backend.sample_format == "float32" else "int16"
     np_dtype = np.float32 if backend.sample_format == "float32" else np.int16
 
-    stream = sd.OutputStream(
-        samplerate=backend.sample_rate,
-        channels=backend.channels,
-        dtype=dtype,
-    )
-    stream.start()
-    loop = asyncio.get_running_loop()
-    try:
-        for sentence in _sentences(text):
-            async for chunk in backend.synthesize(sentence, voice_id):
-                if not chunk:
-                    continue
-                samples = np.frombuffer(chunk, dtype=np_dtype)
-                # OutputStream.write blocks until the device drains; pushing
-                # it to an executor keeps the asyncio loop responsive so a
-                # typed-input cancellation can land between chunks.
-                await loop.run_in_executor(None, stream.write, samples)
-    except asyncio.CancelledError:
-        stream.abort(ignore_errors=True)
-        raise
-    finally:
-        stream.stop(ignore_errors=True)
-        stream.close(ignore_errors=True)
+    async with _playback_lock():
+        stream = sd.OutputStream(
+            samplerate=backend.sample_rate,
+            channels=backend.channels,
+            dtype=dtype,
+        )
+        stream.start()
+        loop = asyncio.get_running_loop()
+        try:
+            for sentence in _sentences(text):
+                async for chunk in backend.synthesize(sentence, voice_id):
+                    if not chunk:
+                        continue
+                    samples = np.frombuffer(chunk, dtype=np_dtype)
+                    # OutputStream.write blocks until the device drains;
+                    # the executor keeps the asyncio loop responsive so a
+                    # typed-input cancellation can land between chunks.
+                    await loop.run_in_executor(None, stream.write, samples)
+        except asyncio.CancelledError:
+            stream.abort(ignore_errors=True)
+            raise
+        finally:
+            stream.stop(ignore_errors=True)
+            stream.close(ignore_errors=True)
