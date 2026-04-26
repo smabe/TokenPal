@@ -170,6 +170,10 @@ _PREFIX_LOCK_TOKEN_COUNT = 3
 _PREFIX_LOCK_MIN_MATCHES = 3
 _RECENT_OUTPUTS_MAX = 10
 
+# Conversation-only suppression window. Decoupled from _RECENT_OUTPUTS_MAX so
+# observations don't poison the conv suppression check (and vice versa).
+_CONV_RECENT_OUTPUTS_MAX = 5
+
 # Appended to the conversation system message when retrying after a near-dup
 # trip. Observation context is stripped on the retry to break the lock.
 _RETRY_NEAR_DUP_INSTRUCTION = (
@@ -339,6 +343,11 @@ class Brain:
         # Near-duplicate guard — drops observation/freeform lines that rhyme
         # too closely with recent output (prevents prompt-cache template lock-in).
         self._recent_outputs: deque[str] = deque(maxlen=_RECENT_OUTPUTS_MAX)
+        # Conv-only mirror — observation pollution would make a fresh chat reply
+        # look like a duplicate, so the conv suppression check reads from here.
+        self._conversation_recent_outputs: deque[str] = deque(
+            maxlen=_CONV_RECENT_OUTPUTS_MAX
+        )
 
         # Conversation session state
         self._conversation: ConversationSession | None = None
@@ -1100,14 +1109,17 @@ class Brain:
             return {normalized}
         return {normalized[i:i + 3] for i in range(len(normalized) - 2)}
 
-    def _is_near_duplicate(self, text: str) -> bool:
+    def _is_near_duplicate(
+        self, text: str, recent: deque[str] | None = None,
+    ) -> bool:
         """True if `text` overlaps ≥ _NEAR_DUPLICATE_JACCARD with recent output."""
-        if not self._recent_outputs:
+        recent = recent if recent is not None else self._recent_outputs
+        if not recent:
             return False
         new_set = self._trigram_set(text)
         if not new_set:
             return False
-        for prior in self._recent_outputs:
+        for prior in recent:
             prior_set = self._trigram_set(prior)
             if not prior_set:
                 continue
@@ -1121,7 +1133,7 @@ class Brain:
                     jaccard, prior[:60],
                 )
                 return True
-        return self._has_recent_prefix_lock(text)
+        return self._has_recent_prefix_lock(text, recent)
 
     @staticmethod
     def _leading_tokens(text: str, n: int = _PREFIX_LOCK_TOKEN_COUNT) -> str:
@@ -1129,24 +1141,27 @@ class Brain:
         cleaned = "".join(c.lower() if c.isalnum() else " " for c in text)
         return " ".join(cleaned.split()[:n])
 
-    def _has_recent_prefix_lock(self, text: str) -> bool:
+    def _has_recent_prefix_lock(
+        self, text: str, recent: deque[str] | None = None,
+    ) -> bool:
         """True if `text` shares its leading N tokens with M+ recent outputs.
 
         Catches template drift where a voice anchors on one lead phrase and
         varies only the tail ('Jake, good cop... this X got more Y than Z').
         Surface Jaccard misses these because the tail carries most trigrams.
         """
+        recent = recent if recent is not None else self._recent_outputs
         prefix = self._leading_tokens(text)
         if not prefix:
             return False
         matches = sum(
-            1 for prior in self._recent_outputs
+            1 for prior in recent
             if self._leading_tokens(prior) == prefix
         )
         if matches >= _PREFIX_LOCK_MIN_MATCHES:
             log.info(
                 "Gate: prefix-lock suppressed %r (%d matches in last %d)",
-                prefix, matches, len(self._recent_outputs),
+                prefix, matches, len(recent),
             )
             return True
         return False
@@ -2695,7 +2710,8 @@ class Brain:
             self._push_status()
 
             filtered = self._personality.filter_conversation_response(reply_text)
-            if filtered and self._is_near_duplicate(filtered):
+            conv_recent = self._conversation_recent_outputs
+            if filtered and self._is_near_duplicate(filtered, conv_recent):
                 log.info("TokenPal (reply near-duplicate, retrying): %s", filtered)
                 retry_messages: list[dict[str, Any]] = [
                     {"role": "system", "content": system_msg + _RETRY_NEAR_DUP_INSTRUCTION},
@@ -2707,7 +2723,7 @@ class Brain:
                 )
                 retry_filtered = self._personality.filter_conversation_response(retry_text)
                 filtered = retry_filtered
-                if retry_filtered and self._is_near_duplicate(retry_filtered):
+                if retry_filtered and self._is_near_duplicate(retry_filtered, conv_recent):
                     log.info(
                         "TokenPal (reply retry-also-near-duplicate, emitting anyway): %s",
                         retry_filtered,
@@ -2727,6 +2743,7 @@ class Brain:
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
                 self._recent_outputs.append(filtered)
+                self._conversation_recent_outputs.append(filtered)
                 await _emit_reply(filtered)
                 self._last_comment_time = time.monotonic()
             else:

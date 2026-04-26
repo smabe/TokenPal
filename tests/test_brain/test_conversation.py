@@ -439,6 +439,32 @@ class TestBrainConversation:
         assert len(brain._conversation.history) == 4
         assert brain._conversation.history[3]["content"] == dup
 
+    async def test_observation_in_shared_deque_does_not_poison_conv_reply(self):
+        """Observations live in `_recent_outputs`. A first conversation reply
+        that happens to match a recent observation must NOT trip the conv
+        suppression check — the conv path reads from its own isolated window."""
+        observation_template = "Yeah buddy, sounds totally rad to me!"
+        # Pre-load the SHARED deque (as if an observation said this 2 minutes ago).
+        llm = _MockLLM([observation_template])
+        brain = _make_brain(llm=llm)
+        brain._recent_outputs.append(observation_template)
+        # Conv-only window stays empty.
+        assert len(brain._conversation_recent_outputs) == 0
+
+        await brain._handle_user_input("hey buddy")
+
+        # Only one LLM call — no retry triggered, because the conv check reads
+        # from `_conversation_recent_outputs`, which is empty.
+        assert len(llm.calls) == 1
+        ui = brain._ui_callback
+        last_emitted = ui.call_args_list[-1][0][0]
+        assert last_emitted == observation_template, (
+            f"observation in shared deque poisoned conv reply; got {last_emitted!r}"
+        )
+        # The conv reply now lives in BOTH windows so observation paths stay aware.
+        assert observation_template in brain._recent_outputs
+        assert observation_template in brain._conversation_recent_outputs
+
     async def test_failed_generation_removes_user_turn(self):
         class _FailLLM(_MockLLM):
             async def generate_with_tools(self, **kwargs: Any) -> LLMResponse:
