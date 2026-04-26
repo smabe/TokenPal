@@ -81,6 +81,7 @@ def _measure_block_paint_width(font: QFont) -> int:
     painter = QPainter(img)
     painter.setFont(font)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     painter.setPen(QColor("white"))
     painter.drawText(8, 24, "█")
     painter.end()
@@ -127,6 +128,12 @@ class BuddyWindow(QWidget):
 
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
+        # Greyscale AA only; subpixel AA on translucent widgets dots glyphs
+        # (QTBUG-43774).
+        self._font.setStyleStrategy(
+            QFont.StyleStrategy.PreferAntialias
+            | QFont.StyleStrategy.NoSubpixelAntialias,
+        )
 
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -631,6 +638,7 @@ class BuddyWindow(QWidget):
         # transparent before this runs, so no fillRect needed.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setFont(self._font)
         # Apply the same transform the hit-test uses, so what's painted
         # and what can be clicked agree.
