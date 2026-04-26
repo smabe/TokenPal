@@ -1306,6 +1306,9 @@ class PersonalityEngine:
         tool_rule = self._tool_use_rule(tool_names or [])
         if self.is_finetuned:
             return (
+                "You are in RESPONSE mode. Reply to the user's last message. "
+                "Do NOT narrate the background context — that's for your awareness, "
+                "not something to comment on.\n\n"
                 "The user is talking to you directly. Respond in character.\n\n"
                 "Rules:\n"
                 "1. Actually help the user with what they asked. This is your top priority.\n"
@@ -1378,7 +1381,10 @@ class PersonalityEngine:
 
     def build_context_injection(self, context_snapshot: str) -> str:
         """Build a context message with current screen state."""
-        return f"What you currently see on their screen:\n{context_snapshot}"
+        return (
+            f"Background context (do NOT narrate this; for awareness only):\n"
+            f"{context_snapshot}"
+        )
 
     def build_conversation_prompt(
         self, user_message: str, context_snapshot: str
