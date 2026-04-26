@@ -43,20 +43,22 @@
 
 **Typed-speak toggle** (`9761c2f` + simplify pass `263303c`): third independent audio toggle `speak_typed_replies_enabled` lets the buddy narrate replies even when typed. Off by default — preserves the "type-in/type-out, voice-in/voice-out" symmetry as the default. UI toggle in Qt + Textual modals; `/voice-io typed-speak [on|off]` slash command. Module-level `asyncio.Lock` in `tts.py` serializes OutputStream lifecycle so concurrent typed + voice replies don't race two PortAudio streams. `audio_writer` collapsed to a generic `set_audio_field` with named wrappers.
 
-**Resume here — manual smoke + custom activation**
+**Final cleanup** (`b60c974`): `wakeword_model_name` config field landed — runtime is now data-driven for any wakeword onnx. Pre-existing ruff errors fixed (`FilterReason` → `StrEnum`, `m,M` → `lo,hi` in color.py). `ruff check tokenpal/` clean for the first time.
 
-End-to-end smoke is partially verified (wake fires, VAD threshold tuneable). Outstanding manual work:
+## Resume here — what's left
 
-1. Three trailing-window scenarios from done-criteria (silence, pink noise, second utterance) — need real audio.
-2. Train `hey_tokenpal.onnx` via openwakeword's Colab (~1h on free T4). Notes in `tools/wakeword-training/README.md`. Until then, runtime hardcodes `hey_jarvis` in `tokenpal/audio/input.py`. After training, also wire `wakeword_model_name` config field so the choice is data-driven.
+Runtime is feature-complete and clean. Two manual items + two enhancement items remain:
 
-**Known follow-ups, ordered by leverage:**
-- Custom activation (`hey_tokenpal.onnx` training + config wire-up) — see `tools/wakeword-training/README.md`
-- Live-toggle voice/ambient/typed-speak without restart (currently boot-time only — `start_input` / `stop_input` exist but not driven by config flips)
-- ASRWithFallback cooldown if remote turns out flappy in practice (deferred per simplify)
-- `--verbose` per-frame VAD probability surfacing for finer-grained tuning beyond the listening-timeout summary
+**Manual / external (not code work):**
+1. **Train `hey_tokenpal.onnx`** via openWakeWord's Colab (~1h on free T4). Notes in [`tools/wakeword-training/README.md`](../tools/wakeword-training/README.md). Drop result at `~/.tokenpal/audio/wakeword/hey_tokenpal.onnx`, set `[audio] wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml`. No code change needed.
+2. **Three trailing-window real-audio smoke tests** from done-criteria: 5s speech + 12s silence; 5s speech + 12s pink noise; 5s speech + 4s gap + 5s speech. Need a mic, not automatable in CI. Manual against the running buddy.
 
-**Documentation status:** Full surface in [`docs/claude/audio.md`](../docs/claude/audio.md). Sub-doc table in `CLAUDE.md` updated.
+**Code follow-ups, ordered by leverage:**
+3. **Live-toggle voice/ambient/typed-speak without restart.** `start_input` / `stop_input` exist on `AudioPipeline` but the orchestrator only calls `start_input` once at brain bootup. To make config flips take effect live, wire `audio_writer.set_audio_field` results into `start_input` / `stop_input` calls keyed off the `voice_conversation_enabled` value. Probably ~30 lines.
+4. **`ASRWithFallback` cooldown.** If a remote ASR endpoint turns out flappy in practice, every utterance pays the 2s connect timeout before falling back. Add a simple exponential-backoff cooldown (60s after failure → 5min after consecutive failures, reset on success). Premature until someone hits it; documented for the day someone does.
+5. **Per-frame VAD probability surfacing.** Listening-timeout log line shows max prob since reset, but for fine-grained tuning a `--verbose` mode that emits per-frame prob would help. Trivial to add behind a `TOKENPAL_VAD_TRACE=1` env var; punt until needed.
+
+**Documentation status:** Full surface in [`docs/claude/audio.md`](../docs/claude/audio.md). Sub-doc table in `CLAUDE.md` updated. Custom-activation training path in [`tools/wakeword-training/README.md`](../tools/wakeword-training/README.md).
 
 ## Goal
 Add an opt-in **voice conversation mode** modeled on ChatGPT/Claude voice: user says "hey tokenpal", the buddy answers in voice, the mic stays hot through a short trailing window so the user can keep talking without re-waking. Typed conversations stay text-only. Random ambient observations stay text-only by default; speaking them is a separate sub-opt-in that does not require the mic.
