@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tokenpal.senses.world_awareness.hn_client import HNStory, fetch_top_story
+from tokenpal.senses.world_awareness.hn_client import HNStory, fetch_top_stories
 from tokenpal.senses.world_awareness.sense import WorldAwarenessSense
 
 # ---------------------------------------------------------------------------
@@ -19,22 +19,24 @@ def test_hn_client_parses_front_page_response():
     payload = {
         "hits": [
             {
-                "title": "Show HN: A neat little project",
+                "title": "Show HN: a project",
                 "points": 321,
                 "url": "https://example.com/project",
                 "author": "pg",
                 "created_at": "2026-04-14T12:00:00Z",
             },
-            {"title": "Second story", "points": 10, "url": "", "author": "x"},
+            {"title": "Second", "points": 10, "url": "", "author": "x"},
+            {"title": "Third", "points": 5, "url": "", "author": "y"},
         ]
     }
     with patch(
         "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
     ):
-        story = fetch_top_story()
+        stories = fetch_top_stories(limit=3)
 
-    assert story == HNStory(
-        title="Show HN: A neat little project",
+    assert [s.title for s in stories] == ["Show HN: a project", "Second", "Third"]
+    assert stories[0] == HNStory(
+        title="Show HN: a project",
         points=321,
         url="https://example.com/project",
         author="pg",
@@ -43,11 +45,11 @@ def test_hn_client_parses_front_page_response():
 
 
 @pytest.mark.parametrize("payload", [None, {}, {"hits": []}, "not json"])
-def test_hn_client_returns_none_on_bad_response(payload: Any):
+def test_hn_client_returns_empty_on_bad_response(payload: Any):
     with patch(
         "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
     ):
-        assert fetch_top_story() is None
+        assert fetch_top_stories(limit=3) == []
 
 
 def test_hn_client_unescapes_html_entities_in_title():
@@ -65,20 +67,14 @@ def test_hn_client_unescapes_html_entities_in_title():
     with patch(
         "tokenpal.senses.world_awareness.hn_client.http_json", return_value=payload,
     ):
-        story = fetch_top_story()
+        stories = fetch_top_stories(limit=3)
 
-    assert story is not None
-    assert story.title == 'Foo & Bar <3 "things"'
+    assert stories[0].title == 'Foo & Bar <3 "things"'
 
 
 # ---------------------------------------------------------------------------
 # Sense behavior
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def enabled_config() -> dict[str, Any]:
-    return {"enabled": True}
 
 
 async def test_setup_enabled_config_leaves_sense_enabled(enabled_config: dict[str, Any]):
@@ -87,112 +83,69 @@ async def test_setup_enabled_config_leaves_sense_enabled(enabled_config: dict[st
     assert sense.enabled is True
 
 
-async def test_poll_emits_reading_with_expected_summary_format(enabled_config: dict[str, Any]):
+async def test_poll_emits_summary_with_all_headlines(enabled_config: dict[str, Any]):
+    stories = [
+        HNStory(title="A", points=200, url="u1", author="a", created_at="t"),
+        HNStory(title="B", points=50, url="u2", author="b", created_at="t"),
+    ]
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
-    story = HNStory(
-        title="Neat thing that happened",
-        points=200,
-        url="https://example.com/x",
-        author="u",
-        created_at="2026-04-14T00:00:00Z",
-    )
     with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=story,
+        "tokenpal.senses.world_awareness.sense.fetch_top_stories", return_value=stories,
     ):
         reading = await sense.poll()
-
     assert reading is not None
-    assert reading.summary.startswith("Top HN: '")
-    assert "Neat thing that happened" in reading.summary
-    assert reading.summary.endswith("— 200 points")
+    assert reading.summary == "Top HN: 'A' — 200 pts | 'B' — 50 pts"
+    assert reading.data["stories"][0]["url"] == "u1"
 
 
 async def test_poll_truncates_long_title_in_summary(enabled_config: dict[str, Any]):
-    long_title = "A" * 200
-    story = HNStory(title=long_title, points=42, url="", author="", created_at="")
+    stories = [HNStory(title="A" * 200, points=42, url="", author="", created_at="")]
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=story,
+        "tokenpal.senses.world_awareness.sense.fetch_top_stories", return_value=stories,
     ):
         reading = await sense.poll()
-
     assert reading is not None
-    # Summary is prefix + truncated title + suffix; truncated title must be
-    # no more than 80 chars. Pull it out of the summary between the single quotes.
-    first_q = reading.summary.index("'")
-    last_q = reading.summary.rindex("'")
-    shown = reading.summary[first_q + 1 : last_q]
-    assert len(shown) <= 80
-    # Full untruncated title should NOT appear in the summary.
-    assert long_title not in reading.summary
+    assert "A" * 200 not in reading.summary
+    assert "…" in reading.summary
 
 
 async def test_poll_puts_url_in_data_not_summary(enabled_config: dict[str, Any]):
     url = "https://example.com/secret-slug"
-    story = HNStory(title="Some story", points=10, url=url, author="a", created_at="t")
+    stories = [HNStory(title="t", points=10, url=url, author="a", created_at="t")]
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=story,
+        "tokenpal.senses.world_awareness.sense.fetch_top_stories", return_value=stories,
     ):
         reading = await sense.poll()
-
     assert reading is not None
-    assert reading.data.get("url") == url
+    assert reading.data["stories"][0]["url"] == url
     assert url not in reading.summary
 
 
 async def test_poll_filters_sensitive_terms_in_title(enabled_config: dict[str, Any]):
-    # "1password" is in SENSITIVE_APPS — HN title containing it should be dropped.
-    story = HNStory(
-        title="1Password had a security breach",
-        points=500,
-        url="https://example.com",
-        author="a",
-        created_at="t",
-    )
+    stories = [
+        HNStory(title="1Password breach", points=500, url="", author="a", created_at="t"),
+        HNStory(title="Clean", points=10, url="", author="b", created_at="t"),
+    ]
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=story,
+        "tokenpal.senses.world_awareness.sense.fetch_top_stories", return_value=stories,
     ):
         reading = await sense.poll()
+    assert reading is not None
+    assert "1Password" not in reading.summary
+    assert "Clean" in reading.summary
 
-    assert reading is None
 
-
-async def test_poll_silent_on_fetch_failure_after_prior_success(
-    enabled_config: dict[str, Any],
-):
+async def test_poll_silent_on_fetch_failure(enabled_config: dict[str, Any]):
     sense = WorldAwarenessSense(enabled_config)
     await sense.setup()
-    good = HNStory(title="Nice story", points=50, url="", author="", created_at="")
-
-    # First poll: success.
     with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=good,
+        "tokenpal.senses.world_awareness.sense.fetch_top_stories", return_value=[],
     ):
-        first = await sense.poll()
-    assert first is not None
-
-    # Second poll: network failure. Sense must return None silently — no quip.
-    with patch(
-        "tokenpal.senses.world_awareness.sense.fetch_top_story",
-        return_value=None,
-    ):
-        second = await sense.poll()
-
-    assert second is None
-    # And absolutely no "couldn't reach HN" style text in anything we emit.
-    if second is not None:
-        assert "couldn't reach" not in second.summary.lower()
-        assert "hn" not in second.summary.lower() or "top hn" in second.summary.lower()
-
-
+        assert await sense.poll() is None

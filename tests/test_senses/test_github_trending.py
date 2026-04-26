@@ -11,17 +11,17 @@ import pytest
 from tokenpal.senses.github_trending._client import (
     GHRepo,
     _trending_url,
-    fetch_top_repo,
+    fetch_top_repos,
 )
 from tokenpal.senses.github_trending.sense import GitHubTrendingSense
 
 
-def test_trending_url_uses_7_day_cutoff():
-    url = _trending_url(dt.date(2026, 4, 25))
+def test_trending_url_uses_7_day_cutoff_and_per_page():
+    url = _trending_url(dt.date(2026, 4, 25), per_page=3)
     assert "created:>2026-04-18" in url
     assert "sort=stars" in url
     assert "order=desc" in url
-    assert "per_page=1" in url
+    assert "per_page=3" in url
 
 
 def test_client_parses_search_response():
@@ -33,15 +33,23 @@ def test_client_parses_search_response():
                 "description": "An ASCII desktop buddy",
                 "language": "Python",
                 "html_url": "https://github.com/smabe/TokenPal",
-            }
+            },
+            {
+                "full_name": "x/y",
+                "stargazers_count": 100,
+                "description": "Other",
+                "language": "Rust",
+                "html_url": "u",
+            },
         ]
     }
     with patch(
         "tokenpal.senses.github_trending._client.http_json", return_value=payload,
     ):
-        repo = fetch_top_repo()
+        repos = fetch_top_repos(limit=2)
 
-    assert repo == GHRepo(
+    assert [r.full_name for r in repos] == ["smabe/TokenPal", "x/y"]
+    assert repos[0] == GHRepo(
         full_name="smabe/TokenPal",
         stars=9001,
         description="An ASCII desktop buddy",
@@ -51,53 +59,58 @@ def test_client_parses_search_response():
 
 
 @pytest.mark.parametrize("payload", [None, {}, {"items": []}, {"items": [{}]}, "x"])
-def test_client_returns_none_on_bad_response(payload: Any):
+def test_client_returns_empty_on_bad_response(payload: Any):
     with patch(
         "tokenpal.senses.github_trending._client.http_json", return_value=payload,
     ):
-        assert fetch_top_repo() is None
+        assert fetch_top_repos(limit=3) == []
 
 
-async def test_poll_emits_summary_with_full_name_stars_lang_desc(
-    enabled_config: dict[str, Any],
-):
-    repo = GHRepo(
-        full_name="someone/cool-thing",
-        stars=1234,
-        description="It does the thing",
-        language="Rust",
-        url="u",
-    )
+async def test_poll_emits_summary_with_all_repos(enabled_config: dict[str, Any]):
+    repos = [
+        GHRepo(
+            full_name="someone/cool-thing",
+            stars=1234,
+            description="It does the thing",
+            language="Rust",
+            url="u1",
+        ),
+        GHRepo(
+            full_name="other/thing", stars=500, description="d2", language="Go", url="u2",
+        ),
+    ]
     sense = GitHubTrendingSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.github_trending.sense.fetch_top_repo", return_value=repo,
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
     ):
         reading = await sense.poll()
     assert reading is not None
     assert reading.summary == (
-        "Trending GitHub: someone/cool-thing — 1234 stars (last 7d) (Rust) — It does the thing"
+        "Trending GitHub (last 7d): "
+        "someone/cool-thing — 1234★ (Rust) — It does the thing | "
+        "other/thing — 500★ (Go) — d2"
     )
 
 
 async def test_poll_omits_language_when_missing(enabled_config: dict[str, Any]):
-    repo = GHRepo(full_name="x/y", stars=10, description="d", language="", url="")
+    repos = [GHRepo(full_name="x/y", stars=10, description="d", language="", url="")]
     sense = GitHubTrendingSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.github_trending.sense.fetch_top_repo", return_value=repo,
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
     ):
         reading = await sense.poll()
     assert reading is not None
-    assert reading.summary == "Trending GitHub: x/y — 10 stars (last 7d) — d"
+    assert reading.summary == "Trending GitHub (last 7d): x/y — 10★ — d"
 
 
 async def test_poll_truncates_long_description(enabled_config: dict[str, Any]):
-    repo = GHRepo(full_name="x/y", stars=1, description="A" * 200, language="", url="")
+    repos = [GHRepo(full_name="x/y", stars=1, description="A" * 200, language="", url="")]
     sense = GitHubTrendingSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.github_trending.sense.fetch_top_repo", return_value=repo,
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
     ):
         reading = await sense.poll()
     assert reading is not None
@@ -106,23 +119,29 @@ async def test_poll_truncates_long_description(enabled_config: dict[str, Any]):
 
 
 async def test_poll_filters_sensitive_terms(enabled_config: dict[str, Any]):
-    repo = GHRepo(
-        full_name="evil/1password-leak", stars=100, description="d", language="", url="",
-    )
+    repos = [
+        GHRepo(
+            full_name="evil/1password-leak", stars=100, description="d", language="", url="",
+        ),
+        GHRepo(full_name="x/clean", stars=50, description="d", language="", url=""),
+    ]
     sense = GitHubTrendingSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.github_trending.sense.fetch_top_repo", return_value=repo,
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
     ):
-        assert await sense.poll() is None
+        reading = await sense.poll()
+    assert reading is not None
+    assert "1password" not in reading.summary.lower()
+    assert "x/clean" in reading.summary
 
 
 async def test_poll_dedups_unchanged_summary(enabled_config: dict[str, Any]):
-    repo = GHRepo(full_name="x/y", stars=1, description="d", language="", url="")
+    repos = [GHRepo(full_name="x/y", stars=1, description="d", language="", url="")]
     sense = GitHubTrendingSense(enabled_config)
     await sense.setup()
     with patch(
-        "tokenpal.senses.github_trending.sense.fetch_top_repo", return_value=repo,
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
     ):
         first = await sense.poll()
         second = await sense.poll()

@@ -16,7 +16,7 @@ from tokenpal.util.http_json import http_json
 log = logging.getLogger(__name__)
 
 _HN_FRONT_PAGE_URL = (
-    "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=5"
+    "https://hn.algolia.com/api/v1/search?tags=front_page&hitsPerPage=10"
 )
 
 
@@ -35,41 +35,37 @@ def _normalize_title(raw: str) -> str:
     return " ".join(html.unescape(raw).split())
 
 
-def fetch_top_story() -> HNStory | None:
-    """Fetch HN front page and return the top story, or None on failure."""
-    raw = http_json(_HN_FRONT_PAGE_URL)
-    if not isinstance(raw, dict):
-        return None
-
-    hits = raw.get("hits") or []
-    if not hits:
-        return None
-
-    top = hits[0]
-    title = _normalize_title(top.get("title") or top.get("story_title") or "")
+def _parse_hit(hit: dict) -> HNStory | None:
+    title = _normalize_title(hit.get("title") or hit.get("story_title") or "")
     if not title:
         return None
 
-    points_raw = top.get("points") or top.get("story_points") or 0
+    points_raw = hit.get("points") or hit.get("story_points") or 0
     try:
         points = int(points_raw)
     except (TypeError, ValueError):
         points = 0
 
-    url = top.get("url") or top.get("story_url") or ""
+    url = hit.get("url") or hit.get("story_url") or ""
     if not isinstance(url, str):
         url = ""
-    author = top.get("author") or ""
+    author = hit.get("author") or ""
     if not isinstance(author, str):
         author = ""
-    created_at = top.get("created_at") or ""
+    created_at = hit.get("created_at") or ""
     if not isinstance(created_at, str):
         created_at = ""
 
     return HNStory(
-        title=title,
-        points=points,
-        url=url,
-        author=author,
-        created_at=created_at,
+        title=title, points=points, url=url, author=author, created_at=created_at,
     )
+
+
+def fetch_top_stories(limit: int) -> list[HNStory]:
+    """Fetch HN front page and return up to *limit* parsed stories."""
+    raw = http_json(_HN_FRONT_PAGE_URL)
+    if not isinstance(raw, dict):
+        return []
+    hits = raw.get("hits") or []
+    stories = [s for h in hits if isinstance(h, dict) if (s := _parse_hit(h))]
+    return stories[:limit]

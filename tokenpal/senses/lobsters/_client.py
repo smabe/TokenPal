@@ -31,28 +31,28 @@ def _normalize_title(raw: str) -> str:
     return " ".join(html.unescape(raw).split())
 
 
-def fetch_top_story() -> LobstersStory | None:
-    """Fetch lobste.rs hottest list and return the top story, or None on failure."""
-    raw = http_json(_LOBSTERS_HOTTEST_URL)
-    if not isinstance(raw, list) or not raw:
-        return None
-
-    top = raw[0]
-    if not isinstance(top, dict):
-        return None
-
-    title = _normalize_title(top.get("title") or "")
+def _parse_story(item: dict) -> LobstersStory | None:
+    title = _normalize_title(item.get("title") or "")
     if not title:
         return None
 
-    score_raw = top.get("score") or 0
+    score_raw = item.get("score") or 0
     try:
         score = int(score_raw)
     except (TypeError, ValueError):
         score = 0
 
-    url = top.get("url") or top.get("short_id_url") or ""
+    url = item.get("url") or item.get("short_id_url") or ""
     if not isinstance(url, str):
         url = ""
 
     return LobstersStory(title=title, score=score, url=url)
+
+
+def fetch_top_stories(limit: int) -> list[LobstersStory]:
+    """Fetch lobste.rs hottest list and return up to *limit* parsed stories."""
+    raw = http_json(_LOBSTERS_HOTTEST_URL)
+    if not isinstance(raw, list):
+        return []
+    stories = [s for item in raw if isinstance(item, dict) if (s := _parse_story(item))]
+    return stories[:limit]
