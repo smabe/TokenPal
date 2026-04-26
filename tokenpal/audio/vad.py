@@ -54,6 +54,11 @@ class SileroVAD:
         self._in_speech: bool = False
         self._speech_run_s: float = 0.0
         self._silence_run_s: float = 0.0
+        # Tracks the loudest prob seen since the last reset(). Surfaced on
+        # the listening-timeout path so a "no speech" outcome carries the
+        # diagnostic — was VAD seeing a 0.18 quiet mic, or 0.48 just below
+        # threshold? Tells us whether to lower threshold or fix levels.
+        self._max_prob_since_reset: float = 0.0
 
     @property
     def model_path(self) -> Path:
@@ -85,6 +90,11 @@ class SileroVAD:
         self._in_speech = False
         self._speech_run_s = 0.0
         self._silence_run_s = 0.0
+        self._max_prob_since_reset = 0.0
+
+    @property
+    def max_prob_since_reset(self) -> float:
+        return self._max_prob_since_reset
 
     def process(self, frame: bytes) -> VadEvent | None:
         if self._session is None or self._state is None:
@@ -113,6 +123,8 @@ class SileroVAD:
             )
             prob = float(outputs[0][0][0])
             self._state = outputs[1]
+            if prob > self._max_prob_since_reset:
+                self._max_prob_since_reset = prob
             event = self._update_hysteresis(prob, chunk_duration_s)
             if event is not None:
                 emitted = event

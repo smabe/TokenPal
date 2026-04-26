@@ -489,6 +489,10 @@ class AudioConfig:
     kokoro_quantization: Literal["int8", "fp16", "fp32"] = "fp16"
     wakeword_backend: str = "openwakeword"
     wakeword_threshold: float = 0.7
+    # Silero VAD probability threshold. Lower for low-amplitude mics
+    # (network KVM, USB conferencing, distant lavalier) where speech
+    # never crosses 0.5. 0.3 is a safe floor before false positives.
+    vad_threshold: float = 0.5
     # Hard-closes regardless of VAD state — otherwise TV/music in the room
     # keeps the session open forever.
     trailing_window_s: float = 8.0

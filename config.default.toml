@@ -345,6 +345,8 @@ base_model = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 #
 # wakeword_backend = "openwakeword"
 # wakeword_threshold = 0.7
+# vad_threshold = 0.5        # lower for low-amplitude mics (network KVM,
+#                            # USB conferencing). 0.3 is a safe floor.
 # trailing_window_s = 8.0    # hard close regardless of VAD state
 #
 # asr_backend = "local"      # "server" POSTs to the inference server

@@ -65,7 +65,7 @@ class InputPipeline:
             model_name="hey_jarvis",
             threshold=config.wakeword_threshold,
         )
-        self._vad = SileroVAD(data_dir)
+        self._vad = SileroVAD(data_dir, threshold=config.vad_threshold)
         self._asr: ASRBackend = make_asr(config, data_dir)
         self._fsm = VoiceSession(trailing_window_s=config.trailing_window_s)
 
@@ -180,7 +180,11 @@ class InputPipeline:
                 self._listening_started_at is not None
                 and now - self._listening_started_at > _LISTENING_TIMEOUT_S
             ):
-                log.info("voice: listening timeout, no speech")
+                log.info(
+                    "voice: listening timeout, no speech "
+                    "(max VAD prob: %.2f, threshold: %.2f)",
+                    self._vad.max_prob_since_reset, self._vad.threshold,
+                )
                 self._handle(self._fsm.on_listening_timeout())
             return
 
