@@ -39,12 +39,18 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
+from tokenpal.ui.qt._screen_bounds import Rect, offscreen_rescue_target
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
 from tokenpal.ui.qt.physics import RigidBodyConfig, RigidBodySimulator
 
 _PHYSICS_HZ = 60
 _TICK_MS = int(1000 / _PHYSICS_HZ)
 _EDGE_DOCK_THRESHOLD = 20       # px from screen edge triggers snap
+# 2 s grace lets a fling overshoot and bounce back via momentum before
+# the rescue stomps in.
+_OFFSCREEN_RESCUE_DELAY_S = 2.0
+_OFFSCREEN_RESCUE_DURATION_S = 0.5
+_OFFSCREEN_RESCUE_INSET = 24
 # Head-heavy center of mass. y-fraction down from the crown. 0.30 puts
 # the COM in the upper torso so a foot-grab flops the head down (heavier
 # end falls) and the buddy has a preferred orientation when released.
@@ -162,6 +168,11 @@ class BuddyWindow(QWidget):
         self._move_to_com()
 
         self._drag_active = False
+
+        self._offscreen_since: float | None = None
+        self._rescue_t0: float | None = None
+        self._rescue_start: tuple[float, float] = (0.0, 0.0)
+        self._rescue_target: tuple[float, float] = (0.0, 0.0)
 
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
@@ -421,12 +432,16 @@ class BuddyWindow(QWidget):
         # Clamp dt to survive timer stalls — soft-constraint γ/β are
         # dt-dependent and a 200ms hiccup would over-correct visibly.
         self._sim.tick(min(dt, 1.0 / 30.0))
+        self._tick_offscreen_rescue(now)
         self._refresh_view()
         if _PHYSICS_DEBUG:
             self._debug_tick_counter += 1
             if self._debug_tick_counter % _PHYSICS_DEBUG_LOG_EVERY == 0:
                 self._log_physics_debug()
-        if self._sim.sleeping and not self._drag_active:
+        rescue_pending = (
+            self._offscreen_since is not None or self._rescue_t0 is not None
+        )
+        if self._sim.sleeping and not self._drag_active and not rescue_pending:
             self._sleep_timer()
 
     def _wake_timer(self) -> None:
@@ -437,6 +452,60 @@ class BuddyWindow(QWidget):
     def _sleep_timer(self) -> None:
         if self._timer.isActive():
             self._timer.stop()
+
+    # --- Off-screen rescue ----------------------------------------------
+
+    def _screen_rects(self) -> list[Rect]:
+        rects: list[Rect] = []
+        for screen in QGuiApplication.screens():
+            geom = screen.availableGeometry()
+            rects.append((geom.left(), geom.top(), geom.right(), geom.bottom()))
+        return rects
+
+    def _tick_offscreen_rescue(self, now: float) -> None:
+        """Watch for the COM staying off every screen and tween it back.
+
+        Skipped during a drag (user is in control) and while hidden (no
+        point rescuing an invisible buddy). The tween itself drives
+        ``snap_home`` per tick, which zeroes velocity so residual fling
+        momentum doesn't fight the slide back.
+        """
+        if self._drag_active or not self.isVisible():
+            self._offscreen_since = None
+            self._rescue_t0 = None
+            return
+
+        if self._rescue_t0 is not None:
+            elapsed = now - self._rescue_t0
+            t = min(1.0, elapsed / _OFFSCREEN_RESCUE_DURATION_S)
+            ease = t * t * (3.0 - 2.0 * t)
+            sx, sy = self._rescue_start
+            tx, ty = self._rescue_target
+            x = sx + (tx - sx) * ease
+            y = sy + (ty - sy) * ease
+            self._sim.snap_home(x, y)
+            if t >= 1.0:
+                self._rescue_t0 = None
+            return
+
+        target = offscreen_rescue_target(
+            self._sim.position, self._screen_rects(), _OFFSCREEN_RESCUE_INSET,
+        )
+        if target is None:
+            self._offscreen_since = None
+            return
+        if self._offscreen_since is None:
+            self._offscreen_since = now
+            return
+        if now - self._offscreen_since >= _OFFSCREEN_RESCUE_DELAY_S:
+            self._offscreen_since = None
+            self._rescue_start = self._sim.position
+            self._rescue_target = target
+            self._rescue_t0 = now
+
+    def _cancel_offscreen_rescue(self) -> None:
+        self._offscreen_since = None
+        self._rescue_t0 = None
 
     # --- Input -----------------------------------------------------------
 
@@ -468,6 +537,7 @@ class BuddyWindow(QWidget):
         """Start a grab. Convert the art-frame click point to a body-
         local offset (relative to COM) and hand it to the simulator
         as the constraint anchor."""
+        self._cancel_offscreen_rescue()
         com_x, com_y = self._com_art()
         local_x = art_pos.x() - com_x
         local_y = art_pos.y() - com_y
