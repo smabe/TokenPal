@@ -21,6 +21,7 @@ Load the relevant doc on demand rather than reading all of them.
 | [docs/claude/llm.md](docs/claude/llm.md) | Editing `HttpBackend`, cloud backend, max_tokens scaling, prompt caching, or tool-calling wiring |
 | [docs/claude/voice.md](docs/claude/voice.md) | Voice training, ASCII art generation, or remote fine-tuning pipeline |
 | [docs/claude/server.md](docs/claude/server.md) | Editing `tokenpal/server/`, launch scripts, or inference-engine proxy behavior |
+| [docs/claude/audio.md](docs/claude/audio.md) | Touching `tokenpal/audio/`, voice/ambient/typed-speak toggles, wake/VAD/ASR pipeline, the `/voice-io` slash command, or the server-side `/v1/audio/transcriptions` route |
 
 ## Architecture
 - Dual inference backend: `[llm] inference_engine = "ollama" | "llamacpp"`. Ollama is default (NVIDIA/Apple/RDNA3). llamacpp gates worker VRAM-unload (taskkill vs API), model registration, and `/model pull|browse` slash commands. See `docs/amd-dgpu-setup.md`
@@ -31,7 +32,7 @@ Load the relevant doc on demand rather than reading all of them.
 - User input: Textual `Input` widget, routes via `brain.submit_user_input()` (asyncio.Queue + call_soon_threadsafe)
 - Senses produce `SenseReading` with `.summary` (natural language, NOT bracketed tags), `.changed_from` (transition metadata), `.confidence`, per-sense `reading_ttl_s`
 - Data directory: configurable via `[paths] data_dir` in config (default `~/.tokenpal`), holds logs/, memory.db, voices/
-- Audio I/O: opt-in via `[audio]` (both `voice_conversation_enabled` and `speak_ambient_enabled` default off). Output (TTS) and input (wake/VAD/ASR) sides are kept structurally separate so ambient narration alone never opens a mic — `tokenpal/audio/` + `tests/test_audio/test_modularity.py` enforce this. See `plans/say-what.md`
+- Audio I/O: three independent opt-in toggles in `[audio]` — `voice_conversation_enabled`, `speak_ambient_enabled`, `speak_typed_replies_enabled` — all default off. Output (TTS) and input (wake/VAD/ASR) sides are structurally separate so ambient/typed narration never opens a mic. Modularity contract pinned by `tests/test_audio/test_modularity.py`. Full surface in [docs/claude/audio.md](docs/claude/audio.md); plan + history in `plans/say-what.md`. Custom wakeword (`hey_tokenpal`) is the open follow-up — currently runs on `hey_jarvis` placeholder; training notes in `tools/wakeword-training/README.md`
 
 ## Key Commands
 - Platform installers: `bash scripts/install-macos.sh`, `powershell scripts/install-windows.ps1`, `bash scripts/install-linux.sh` — standalone fresh-machine setup with interactive client/server/both prompt and VRAM-based model recommendation
