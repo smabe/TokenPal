@@ -75,6 +75,19 @@ Load the relevant doc on demand rather than reading all of them.
 - abc.ABC for abstractions, dataclasses for data, ClassVar for registry metadata
 - Sense implementations go in `tokenpal/senses/<sense_name>/<platform>_impl.py`
 
+## Discipline (write tighter on the first pass)
+
+Run these checks before each commit. The simplify skill catches what slips through; this list shrinks the load so it doesn't have to.
+
+- **Grep before adding a helper, constant, or field.** If the pattern exists in `tokenpal/`, reuse it. Patterns repeatedly duplicated in this repo: PCM `int16 → float32 / 32768.0`, atomic-rename downloads, `register_X_backend` / `get_X_backend` / `registered_X_backends` triples, daemon-thread lifecycle. `grep -rn` for two seconds beats a /simplify pass after the fact.
+- **Don't abstract on the first use.** Wait for the second concrete consumer. ABCs, registries, config dataclasses, and "factory hooks" earn their keep with the second caller, not the first. If you need an ABC "in case a future backend wants it," delete the ABC.
+- **Don't add state nothing reads.** Write the consumer first; if a field has no reader, it's speculative — delete it. Same for action variants in enums (e.g. an `OPEN_MIC` action whose dispatcher branch is empty).
+- **No narrative comments.** Stories about how the code got here ("stage 7 owns ...", "X uses the same number", "we deferred this for the modularity test") belong in the commit message, not the source. Comments only earn space for hidden constraints, surprising invariants, or workarounds for a specific bug a future reader would otherwise undo.
+- **Re-read the diff before commit.** `git diff --staged`, ask "would I write this today?" — delete what fails. Stale TODOs, dead branches, narrative comments, half-finished abstractions all show up here.
+- **Cap stage commits at ~150 lines.** Above that, surface gets too big to hold in head and abstractions written earlier in the same change get reinvented. Split.
+
+Examples killed by the say-what phase 3 simplify pass (commit `909a4e9`): `last_action` field on `VoiceSession`, `OPEN_MIC`/`CLOSE_MIC`/`RUN_ASR` action variants nothing read, three duplicated `register_X_backend` triples (collapsed to `_BackendRegistry[B]`), four duplicated `int16→float32` conversions (collapsed to `pcm_int16_to_float32`), narrative comments referencing stages and external codebases. All of it would have been caught at write time by the rules above.
+
 ## Repo
 - GitHub: github.com/smabe/TokenPal (private)
 - 4 target machines: Mac (M-series), Dell XPS 16 (Intel iGPU), AMD laptop (RTX 4070), AMD desktop (RX 9070 XT)
