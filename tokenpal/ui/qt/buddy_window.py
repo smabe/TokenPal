@@ -456,9 +456,14 @@ class BuddyWindow(QWidget):
     # --- Off-screen rescue ----------------------------------------------
 
     def _screen_rects(self) -> list[Rect]:
+        # Full physical geometry, not availableGeometry — the buddy is
+        # always-on-top so he's visually present in the menu-bar / dock
+        # strip, and rescue should only fire when he's past the actual
+        # display edge. (Edge-dock still uses availableGeometry because
+        # snapping should respect the dock.)
         rects: list[Rect] = []
         for screen in QGuiApplication.screens():
-            geom = screen.availableGeometry()
+            geom = screen.geometry()
             rects.append((geom.left(), geom.top(), geom.right(), geom.bottom()))
         return rects
 
