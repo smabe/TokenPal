@@ -5,6 +5,8 @@ Usage:
     python3 setup_tokenpal.py            # auto-detect (default)
     python3 setup_tokenpal.py --local    # full local install + Ollama
     python3 setup_tokenpal.py --client   # client-only (remote GPU server)
+    python3 setup_tokenpal.py --server   # host tokenpal-server for LAN clients
+    python3 setup_tokenpal.py --both     # buddy + tokenpal-server on this box
 """
 
 from __future__ import annotations
@@ -77,12 +79,14 @@ def detect_platform() -> str:
     return system
 
 
-def pip_extras(plat: str, headless: bool = False) -> str:
+def pip_extras(plat: str, mode: str = "default", headless: bool = False) -> str:
     extras = {"macos": "macos,dev", "windows": "windows,dev", "linux": "dev"}
     base = extras.get(plat, "dev")
-    if headless:
-        return base
-    return f"{base},desktop"
+    if mode in ("server", "both"):
+        base = f"{base},server"
+    if not headless:
+        base = f"{base},desktop"
+    return base
 
 
 # ── Steps ────────────────────────────────────────────────────────────────────
@@ -129,9 +133,9 @@ def get_venv_python(venv_dir: Path) -> str:
     return str(venv_dir / "bin" / "python3")
 
 
-def install_deps(python: str, plat: str, headless: bool = False) -> bool:
+def install_deps(python: str, plat: str, mode: str = "default", headless: bool = False) -> bool:
     step("Installing dependencies")
-    extras = pip_extras(plat, headless=headless)
+    extras = pip_extras(plat, mode=mode, headless=headless)
     print(f"  Running: pip install -e \".[{extras}]\"")
 
     subprocess.run(
@@ -345,6 +349,14 @@ def parse_setup_args() -> argparse.Namespace:
         "--client", action="store_const", dest="mode", const="client",
         help="client-only install (skip Ollama, configure remote server)",
     )
+    group.add_argument(
+        "--server", action="store_const", dest="mode", const="server",
+        help="server-only install (adds [server] extras for tokenpal-server)",
+    )
+    group.add_argument(
+        "--both", action="store_const", dest="mode", const="both",
+        help="buddy + tokenpal-server on this box (adds [server] extras)",
+    )
     parser.add_argument(
         "--headless", action="store_true",
         help="skip the Qt desktop extra — terminal UI only",
@@ -373,13 +385,15 @@ def main() -> None:
     venv_dir = setup_venv()
     python = get_venv_python(venv_dir)
 
-    if not install_deps(python, plat, headless=args.headless):
+    if not install_deps(python, plat, mode=mode, headless=args.headless):
         sys.exit(1)
 
     if mode != "client":
         check_ollama()
 
     setup_config(mode)
+    if mode in ("server", "both"):
+        ok("Installed [server] extras — tokenpal-server is ready to launch")
 
     if plat == "macos":
         check_permissions_macos()
