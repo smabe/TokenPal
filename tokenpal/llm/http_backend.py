@@ -91,7 +91,9 @@ class HttpBackend(AbstractLLMBackend):
             self._api_url = url
             self._reachable = True
 
-            models = resp.json().get("data", [])
+            # `or []` coerces an explicit `"data": null` (some llama-server
+            # builds return this when no model is loaded yet) to empty.
+            models = resp.json().get("data") or []
             model_ids = [m.get("id", "") for m in models if m.get("id")]
             self._available_models = tuple(model_ids)
 
