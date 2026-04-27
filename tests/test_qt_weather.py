@@ -358,6 +358,21 @@ def test_sprite_pixmap_cache_busted_on_zoom(qapp: QApplication) -> None:
     assert len(sky._sprite_cache) == 0
 
 
+def test_overcast_clouds_share_pixmap_cache_entry(qapp: QApplication) -> None:
+    """OVERCAST_CLOUD_A and OVERCAST_CLOUD_B are separate PropSprite
+    instances that share the same ``lines`` tuple. The cache keys on
+    ``sprite.lines`` so both must hit the same entry — otherwise we
+    waste a pixmap rendering the same content twice."""
+    from tokenpal.ui.ascii_props import OVERCAST_CLOUD_A, OVERCAST_CLOUD_B
+    sim = _make_sim(weather_code=0, seed=23)
+    sky = w.SkyWindow(sim)
+    color = QColor("#aaaaaa")
+    pix_a = sky._sprite_pixmap(OVERCAST_CLOUD_A, color)
+    pix_b = sky._sprite_pixmap(OVERCAST_CLOUD_B, color)
+    assert pix_a is pix_b
+    assert len(sky._sprite_cache) == 1
+
+
 def test_set_zoom_no_op_on_same_factor(qapp: QApplication) -> None:
     """Calling set_zoom with the current factor must not bust the cache
     (avoids needless rebuilds when the orchestrator fans out a no-op)."""

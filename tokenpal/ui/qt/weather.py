@@ -723,7 +723,7 @@ class SkyWindow(QWidget):
         self._line_h = self.fontMetrics().ascent()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache: dict[
-            tuple[PropSprite, int, int, int], QPixmap,
+            tuple[tuple[str, ...], int, int, int], QPixmap,
         ] = {}
 
         _apply_transparent_window_flags(self)
@@ -906,7 +906,7 @@ class SkyWindow(QWidget):
             )
 
     def _sprite_pixmap(self, sprite: PropSprite, color: QColor) -> QPixmap:
-        key = (sprite, color.rgb(), self._cell_w, self._line_h)
+        key = (sprite.lines, color.rgb(), self._cell_w, self._line_h)
         cached = self._sprite_cache.get(key)
         if cached is not None:
             return cached
