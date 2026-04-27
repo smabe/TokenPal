@@ -70,6 +70,35 @@ def test_buddy_set_zoom_noop_for_same_factor_and_rejects_zero(
         buddy.close()
 
 
+def test_buddy_set_zoom_scales_force_magnitude_physics(
+    qapp: QApplication,
+) -> None:
+    """Gravity, max_linear_speed, upright_bias, and settle thresholds
+    must all rescale on zoom — otherwise the buddy at 2× swings
+    visibly slower and rights himself less snappily because inertia
+    grew 4× while the forces stayed put."""
+    buddy = BuddyWindow(
+        frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0), font_size=14,
+    )
+    try:
+        cfg_1x = buddy._sim.config
+        buddy.set_zoom(2.0)
+        cfg_2x = buddy._sim.config
+        assert cfg_2x.gravity == cfg_1x.gravity * 2.0
+        assert cfg_2x.max_linear_speed == cfg_1x.max_linear_speed * 2.0
+        assert cfg_2x.upright_bias_strength == cfg_1x.upright_bias_strength * 4.0
+        assert cfg_2x.upright_bias_radius == cfg_1x.upright_bias_radius * 2.0
+        assert cfg_2x.settle_speed == cfg_1x.settle_speed * 2.0
+        assert cfg_2x.settle_distance == cfg_1x.settle_distance * 2.0
+        # Scale-free quantities stay put.
+        assert cfg_2x.home_frequency_hz == cfg_1x.home_frequency_hz
+        assert cfg_2x.grab_frequency_hz == cfg_1x.grab_frequency_hz
+        assert cfg_2x.max_angular_speed == cfg_1x.max_angular_speed
+        assert cfg_2x.mass == cfg_1x.mass
+    finally:
+        buddy.close()
+
+
 def test_buddy_set_zoom_chains_from_base_not_current(
     qapp: QApplication,
 ) -> None:

@@ -9,7 +9,6 @@ See plans/new-ui-new-me.md §"Dangle-able" v1 for the model.
 
 from __future__ import annotations
 
-import dataclasses
 import math
 from dataclasses import dataclass
 
@@ -346,8 +345,11 @@ class RigidBodySimulator:
         return self._cfg
 
     # ----- mutators -----
-    def set_inertia(self, inertia: float) -> None:
-        self._cfg = dataclasses.replace(self._cfg, inertia=max(inertia, 1.0))
+    def set_config(self, cfg: RigidBodyConfig) -> None:
+        """Replace the active config (length, force, and inertia params).
+        Used after a zoom change so gravity / inertia / settle thresholds
+        scale to the new buddy size in lockstep."""
+        self._cfg = cfg
 
     def set_home(self, x: float, y: float) -> None:
         if (x, y) == self._home:

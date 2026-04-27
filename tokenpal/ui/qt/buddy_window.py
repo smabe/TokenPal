@@ -182,9 +182,10 @@ class BuddyWindow(QWidget):
 
         self._measure_cells()
 
-        cfg = physics_config or RigidBodyConfig()
-        cfg = dataclasses.replace(cfg, inertia=self._compute_inertia(cfg.mass))
-        self._sim = RigidBodySimulator(home=initial_anchor, config=cfg)
+        self._base_physics = physics_config or RigidBodyConfig()
+        self._sim = RigidBodySimulator(
+            home=initial_anchor, config=self._zoomed_physics_config(),
+        )
 
         # _recompute_geometry reads sim.theta, so the sim must exist first.
         self._recompute_geometry()
@@ -237,14 +238,40 @@ class BuddyWindow(QWidget):
 
     def set_zoom(self, factor: float) -> None:
         """Rescale the buddy by ``factor`` (1.0 = original size).
-        Recomputes inertia so physics tracks the new bounding box."""
+        Recomputes the physics config so gravity, inertia, upright
+        bias, and settle thresholds all track the new size — otherwise
+        a 2× buddy swings ~√2× slower than 1× and rights itself half
+        as snappily because the force-magnitude params stay constant
+        while inertia (which scales as size²) doesn't."""
         if factor <= 0.0 or factor == self._zoom:
             return
         self._zoom = factor
         self._font = scale_font(self._base_font, factor)
         self._measure_cells()
-        self._sim.set_inertia(self._compute_inertia(self._sim.config.mass))
+        self._sim.set_config(self._zoomed_physics_config())
         self._refresh_view()
+
+    def _zoomed_physics_config(self) -> RigidBodyConfig:
+        """Apply the current zoom to length / force-magnitude fields of
+        ``_base_physics``. Frequencies, damping ratios, and rotational
+        quantities (rad/s, rad) are scale-free and pass through.
+
+        Exponents fall out of the dimensional analysis — gravity scales
+        linearly so visual swing frequency stays the same; upright bias
+        scales as z² to match inertia growth (I ∝ R²) so the righting
+        time-constant is invariant under zoom."""
+        base = self._base_physics
+        z = self._zoom
+        return dataclasses.replace(
+            base,
+            inertia=self._compute_inertia(base.mass),
+            gravity=base.gravity * z,
+            max_linear_speed=base.max_linear_speed * z,
+            upright_bias_strength=base.upright_bias_strength * z * z,
+            upright_bias_radius=base.upright_bias_radius * z,
+            settle_speed=base.settle_speed * z,
+            settle_distance=base.settle_distance * z,
+        )
 
     # --- Geometry --------------------------------------------------------
 
