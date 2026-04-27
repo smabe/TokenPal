@@ -113,14 +113,16 @@ class LLMInitiatedRoller:
         self._tracker = tracker
         self._invoker = invoker or ToolInvoker()
         self._rng = rng or random.Random()
+        self._last_skip_reason: str | None = None
 
     async def maybe_fire(self, ctx: IdleToolContext) -> IdleFireResult | None:
         """Decide, ask LLM, optionally invoke one tool. Returns None on decline.
 
-        Every None-return logs at DEBUG so silent disables are diagnosable.
+        Skip reasons log once at DEBUG until the reason changes, so a long
+        cooldown doesn't tile the log with countdown lines.
         """
         if not self._config.llm_initiated_enabled:
-            log.debug("m3 skip: config.llm_initiated_enabled=False")
+            self._log_skip("disabled", "m3 skip: config.llm_initiated_enabled=False")
             return None
 
         now = time.monotonic()
@@ -132,7 +134,7 @@ class LLMInitiatedRoller:
             and now - tr.m3_last_fire < self._config.llm_initiated_cooldown_s
         ):
             remaining = self._config.llm_initiated_cooldown_s - (now - tr.m3_last_fire)
-            log.debug("m3 skip: m3 cooldown, %.0fs remaining", remaining)
+            self._log_skip("cooldown", "m3 skip: m3 cooldown, %.0fs remaining", remaining)
             return None
 
         # M3-specific rolling-hour cap.
@@ -140,7 +142,8 @@ class LLMInitiatedRoller:
         while tr.m3_recent_fires and tr.m3_recent_fires[0] < cutoff:
             tr.m3_recent_fires.popleft()
         if len(tr.m3_recent_fires) >= self._config.llm_initiated_max_per_hour:
-            log.debug(
+            self._log_skip(
+                "m3_ratecap",
                 "m3 skip: rate cap (%d m3 fires/h, max=%d)",
                 len(tr.m3_recent_fires), self._config.llm_initiated_max_per_hour,
             )
@@ -151,12 +154,14 @@ class LLMInitiatedRoller:
         while tr.recent_fires and tr.recent_fires[0] < cutoff:
             tr.recent_fires.popleft()
         if len(tr.recent_fires) >= self._config.max_per_hour:
-            log.debug("m3 skip: shared global rate cap reached")
+            self._log_skip("shared_ratecap", "m3 skip: shared global rate cap reached")
             return None
 
         tool_specs = self._build_tool_specs(now, ctx)
         if not tool_specs:
-            log.debug("m3 skip: no tools eligible after consent + cool-off filter")
+            self._log_skip(
+                "no_tools", "m3 skip: no tools eligible after consent + cool-off filter",
+            )
             return None
 
         prompt = self._build_picker_prompt(ctx)
@@ -196,6 +201,7 @@ class LLMInitiatedRoller:
             return None
 
         self._record_fire(tc.name, now)
+        self._last_skip_reason = None
 
         return IdleFireResult(
             rule_name=f"llm_initiated:{tc.name}",
@@ -205,6 +211,12 @@ class LLMInitiatedRoller:
             latency_ms=latency_ms,
             success=True,
         )
+
+    def _log_skip(self, key: str, msg: str, *args: object) -> None:
+        if self._last_skip_reason == key:
+            return
+        self._last_skip_reason = key
+        log.debug(msg, *args)
 
     def _build_tool_specs(
         self, now: float, ctx: IdleToolContext,

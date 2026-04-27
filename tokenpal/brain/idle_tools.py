@@ -145,6 +145,11 @@ class IdleToolRoller:
         # Evergreen warm cache.
         self._daily_cache: dict[str, _CacheEntry] = {}
 
+        # Suppresses repeats of the same skip reason during the brain's 2s
+        # tick; cleared on a successful fire so the next entry into the same
+        # state still emits once.
+        self._last_skip_reason: str | None = None
+
     @property
     def tracker(self) -> FireTracker:
         return self._tracker
@@ -171,11 +176,11 @@ class IdleToolRoller:
         Returns None if disabled, rate-capped, cooled-down, or no rule's
         predicate passes. The caller (Brain) owns LLM generation + filtering.
 
-        Every None-return logs a one-line reason at DEBUG. Without this, a
-        silent roller is indistinguishable from a roller that never ran.
+        Every None-return logs a one-line reason at DEBUG, deduped on a
+        reason key so a 3-minute cooldown produces one line, not 90.
         """
         if not self._config.enabled:
-            log.debug("idle-roll skip: config.enabled=False")
+            self._log_skip("disabled", "idle-roll skip: config.enabled=False")
             return None
 
         now = time.monotonic()
@@ -187,7 +192,9 @@ class IdleToolRoller:
             and now - tr.last_any < self._config.global_cooldown_s
         ):
             remaining = self._config.global_cooldown_s - (now - tr.last_any)
-            log.debug("idle-roll skip: global cooldown, %.0fs remaining", remaining)
+            self._log_skip(
+                "cooldown", "idle-roll skip: global cooldown, %.0fs remaining", remaining,
+            )
             return None
 
         # Rolling-hour rate cap.
@@ -195,7 +202,8 @@ class IdleToolRoller:
         while tr.recent_fires and tr.recent_fires[0] < cutoff:
             tr.recent_fires.popleft()
         if len(tr.recent_fires) >= self._config.max_per_hour:
-            log.debug(
+            self._log_skip(
+                "ratecap",
                 "idle-roll skip: rate cap (%d fires in the last hour, max=%d)",
                 len(tr.recent_fires), self._config.max_per_hour,
             )
@@ -203,7 +211,9 @@ class IdleToolRoller:
 
         candidates = list(self._candidates(now, ctx))
         if not candidates:
-            log.debug("idle-roll skip: no candidate rule passed predicates")
+            self._log_skip(
+                "no_candidate", "idle-roll skip: no candidate rule passed predicates",
+            )
             return None
 
         rule = self._weighted_pick(candidates)
@@ -213,7 +223,10 @@ class IdleToolRoller:
         )
         result = await self._invoke(rule, ctx)
         if result is None:
-            log.debug("idle-roll skip: invoke of %r returned no output", rule.name)
+            self._log_skip(
+                f"invoke_empty:{rule.name}",
+                "idle-roll skip: invoke of %r returned no output", rule.name,
+            )
             return None
 
         # Record fire state regardless of tool success — a flaky API
@@ -222,7 +235,14 @@ class IdleToolRoller:
         tr.last_by_tool[rule.tool_name] = now
         tr.last_any = now
         tr.recent_fires.append(now)
+        self._last_skip_reason = None
         return result
+
+    def _log_skip(self, key: str, msg: str, *args: object) -> None:
+        if self._last_skip_reason == key:
+            return
+        self._last_skip_reason = key
+        log.debug(msg, *args)
 
     async def force_fire(
         self, rule_name: str, ctx: IdleToolContext,
