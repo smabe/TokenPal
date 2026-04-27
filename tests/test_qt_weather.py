@@ -327,3 +327,49 @@ def test_buddy_overlay_reanchor_idempotent(qapp: QApplication) -> None:
     overlay.reanchor()
     second = overlay.pos()
     assert (first.x(), first.y()) == (second.x(), second.y())
+
+
+# --- Sprite pixmap cache -------------------------------------------------
+
+
+def test_sprite_pixmap_cache_hits_on_second_call(qapp: QApplication) -> None:
+    """Repeated requests for the same sprite + color + cell size must
+    return the cached QPixmap, not rebuild it. Without the cache, every
+    paint would supersample-render and downsample anew."""
+    from PySide6.QtGui import QColor
+
+    from tokenpal.ui.ascii_props import SUN_SPRITE
+    sim = _make_sim(weather_code=0, seed=20)
+    sky = w.SkyWindow(sim)
+    color = QColor("#ffcc44")
+    pix1 = sky._sprite_pixmap(SUN_SPRITE, color)
+    pix2 = sky._sprite_pixmap(SUN_SPRITE, color)
+    assert pix1 is pix2
+    assert len(sky._sprite_cache) == 1
+
+
+def test_sprite_pixmap_cache_busted_on_zoom(qapp: QApplication) -> None:
+    """``set_zoom`` recomputes cell metrics and must clear the cache so
+    the next paint rebuilds at the new size."""
+    from PySide6.QtGui import QColor
+
+    from tokenpal.ui.ascii_props import SUN_SPRITE
+    sim = _make_sim(weather_code=0, seed=21)
+    sky = w.SkyWindow(sim)
+    sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
+    assert len(sky._sprite_cache) == 1
+    sky.set_zoom(1.5)
+    assert len(sky._sprite_cache) == 0
+
+
+def test_set_zoom_no_op_on_same_factor(qapp: QApplication) -> None:
+    """Calling set_zoom with the current factor must not bust the cache
+    (avoids needless rebuilds when the orchestrator fans out a no-op)."""
+    from PySide6.QtGui import QColor
+
+    from tokenpal.ui.ascii_props import SUN_SPRITE
+    sim = _make_sim(weather_code=0, seed=22)
+    sky = w.SkyWindow(sim)
+    sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
+    sky.set_zoom(1.0)
+    assert len(sky._sprite_cache) == 1
