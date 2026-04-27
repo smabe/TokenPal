@@ -250,6 +250,7 @@ class Brain:
         llm: AbstractLLMBackend,
         ui_callback: Callable[[str], None],
         personality: PersonalityEngine,
+        user_log_callback: Callable[[str], None] | None = None,
         status_callback: Callable[[str], None] | None = None,
         mood_callback: Callable[[str], None] | None = None,
         news_callback: Callable[[list[NewsItem]], None] | None = None,
@@ -293,6 +294,10 @@ class Brain:
         self._senses = senses
         self._llm = llm
         self._ui_callback = ui_callback
+        # Voice transcripts bypass the overlay's typed-input handler, so
+        # they need a parallel hook to land in the chat history. Typed input
+        # is already logged by the overlay before reaching the brain.
+        self._user_log_callback = user_log_callback
         self._log_callback = log_callback
         # Audio pipeline drives ambient TTS. None when both [audio] toggles
         # are off or the install path hasn't run — _emit_comment becomes a
@@ -2654,6 +2659,8 @@ class Brain:
         ap = getattr(self, "_audio_pipeline", None)
         if source == "typed" and ap is not None and ap.input is not None:
             ap.input.notify_typed_input()
+        if source == "voice" and self._user_log_callback is not None:
+            self._user_log_callback(user_message)
 
         async def _emit_reply(text: str) -> None:
             # Voice awaits speak() so notify_tts_done lands after playback

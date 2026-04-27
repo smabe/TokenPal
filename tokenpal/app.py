@@ -293,6 +293,7 @@ def main() -> None:
         llm=llm,
         ui_callback=lambda text: _overlay_show(overlay, text),
         personality=personality,
+        user_log_callback=overlay.log_user_message,
         status_callback=lambda text: overlay.schedule_callback(
             lambda: overlay.update_status(text)
         ),
