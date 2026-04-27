@@ -100,6 +100,52 @@ def apply_macos_stay_visible(window: object) -> None:
         log.exception("macOS stay-visible collection behavior failed")
 
 
+def lock_macos_child_above(parent: object, child: object) -> None:
+    """Make ``child`` a native NSWindow child of ``parent`` ordered
+    above it. Locks z-order so ``child`` can never fall behind
+    ``parent`` regardless of which NSWindow was most recently
+    ``orderFront``-ed. Positions stay independent — Qt continues to
+    drive the child's frame.
+
+    Use case: the buddy and resize grip are both frameless translucent
+    ``WindowStaysOnTopHint`` NSWindows at ``NSFloatingWindowLevel``.
+    The grip's masked hit region is geometrically inside the buddy's
+    full-rect mask, so z-order alone decides who receives clicks.
+    Without this, the grip flakily falls behind the buddy and clicks
+    fall through to the buddy's drag handler instead.
+
+    **Must be called after both windows are mapped** — same constraint
+    as ``apply_macos_stay_visible``. Idempotent: AppKit reorders the
+    child if it's already attached.
+
+    No-op off macOS or when pyobjc isn't installed.
+    """
+    if sys.platform != "darwin":
+        return
+    try:
+        import objc  # noqa: PLC0415
+        from AppKit import NSWindowAbove  # noqa: PLC0415
+    except ImportError:
+        log.debug(
+            "pyobjc not installed — buddy resize grip may flake on z-order; "
+            "install the 'macos' extra to lock it above the buddy.",
+        )
+        return
+    try:
+        parent_view_id = int(parent.winId())  # type: ignore[attr-defined]
+        child_view_id = int(child.winId())  # type: ignore[attr-defined]
+        parent_view = objc.objc_object(c_void_p=parent_view_id)
+        child_view = objc.objc_object(c_void_p=child_view_id)
+        parent_ns = parent_view.window()
+        child_ns = child_view.window()
+        if parent_ns is None or child_ns is None:
+            log.debug("NSView has no window yet; call show() first")
+            return
+        parent_ns.addChildWindow_ordered_(child_ns, NSWindowAbove)
+    except Exception:
+        log.exception("macOS addChildWindow z-order lock failed")
+
+
 def apply_macos_click_through(window: object) -> None:
     """Make a frameless transparent NSWindow pass mouse events through to
     whatever's underneath, system-wide.

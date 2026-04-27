@@ -45,6 +45,7 @@ from tokenpal.ui.qt.platform import (
     apply_macos_accessory_mode,
     apply_macos_click_through,
     apply_macos_stay_visible,
+    lock_macos_child_above,
     warn_wayland_limitations,
 )
 from tokenpal.ui.qt.speech_bubble import SpeechBubble as BubbleWidget
@@ -365,6 +366,7 @@ class QtOverlay(AbstractOverlay):
                 self._buddy.show()
                 if self._resize_grip is not None:
                     self._resize_grip.show()
+                    lock_macos_child_above(self._buddy, self._resize_grip)
                     self._reposition_grip()
                 if self._sky_window is not None:
                     self._sky_window.show()
@@ -462,6 +464,7 @@ class QtOverlay(AbstractOverlay):
             if self._resize_grip is not None:
                 self._resize_grip.show()
                 apply_macos_stay_visible(self._resize_grip)
+                lock_macos_child_above(self._buddy, self._resize_grip)
                 self._reposition_grip()
         if self._sky_window is not None and self._buddy_user_visible:
             self._sky_window.show()
