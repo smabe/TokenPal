@@ -100,22 +100,37 @@ class IntentStore:
         """Return the currently-active intent or None.
 
         Intents older than ``max_age_s`` are treated as expired — they're
-        not auto-deleted, just ignored for drift checks.  ``/intent status``
-        sees them via ``get_raw()`` if you want to display "expired".
+        not auto-deleted, just ignored for drift checks. ``/intent status``
+        sees them via ``get_raw()``; the orchestrator surfaces stale rows
+        once at session start via ``stale_intent_notice()``.
         """
         row = self._memory.get_active_intent()
         if row is None:
             return None
         text, started_at, session_id = row
-        age_s = time.time() - started_at
-        if age_s > self._config.max_age_s:
-            log.debug(
-                "Intent expired (age %.0fh > max %.0fh); ignoring",
-                age_s / 3600,
-                self._config.max_age_s / 3600,
-            )
+        if time.time() - started_at > self._config.max_age_s:
             return None
         return ActiveIntent(text=text, started_at=started_at, session_id=session_id)
+
+    def stale_intent_notice(self) -> str | None:
+        """One-line notice if a stale intent is sitting in the DB, else None.
+
+        The orchestrator calls this once at session start and pushes the
+        line to the chat log so a forgotten ``/intent`` row is visible —
+        the per-tick log we used to emit was useless without the text.
+        """
+        row = self._memory.get_active_intent()
+        if row is None:
+            return None
+        text, started_at, _ = row
+        age_s = time.time() - started_at
+        if age_s <= self._config.max_age_s:
+            return None
+        return (
+            f"Stored intent {text!r} is {age_s / 3600:.0f}h old "
+            f"(max {self._config.max_age_s / 3600:.0f}h) and being ignored "
+            f"— /intent clear to reset."
+        )
 
     def get_raw(self) -> ActiveIntent | None:
         """Return the active intent row regardless of age."""

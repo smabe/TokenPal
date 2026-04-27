@@ -85,6 +85,24 @@ def test_expired_intent_not_returned_by_get_active(
     assert raw.text == "finish something"
 
 
+def test_stale_intent_notice(memory: MemoryStore, config: IntentConfig) -> None:
+    store = IntentStore(memory=memory, config=config)
+    assert store.stale_intent_notice() is None
+
+    store.set("call the ford dealer")
+    assert store.stale_intent_notice() is None
+
+    config.max_age_s = 0.001
+    time.sleep(0.01)
+    notice = store.stale_intent_notice()
+    assert notice is not None
+    assert "call the ford dealer" in notice
+    assert "/intent clear" in notice
+
+    store.clear()
+    assert store.stale_intent_notice() is None
+
+
 # -----------------------------------------------------------------------
 # Drift detection
 # -----------------------------------------------------------------------

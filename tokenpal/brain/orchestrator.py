@@ -504,6 +504,13 @@ class Brain:
         self._ui_callback(greeting)
         self._last_comment_time = time.monotonic()
 
+        if self._intent is not None:
+            stale = self._intent.stale_intent_notice()
+            if stale is not None:
+                log.info(stale)
+                if self._log_callback is not None:
+                    self._log_callback(stale)
+
         # Resolve first-session-of-day once; warm evergreen tool cache in
         # the background so the hot path never blocks on an HTTP call.
         self._first_session_of_day = self._compute_first_session_of_day()
