@@ -61,7 +61,13 @@ from tokenpal.ui.selection_modal import SelectionGroup
 
 log = logging.getLogger(__name__)
 
-_BUBBLE_HIDE_DELAY_MS = 15000  # how long a bubble lingers before auto-hide
+_BUBBLE_HIDE_DELAY_MS = 15000  # minimum lingers before auto-hide
+# Estimated TTS pace at ~10 chars/sec (Kokoro). Used to extend bubble
+# lifetime so it outlives audio playback for long replies — otherwise the
+# bubble dismisses while the buddy is still talking and the mic is still
+# muted, which reads as "frozen UI" to the user.
+_BUBBLE_TTS_MS_PER_CHAR = 100
+_BUBBLE_TTS_PADDING_MS = 2000
 _BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
 _DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
 _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
@@ -1081,7 +1087,8 @@ class QtOverlay(AbstractOverlay):
                 self._bubble_stay_visible_applied = True
             self._reposition_bubble()
             if self._hide_bubble_timer is not None and not bubble.persistent:
-                self._hide_bubble_timer.start(_BUBBLE_HIDE_DELAY_MS)
+                tts_ms = len(bubble.text) * _BUBBLE_TTS_MS_PER_CHAR + _BUBBLE_TTS_PADDING_MS
+                self._hide_bubble_timer.start(max(_BUBBLE_HIDE_DELAY_MS, tts_ms))
         self._do_log(time.time(), speaker, bubble.text, None, persist=True)
 
     def _hide_bubble_now(self) -> None:

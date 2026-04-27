@@ -18,6 +18,7 @@ import atexit
 import logging
 import threading
 import time
+from collections import deque
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -38,6 +39,14 @@ _SAMPLE_RATE = 16000
 
 _LISTENING_TIMEOUT_S = 5.0
 _TICK_INTERVAL_S = 0.1
+
+# Rolling buffer of recent IDLE frames replayed through VAD on wake fire.
+# Without this, a continuous "hey jarvis what's up" utterance loses the
+# command portion: openwakeword's mel window adds ~200-400ms of detection
+# latency, and frames consumed by wake.detect() in IDLE are otherwise
+# dropped before VAD ever sees them. 1.5s covers the wake phrase plus a
+# typical short follow-up command.
+_LOOKBACK_S = 1.5
 
 # Cap the in-flight utterance buffer at 30s of audio. Without this, a
 # stuck-on-speech VAD or a sustained high-confidence false positive
@@ -76,6 +85,8 @@ class InputPipeline:
         self._utterance_buffer = bytearray()
         self._listening_started_at: float | None = None
         self._atexit_registered = False
+        lookback_capacity = max(1, int(_LOOKBACK_S * _SAMPLE_RATE / _FRAME_SAMPLES))
+        self._lookback: deque[bytes] = deque(maxlen=lookback_capacity)
 
     async def start(self) -> None:
         if self._thread is not None:
@@ -110,6 +121,11 @@ class InputPipeline:
         self._atexit_cleanup()
 
     def notify_tts_done(self) -> None:
+        # VAD's LSTM hasn't seen audio since the previous SPEECH_ENDED;
+        # if SPEAKING ran long, its state is stale and the first ~200ms of
+        # the user's reply scores near zero, failing the hysteresis trigger.
+        # Reset so TRAILING starts with a clean slate, mirroring on_wake.
+        self._vad.reset()
         self._handle(self._fsm.on_tts_done(now=time.monotonic()))
 
     def notify_sensitive_app(self) -> None:
@@ -141,7 +157,17 @@ class InputPipeline:
 
             now = time.monotonic()
             if now - last_tick >= _TICK_INTERVAL_S:
+                pre_tick_state = self._fsm.state
                 self._handle(self._fsm.tick(now=now))
+                if (
+                    pre_tick_state == VoiceState.TRAILING
+                    and self._fsm.state == VoiceState.IDLE
+                ):
+                    log.info(
+                        "voice: trailing window closed, no speech "
+                        "(max VAD prob: %.2f, threshold: %.2f)",
+                        self._vad.max_prob_since_reset, self._vad.threshold,
+                    )
                 last_tick = now
 
             if self._paused.is_set():
@@ -152,6 +178,7 @@ class InputPipeline:
     def _handle_frame(self, frame: bytes, *, now: float) -> None:
         state = self._fsm.state
         if state == VoiceState.IDLE:
+            self._lookback.append(frame)
             event = self._wake.detect(frame)
             if event is not None:
                 log.info(
@@ -161,20 +188,11 @@ class InputPipeline:
                 self._listening_started_at = now
                 self._vad.reset()
                 self._handle(self._fsm.on_wake())
+                self._replay_lookback_into_listening()
             return
 
         if state == VoiceState.LISTENING:
-            self._utterance_buffer.extend(frame)
-            if len(self._utterance_buffer) > _MAX_UTTERANCE_BYTES:
-                # VAD never fired SPEECH_ENDED on a 30s utterance — assume
-                # stuck and force-close rather than balloon memory.
-                log.warning("voice: utterance buffer cap hit, force-closing")
-                self._handle(self._fsm.on_listening_timeout())
-                return
-            vad_event = self._vad.process(frame)
-            if vad_event == VadEvent.SPEECH_ENDED:
-                self._fsm.on_speech_ended()
-                self._run_asr_blocking()
+            if self._handle_listening_frame(frame):
                 return
             if (
                 self._listening_started_at is not None
@@ -199,6 +217,29 @@ class InputPipeline:
         # SPEAKING: skip wake/VAD entirely. The brain's TTS loop owns the
         # output device while the buddy talks; mic frames here would feed
         # our own voice into wake detection.
+
+    def _handle_listening_frame(self, frame: bytes) -> bool:
+        """Returns True if the frame triggered a state transition."""
+        self._utterance_buffer.extend(frame)
+        if len(self._utterance_buffer) > _MAX_UTTERANCE_BYTES:
+            log.warning("voice: utterance buffer cap hit, force-closing")
+            self._handle(self._fsm.on_listening_timeout())
+            return True
+        vad_event = self._vad.process(frame)
+        if vad_event == VadEvent.SPEECH_ENDED:
+            self._fsm.on_speech_ended()
+            self._run_asr_blocking()
+            return True
+        return False
+
+    def _replay_lookback_into_listening(self) -> None:
+        while self._lookback:
+            old_frame = self._lookback.popleft()
+            if self._fsm.state != VoiceState.LISTENING:
+                break
+            if self._handle_listening_frame(old_frame):
+                break
+        self._lookback.clear()
 
     def _run_asr_blocking(self) -> None:
         audio = bytes(self._utterance_buffer)

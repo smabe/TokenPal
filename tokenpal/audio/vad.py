@@ -1,8 +1,8 @@
 """Silero VAD via onnxruntime — no torch dep.
 
-Wraps the pre-exported silero_vad.onnx (~1.6MB). The pip package
-silero-vad pulls torch (~600MB) we don't need elsewhere; the onnx
-model + manual hidden-state management is functionally equivalent.
+Wraps the pre-exported silero_vad.onnx (~2.3MB, v5 contract). The pip
+package silero-vad pulls torch (~600MB) we don't need elsewhere; the
+onnx model + manual hidden-state management is functionally equivalent.
 
 ONNX contract (opset 16):
   inputs:  input float32 [1, 512] | state float32 [2,1,128] | sr int64

@@ -256,14 +256,16 @@ def install_all(
     return InstallResult(ok=True, message=message.strip())
 
 
-# OpenWakeWord v0.5.1 release ships every input-side onnx we need —
-# silero VAD, the shared mel + embedding, and the stock wakeword. Pinning
-# all four to one release tag is atomic: bump the constant to upgrade
-# everything, no drift between independently-versioned files.
+# OpenWakeWord v0.5.1 release ships its own onnx trio (mel + embedding +
+# wakeword). Its bundled silero_vad.onnx, however, is a dead-weights copy
+# that returns ~0.0005 on every input — so VAD comes from snakers4/silero-vad
+# directly. Both URLs pin to release tags, which are immutable on GitHub.
 _OWW_RELEASE_BASE: Final[str] = (
     "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 )
-_SILERO_VAD_URL: Final[str] = f"{_OWW_RELEASE_BASE}/silero_vad.onnx"
+_SILERO_VAD_URL: Final[str] = (
+    "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx"
+)
 _OWW_MODEL_URLS: Final[dict[str, str]] = {
     name: f"{_OWW_RELEASE_BASE}/{name}"
     for name in (
