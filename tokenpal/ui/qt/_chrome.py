@@ -20,7 +20,7 @@ SIZE_GRIP_SIDE = 16
 # BuddyResizeGrip widget is bigger than its painted dots so the hit
 # area extends inward — the 16-px dot pattern alone is too small to
 # grab reliably without flush-edge precision.
-BUDDY_GRIP_HIT_SIDE = 24
+BUDDY_GRIP_HIT_SIDE = 48
 GRIP_DOT_ROWS = 3
 GRIP_DOT_SPACING = 5
 GRIP_DOT_INSET = 3
@@ -104,6 +104,12 @@ class BuddyResizeGrip(QWidget):
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
+        # Imperceptible-but-non-zero alpha across the full widget so the
+        # OS layered-window hit test (which on Windows routes clicks by
+        # per-pixel alpha, not widget bounds) treats the entire rect as
+        # clickable. Without this, only the painted dots register and
+        # the bigger widget size buys nothing.
+        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
         offset = BUDDY_GRIP_HIT_SIDE - SIZE_GRIP_SIDE
         painter.translate(offset, offset)
         _paint_diagonal_dots(painter, SIZE_GRIP_SIDE)
