@@ -660,7 +660,13 @@ class WeatherSim:
 
 
 _SKY_W_PX = 200
-_SKY_H_PX = 120
+# Sky height is derived from ``line_h`` so the tallest luminary fits on
+# any platform (Consolas's bigger height/ascent ratio used to clip the
+# bottom rays of the sun/moon when the height was a fixed magic number).
+# Moon (8 rows) is the tallest sprite; +margin gives breathing room for
+# the top of the halo.
+_MAX_SKY_SPRITE_ROWS = 8
+_SKY_HEIGHT_MARGIN_PX = 4
 # Gap between the buddy's top edge and the sky panel's bottom edge.
 _SKY_BUDDY_GAP_PX = 6
 # Horizontal bias — shift the sky panel so the sun/moon sprite (which
@@ -728,8 +734,9 @@ class SkyWindow(QWidget):
         ] = {}
 
         _apply_transparent_window_flags(self)
-        self.resize(_SKY_W_PX, _SKY_H_PX)
-        self._base_size = (_SKY_W_PX, _SKY_H_PX)
+        sky_h = _MAX_SKY_SPRITE_ROWS * self._line_h + _SKY_HEIGHT_MARGIN_PX
+        self.resize(_SKY_W_PX, sky_h)
+        self._base_size = (_SKY_W_PX, sky_h)
         self._last_anchor: tuple[int, int] = (-9999, -9999)
         self.reanchor()
 
