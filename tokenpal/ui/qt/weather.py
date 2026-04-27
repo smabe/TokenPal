@@ -920,13 +920,13 @@ class SkyWindow(QWidget):
             )
 
     def _sprite_pixmap(self, sprite: PropSprite, color: QColor) -> QPixmap:
-        key = (sprite.lines, color.rgb(), self._cell_w, self._line_h)
+        key = (sprite.lines, color.rgb(), self._cell_w, self._font.pointSize())
         cached = self._sprite_cache.get(key)
         if cached is not None:
             return cached
         pix = render_sprite_pixmap(
             sprite.lines, color,
-            cell_w=self._cell_w, line_h=self._line_h,
+            cell_w=self._cell_w,
             font=self._font, dpr=self.devicePixelRatioF(),
         )
         self._sprite_cache[key] = pix

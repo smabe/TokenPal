@@ -24,7 +24,7 @@ import math
 import sys
 
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QGraphicsDropShadowEffect, QWidget
 
 from tokenpal.config.schema import FontConfig
@@ -79,13 +79,19 @@ def render_sprite_pixmap(
     color: QColor,
     *,
     cell_w: int,
-    line_h: int,
     font: QFont,
     dpr: float = 1.0,
     supersample: int = 2,
 ) -> QPixmap:
     """Rasterize an ASCII-art sprite to a ``QPixmap`` cached for later
     ``drawPixmap`` use under arbitrary scale/rotation.
+
+    Internal layout uses ``fm.ascent()`` for the row step so block fills
+    (``paint_block_char``) and glyph paints (``drawText``) both fill the
+    same vertical area — keeps non-block chars like ░/▒ from leaving a
+    transparent strip above them when the caller blits to a target rect
+    sized at terminal-cell aspect (``rows * fm.height()``); Qt's smooth
+    pixmap transform stretches the natural raster the rest of the way.
 
     Source render is oversampled by ``dpr * supersample`` so the bilinear
     filter has headroom. The returned pixmap's ``devicePixelRatio`` is
@@ -96,6 +102,7 @@ def render_sprite_pixmap(
         return QPixmap()
     rows = len(lines)
     cols = max(len(line) for line in lines)
+    line_h = max(QFontMetrics(font).ascent(), 1)
     scale = max(dpr * supersample, 1.0)
     phys_w = max(int(math.ceil(cols * cell_w * scale)), 1)
     phys_h = max(int(math.ceil(rows * line_h * scale)), 1)

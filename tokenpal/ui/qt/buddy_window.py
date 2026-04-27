@@ -35,6 +35,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPaintEvent,
+    QPixmap,
     QRegion,
     QShowEvent,
     QTransform,
@@ -183,6 +184,10 @@ class BuddyWindow(QWidget):
         self._line_h = 1
         self._art_w = 1
         self._art_h = 1
+        # Cached pixmap of the current frame rendered at natural-glyph
+        # aspect (line_h = ascent). paintEvent blits it stretched to art-
+        # rect dims so block fills and drawText glyphs agree on cell size.
+        self._art_pixmap: QPixmap | None = None
         # Where the COM sits inside the widget after the rotated-AABB
         # padding. Set by _recompute_geometry; equals the COM's
         # screen-space offset from the widget's top-left.
@@ -295,6 +300,7 @@ class BuddyWindow(QWidget):
         self._cols = cols
         self._art_w = max(cols * self._cell_w, 1)
         self._art_h = max(self._line_h * len(self._frame_lines), 1)
+        self._art_pixmap = None
 
     def _font_init_metrics(self) -> None:
         """Recompute ``_cell_w`` and ``_line_h`` from the current font.
@@ -741,17 +747,53 @@ class BuddyWindow(QWidget):
         # WA_TranslucentBackground already clears the region to fully
         # transparent before this runs, so no fillRect needed.
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        painter.setFont(self._font)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         # Apply the same transform the hit-test uses, so what's painted
         # and what can be clicked agree.
         painter.setWorldTransform(self._build_transform())
+        painter.drawPixmap(
+            QRect(0, 0, self._art_w, self._art_h), self._render_art_pixmap(),
+        )
 
-        line_h = self._line_h
+        if _PHYSICS_DEBUG:
+            # Debug HUD paints on top of the rotated art but in widget-
+            # local coords, so the text stays upright regardless of θ.
+            painter.setWorldTransform(QTransform())
+            self._paint_physics_debug(painter)
+
+    def _render_art_pixmap(self) -> QPixmap:
+        """Rasterize the current frame to a pixmap at natural-glyph row
+        height (``fm.ascent()``). ``paintEvent`` blits it stretched to
+        ``_art_h`` (= ``rows * fm.height()``) so block fills and drawText
+        glyphs agree on cell size while the overall art keeps terminal-
+        cell aspect. Cached until the next ``_measure_cells`` invalidates.
+        """
+        if self._art_pixmap is not None:
+            return self._art_pixmap
+
         cell_w = self._cell_w
-        y = line_h
-        total_w = self._cols * cell_w
+        cols = self._cols
+        rows = len(self._frame_lines)
+        ascent = max(QFontMetrics(self._font).ascent(), 1)
+
+        dpr = self.devicePixelRatioF()
+        supersample = 2
+        scale = max(dpr * supersample, 1.0)
+        phys_w = max(int(math.ceil(cols * cell_w * scale)), 1)
+        phys_h = max(int(math.ceil(rows * ascent * scale)), 1)
+
+        image = QImage(
+            phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied,
+        )
+        image.fill(0)
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.scale(scale, scale)
+        painter.setFont(self._font)
+
+        total_w = cols * cell_w
+        y = ascent
         for line in self._frame_lines:
             chars = len(stripped_text(line))
             base_x = (total_w - chars * cell_w) // 2
@@ -761,17 +803,26 @@ class BuddyWindow(QWidget):
                 painter.setPen(color)
                 for ch in seg.text:
                     x = base_x + col * cell_w
-                    rect = QRect(x, y - line_h, cell_w + 1, line_h)
+                    rect = QRect(x, y - ascent, cell_w + 1, ascent)
                     if not paint_block_char(painter, ch, rect, color):
                         painter.drawText(x, y, ch)
                     col += 1
-            y += line_h
+            y += ascent
+        painter.end()
 
-        if _PHYSICS_DEBUG:
-            # Debug HUD paints on top of the rotated art but in widget-
-            # local coords, so the text stays upright regardless of θ.
-            painter.setWorldTransform(QTransform())
-            self._paint_physics_debug(painter)
+        if supersample > 1:
+            target_w = max(int(math.ceil(cols * cell_w * dpr)), 1)
+            target_h = max(int(math.ceil(rows * ascent * dpr)), 1)
+            image = image.scaled(
+                target_w, target_h,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(dpr)
+        self._art_pixmap = pixmap
+        return pixmap
 
     # --- Physics debug HUD ----------------------------------------------
 
