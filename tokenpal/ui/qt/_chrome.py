@@ -7,10 +7,22 @@ standard Cmd/Ctrl +/-/0 font-zoom keybinds.
 
 from __future__ import annotations
 
+import math
+import sys
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QMouseEvent, QPainter, QPaintEvent, QShortcut
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QKeySequence,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QRegion,
+    QShortcut,
+    QShowEvent,
+    QTransform,
+)
 from PySide6.QtWidgets import QLabel, QSizeGrip, QWidget
 
 from tokenpal.ui.qt._text_fx import apply_drop_shadow, glass_button_stylesheet
@@ -24,6 +36,9 @@ BUDDY_GRIP_HIT_SIDE = 48
 GRIP_DOT_ROWS = 3
 GRIP_DOT_SPACING = 5
 GRIP_DOT_INSET = 3
+# Slack around the rotation envelope so antialiased dot edges don't
+# clip when the grip is tilted. Same convention as SpeechBubble.
+_GRIP_ROTATION_MARGIN = 4
 
 
 class DragHandle(QLabel):
@@ -91,27 +106,109 @@ class BuddyResizeGrip(QWidget):
     deltas via ``zoom_drag_delta``; the overlay integrates them into a
     clamped zoom factor.
 
-    The widget is larger than the painted dots so the hit area extends
-    inward — flush-edge 16-px dots alone are too fiddly to grab."""
+    Top-level frameless translucent widget — same shape as
+    ``SpeechBubble``. The widget is a square big enough to contain the
+    BUDDY_GRIP_HIT_SIDE hit-rect rotated to any angle around its
+    bottom-right corner; ``set_pose(anchor_world, angle_rad)`` parks
+    that corner on the buddy's body-frame bottom-right and rotates the
+    painted dots to match. Pure paint (no native children) means
+    ``painter.setWorldTransform`` rotates everything cleanly without
+    the snapshot-and-park dance ChatDock needs.
+    """
 
     zoom_drag_delta = Signal(int)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedSize(BUDDY_GRIP_HIT_SIDE, BUDDY_GRIP_HIT_SIDE)
+    def __init__(self) -> None:
+        super().__init__()
+        flags = (
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        # Mirror buddy_window: Qt.Tool on macOS auto-hides the window
+        # whenever the app loses focus. Off-darwin it's the right
+        # "no taskbar entry" hint.
+        if sys.platform != "darwin":
+            flags |= Qt.WindowType.Tool
+        self.setWindowFlags(flags)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+
+        # Widget is a square big enough to contain a BUDDY_GRIP_HIT_SIDE
+        # square rotated to any angle around its bottom-right corner.
+        # Worst-case: opposite corner (top-left) at distance hypot(s, s).
+        radius = math.hypot(BUDDY_GRIP_HIT_SIDE, BUDDY_GRIP_HIT_SIDE)
+        size = int(math.ceil(2 * radius)) + _GRIP_ROTATION_MARGIN * 2
+        self.setFixedSize(size, size)
+        self._anchor_widget: tuple[int, int] = (size // 2, size // 2)
+        self._angle_rad = 0.0
         self._last_y: int | None = None
+
+    def set_pose(self, anchor_world: QPointF, angle_rad: float) -> None:
+        """Move so the dot pattern's bottom-right corner lands at
+        ``anchor_world`` and paint the dots rotated by ``angle_rad``.
+        Called by the overlay on every ``position_changed`` so the
+        grip stays glued to the buddy's body-frame bottom-right
+        regardless of swing."""
+        prev_angle = self._angle_rad
+        self._angle_rad = angle_rad
+        ax, ay = self._anchor_widget
+        new_x = int(anchor_world.x()) - ax
+        new_y = int(anchor_world.y()) - ay
+        pos = self.pos()
+        if pos.x() != new_x or pos.y() != new_y:
+            self.move(new_x, new_y)
+        if prev_angle != angle_rad:
+            self._update_click_mask()
+        self.update()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self._update_click_mask()
+
+    def _update_click_mask(self) -> None:
+        # Mask follows the rotated hit-rect so the cursor only flips
+        # to SizeFDiagCursor over the actual rotated dot square,
+        # never over the surrounding rotation-envelope padding.
+        ax, ay = self._anchor_widget
+        side = float(BUDDY_GRIP_HIT_SIDE)
+        t = QTransform()
+        t.translate(ax, ay)
+        t.rotate(math.degrees(self._angle_rad))
+        t.translate(-side, -side)
+        corners = (
+            t.map(QPointF(0.0, 0.0)),
+            t.map(QPointF(side, 0.0)),
+            t.map(QPointF(0.0, side)),
+            t.map(QPointF(side, side)),
+        )
+        xs = [p.x() for p in corners]
+        ys = [p.y() for p in corners]
+        x = int(math.floor(min(xs))) - 1
+        y = int(math.floor(min(ys))) - 1
+        x2 = int(math.ceil(max(xs))) + 1
+        y2 = int(math.ceil(max(ys))) + 1
+        self.setMask(QRegion(QRect(x, y, max(x2 - x, 1), max(y2 - y, 1))))
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
-        # Imperceptible-but-non-zero alpha across the full widget so the
-        # OS layered-window hit test (which on Windows routes clicks by
-        # per-pixel alpha, not widget bounds) treats the entire rect as
-        # clickable. Without this, only the painted dots register and
-        # the bigger widget size buys nothing.
-        painter.fillRect(self.rect(), QColor(0, 0, 0, 1))
-        offset = BUDDY_GRIP_HIT_SIDE - SIZE_GRIP_SIDE
-        painter.translate(offset, offset)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        ax, ay = self._anchor_widget
+        side = BUDDY_GRIP_HIT_SIDE
+        t = QTransform()
+        t.translate(ax, ay)
+        t.rotate(math.degrees(self._angle_rad))
+        t.translate(-float(side), -float(side))
+        painter.setWorldTransform(t)
+        # Imperceptible-but-non-zero alpha across the full hit rect so
+        # the OS layered-window hit test (which on Windows routes
+        # clicks by per-pixel alpha, not widget bounds) treats the
+        # entire rotated rect as clickable. Without this, only the
+        # painted dots register.
+        painter.fillRect(QRect(0, 0, side, side), QColor(0, 0, 0, 1))
+        # Dots in the bottom-right corner of the hit rect.
+        painter.translate(side - SIZE_GRIP_SIDE, side - SIZE_GRIP_SIDE)
         _paint_diagonal_dots(painter, SIZE_GRIP_SIDE)
         painter.end()
 

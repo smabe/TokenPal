@@ -273,10 +273,40 @@ def test_buddy_zoom_drag_delta_signal_drives_overlay(
     overlay = QtOverlay(config={})
     overlay.setup()
     try:
-        assert overlay._buddy is not None
-        # Emit a drag delta on the buddy directly. _ZOOM_PER_DRAG_PX = 0.005
-        # → 100 px drag = +0.5 zoom delta from 1.0 → 1.5.
-        overlay._buddy.zoom_drag_delta.emit(100)
+        assert overlay._resize_grip is not None
+        # _ZOOM_PER_DRAG_PX = 0.005 → 100 px drag = +0.5 zoom delta
+        # from 1.0 → 1.5.
+        overlay._resize_grip.zoom_drag_delta.emit(100)
         assert overlay._zoom == 1.5
+    finally:
+        overlay.teardown()
+
+
+def test_resize_grip_pose_tracks_buddy_rotation(qapp: QApplication) -> None:
+    """The grip is a top-level widget pinned to the buddy's body-frame
+    bottom-right. Rotating the buddy must change the grip's painted
+    angle so the dots stay glued to the body during a swing."""
+    import math
+
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._buddy is not None
+        assert overlay._resize_grip is not None
+        # Reposition once at theta=0 to capture the upright pose.
+        overlay._reposition_grip()
+        upright_angle = overlay._resize_grip._angle_rad
+        upright_pos = overlay._resize_grip.pos()
+
+        # Force a non-zero theta on the simulator and re-pose.
+        overlay._buddy._sim._theta = math.radians(30.0)
+        overlay._reposition_grip()
+
+        assert overlay._resize_grip._angle_rad != upright_angle, (
+            "grip angle should track buddy.body_angle()"
+        )
+        assert overlay._resize_grip.pos() != upright_pos, (
+            "grip position should track the rotated body-frame corner"
+        )
     finally:
         overlay.teardown()

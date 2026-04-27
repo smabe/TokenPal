@@ -40,7 +40,6 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
-from tokenpal.ui.qt._chrome import BuddyResizeGrip
 from tokenpal.ui.qt._screen_bounds import Rect, offscreen_rescue_target
 from tokenpal.ui.qt._text_fx import paint_block_char, scale_font
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
@@ -120,12 +119,9 @@ class BuddyWindow(QWidget):
 
     # Fires whenever the body physically moves — either because the
     # physics tick advanced the simulator or because ``set_frame``
-    # resized the window. Followers (bubble, dock) use this to track
-    # the buddy across the screen.
+    # resized the window. Followers (bubble, dock, resize grip) use
+    # this to track the buddy across the screen.
     position_changed = Signal()
-    # Re-emitted from the bottom-right resize grip. The overlay
-    # integrates these per-pixel deltas into a clamped zoom factor.
-    zoom_drag_delta = Signal(int)
 
 
     def __init__(
@@ -203,10 +199,6 @@ class BuddyWindow(QWidget):
         self._timer.timeout.connect(self._on_tick)
         self._last_tick_ts = time.monotonic()
         # Start settled — the simulator wakes on grab / impulse.
-
-        self._resize_grip = BuddyResizeGrip(self)
-        self._resize_grip.zoom_drag_delta.connect(self.zoom_drag_delta)
-        self._position_resize_grip()
 
         self._debug_tick_counter = 0
         self._debug_log_fp = None
@@ -486,19 +478,7 @@ class BuddyWindow(QWidget):
         self._recompute_geometry()
         self._move_to_com()
         self._update_click_mask()
-        self._position_resize_grip()
         self.update()
-
-    def _position_resize_grip(self) -> None:
-        """Park the grip at the widget's bottom-right corner. Stays a
-        fixed pixel size regardless of buddy zoom so it's grabbable at
-        0.5× as well as 2.5×."""
-        grip = self._resize_grip
-        grip.move(
-            max(0, self.width() - grip.width()),
-            max(0, self.height() - grip.height()),
-        )
-        grip.raise_()
 
     # --- Tick / timer ---------------------------------------------------
 
