@@ -237,7 +237,7 @@ class RigidBodyConfig:
     # cursor" and the body rotates until COM hangs directly below the
     # grab point. Disabled when not grabbed so the body doesn't sag
     # below ``home`` after release.
-    gravity: float = 6000.0
+    gravity: float = 12000.0
     # Distance-gated upright bias: a soft preferred-orientation torque
     # that pulls θ → 0 for grabs near COM, fading to zero past
     # ``upright_bias_radius`` so foot/ear grabs still dangle freely.
