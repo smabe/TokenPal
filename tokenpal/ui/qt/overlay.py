@@ -31,6 +31,7 @@ from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
+from tokenpal.ui.qt._chrome import BuddyResizeGrip
 from tokenpal.ui.qt._log_window import TranslucentLogWindow
 from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.buddy_window import BuddyWindow
@@ -186,6 +187,7 @@ class QtOverlay(AbstractOverlay):
         self._weather_sim: WeatherSim | None = None
         self._sky_window: SkyWindow | None = None
         self._buddy_rain_overlay: BuddyRainOverlay | None = None
+        self._resize_grip: BuddyResizeGrip | None = None
         # Live non-modal dialog instances — keep one of each on screen at
         # a time; repeat slash commands focus the existing window.
         self._options_dialog: OptionsDialog | None = None
@@ -340,7 +342,13 @@ class QtOverlay(AbstractOverlay):
             buddy_rect_provider=self._buddy_world_rect_for_sim,
         )
         self._buddy.position_changed.connect(self._reanchor_weather)
-        self._buddy.zoom_drag_delta.connect(self._on_zoom_drag_delta)
+
+        # Top-level resize grip — pure paint, rotates via paintEvent
+        # like the speech bubble. Anchored to the buddy's body-frame
+        # bottom-right via _reposition_grip.
+        self._resize_grip = BuddyResizeGrip()
+        self._resize_grip.zoom_drag_delta.connect(self._on_zoom_drag_delta)
+        self._buddy.position_changed.connect(self._reposition_grip)
 
         # Apply any zoom restored from disk so initial layout uses the
         # persisted scale instead of 1.0×. ``_fan_out_zoom`` skips the
@@ -355,6 +363,9 @@ class QtOverlay(AbstractOverlay):
             self._buddy_user_visible = new_visible
             if new_visible:
                 self._buddy.show()
+                if self._resize_grip is not None:
+                    self._resize_grip.show()
+                    self._reposition_grip()
                 if self._sky_window is not None:
                     self._sky_window.show()
                     apply_macos_stay_visible(self._sky_window)
@@ -366,6 +377,8 @@ class QtOverlay(AbstractOverlay):
                     self._buddy_rain_overlay.reanchor()
             else:
                 self._buddy.hide()
+                if self._resize_grip is not None:
+                    self._resize_grip.hide()
                 # A bubble already painted on screen would linger as a
                 # detached top-level window after the buddy vanishes.
                 if self._hide_bubble_timer is not None:
@@ -446,6 +459,10 @@ class QtOverlay(AbstractOverlay):
             # NSWindow collectionBehavior can only be set once the
             # native window actually exists: after show().
             apply_macos_stay_visible(self._buddy)
+            if self._resize_grip is not None:
+                self._resize_grip.show()
+                apply_macos_stay_visible(self._resize_grip)
+                self._reposition_grip()
         if self._sky_window is not None and self._buddy_user_visible:
             self._sky_window.show()
             apply_macos_stay_visible(self._sky_window)
@@ -519,6 +536,9 @@ class QtOverlay(AbstractOverlay):
         for window in self._log_windows.values():
             window.close()
             window.deleteLater()
+        if self._resize_grip is not None:
+            self._resize_grip.close()
+            self._resize_grip.deleteLater()
         if self._buddy is not None:
             self._buddy.close()
             self._buddy.deleteLater()
@@ -1292,6 +1312,19 @@ class QtOverlay(AbstractOverlay):
             x = int(anchor_x) - w // 2
             y = int(anchor_y)
             self._dock.move(*self._clamp_to_buddy_screen(x, y, w, h))
+
+    def _reposition_grip(self) -> None:
+        """Anchor the resize grip to the buddy's body-frame bottom-right
+        corner. The grip is a top-level pure-paint widget; rotating it
+        with the buddy gives the same visual fake-out the bubble uses
+        without the snapshot-and-park trick the dock needs."""
+        if self._buddy is None or self._resize_grip is None:
+            return
+        bounds = self._buddy.art_bounds()
+        corner = self._buddy.art_frame_point_world(
+            float(bounds.width()), float(bounds.height()),
+        )
+        self._resize_grip.set_pose(corner, self._buddy.body_angle())
 
     def _reposition_bubble(self) -> None:
         """Anchor the speech bubble above the buddy's rotated head.
