@@ -18,6 +18,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import MouseDown, MouseMove, MouseUp, Resize
 from textual.message import Message
 from textual.screen import ModalScreen
@@ -613,7 +614,10 @@ class ParticleSky(Widget):
         env = self._current_env()
         panel_w = max(1, self.size.width)
         sky_h = max(1, self.size.height)
-        buddy = self._get_buddy()
+        try:
+            buddy = self._get_buddy()
+        except NoMatches:
+            return
         buddy_w = buddy.max_frame_width()
         # BuddyMotion.x runs in [0, slide_w]; the buddy art is centered in
         # his widget, so the visual CSS offset must be shifted by -slide_w/2
