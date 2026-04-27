@@ -38,6 +38,7 @@ from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QPainter,
     QPaintEvent,
@@ -720,7 +721,7 @@ class SkyWindow(QWidget):
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._cell_w = max(self._measure_cell_w(), 1)
-        self._line_h = self.fontMetrics().ascent()
+        self._line_h = QFontMetrics(self._font).ascent()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache: dict[
             tuple[tuple[str, ...], int, int, int], QPixmap,
@@ -728,6 +729,7 @@ class SkyWindow(QWidget):
 
         _apply_transparent_window_flags(self)
         self.resize(_SKY_W_PX, _SKY_H_PX)
+        self._base_size = (_SKY_W_PX, _SKY_H_PX)
         self._last_anchor: tuple[int, int] = (-9999, -9999)
         self.reanchor()
 
@@ -754,9 +756,21 @@ class SkyWindow(QWidget):
         new_size = max(int(round(self._base_font_size * factor)), 4)
         self._font.setPointSize(new_size)
         self._cell_w = max(self._measure_cell_w(), 1)
-        self._line_h = self.fontMetrics().ascent()
+        # QFontMetrics(self._font), not self.fontMetrics(): the widget's
+        # inherited font is unrelated to ``self._font``, so the latter
+        # would leave line_h at the default-font value while cell_w
+        # scaled — sprite renders horizontally stretched.
+        self._line_h = QFontMetrics(self._font).ascent()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache.clear()
+        # Grow the sky panel itself so a 2× sun isn't clipped.
+        base_w, base_h = self._base_size
+        self.resize(
+            max(1, int(round(base_w * factor))),
+            max(1, int(round(base_h * factor))),
+        )
+        self._last_anchor = (-9999, -9999)  # force reanchor on next call
+        self.reanchor()
         self.update()
 
     def _measure_cell_w(self) -> int:
