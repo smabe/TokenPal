@@ -14,6 +14,7 @@ All four states valid (none / ambient / voice / both). UI parity in Qt `OptionsD
 - `voice` source → speak only when `voice_conversation_enabled`. Reply path *awaits* speak() so `notify_tts_done` lands AFTER playback drains; otherwise the trailing-window mic re-opens on top of in-flight Kokoro audio.
 - `ambient` source → speak only when `speak_ambient_enabled`. Fire-and-forget from `_emit_comment`.
 - Module-level `asyncio.Lock` (`_playback_lock`) serializes the OutputStream lifecycle — concurrent typed + voice on the same device would otherwise race two PortAudio streams unpredictably.
+- Whole-utterance pre-synth: `speak()` drains every sentence into a single PCM buffer before opening the OutputStream. Synth and playback never overlap, so a backend whose synth holds the GIL (Kokoro does) can't starve the Qt main thread mid-playback. Cost: a brief synth stall before audio starts on long replies.
 
 ## Pipeline lifecycle (`tokenpal/audio/pipeline.py`, `input.py`)
 - `boot(config, data_dir)` → `AudioPipeline` (output-side discovery; if voice mode on, marker import of `openwakeword` to trip the modularity anti-test).
@@ -34,7 +35,7 @@ States: `IDLE → LISTENING → SPEAKING → TRAILING → IDLE`. Pure state mach
 ## Backends + registry (`tokenpal/audio/registry.py`)
 Generic `_BackendRegistry[B]` (PEP-695 type params) underpins three triples: TTS / wakeword / ASR. `discover_backends(include_input=False)` walks `tokenpal/audio/backends/` and skips `asr_*` / `wake_*` filenames so ambient-only boots don't pull faster-whisper / openwakeword.
 
-- TTS: `KokoroBackend` (only one currently; `tts_backend = "kokoro"`).
+- TTS: `KokoroBackend` (only one currently; `tts_backend = "kokoro"`). Synthesis runs in a child process — `_KokoroWorker` spawns `python -m tokenpal.audio.backends._kokoro_worker` and talks to it over JSON-stdin / length-prefixed-PCM-stdout (4-byte big-endian length, then float32 PCM @ 24kHz mono; a leading 0-length frame on startup is the model-loaded handshake that `warmup()` blocks on). Parent process never imports `kokoro_onnx`. The split exists because Kokoro's ONNX inference + numpy glue holds the GIL in 100ms+ runs and stuttered the buddy's 60Hz Qt tick during synth; running it under a different GIL fixes that. `list_voices()` reads `voices-v1.0.bin` directly with numpy so the options dropdown doesn't have to spawn a worker.
 - Wakeword: `OpenWakeWordBackend` — kwarg-drift fallback (`wakeword_models=` → `wakeword_model_paths=`), volume gate at -40dBFS, explicit `melspec_model_path` + `embedding_model_path` so onnxruntime loads from `<data_dir>/audio/wakeword/` instead of the empty package resources dir.
 - ASR: `LocalWhisperBackend` (faster-whisper, `download_root=<data_dir>/audio/whisper/`), `RemoteWhisperBackend` (POST `/v1/audio/transcriptions`, 2s connect timeout, raises `ASRUnreachableError` on failure), `ASRWithFallback` (server mode wraps both).
 
