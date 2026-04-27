@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QPoint, Qt
+from PySide6.QtCore import QPoint, Qt, Signal
 from PySide6.QtGui import QColor, QKeySequence, QMouseEvent, QPainter, QPaintEvent, QShortcut
 from PySide6.QtWidgets import QLabel, QSizeGrip, QWidget
 
@@ -71,6 +71,63 @@ class DragHandle(QLabel):
         event.accept()
 
 
+def _paint_diagonal_dots(painter: QPainter, side: int) -> None:
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor.fromRgbF(1.0, 1.0, 1.0, 0.4))
+    for row in range(GRIP_DOT_ROWS):
+        for col in range(GRIP_DOT_ROWS - row):
+            cx = side - GRIP_DOT_INSET - col * GRIP_DOT_SPACING
+            cy = side - GRIP_DOT_INSET - row * GRIP_DOT_SPACING
+            painter.drawEllipse(QPoint(cx, cy), 1, 1)
+
+
+class BuddyResizeGrip(QWidget):
+    """Bottom-right corner grip on the buddy. Drag y emits per-pixel
+    deltas via ``zoom_drag_delta``; the overlay integrates them into a
+    clamped zoom factor.
+
+    Distinct from ``GlassSizeGrip`` (which subclasses ``QSizeGrip`` and
+    triggers a window resize) — this one fans out to many widgets via
+    a signal, not the native resize path.
+    """
+
+    zoom_drag_delta = Signal(int)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(SIZE_GRIP_SIDE, SIZE_GRIP_SIDE)
+        self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+        self._last_y: int | None = None
+
+    def paintEvent(self, _event: QPaintEvent) -> None:
+        painter = QPainter(self)
+        _paint_diagonal_dots(painter, SIZE_GRIP_SIDE)
+        painter.end()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._last_y = event.globalPosition().toPoint().y()
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._last_y is None:
+            return
+        cur_y = event.globalPosition().toPoint().y()
+        dy = cur_y - self._last_y
+        if dy != 0:
+            self.zoom_drag_delta.emit(dy)
+            self._last_y = cur_y
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._last_y = None
+        event.accept()
+
+
 class GlassSizeGrip(QSizeGrip):
     """``QSizeGrip`` with a soft-white dotted paint that fits the glass aesthetic."""
 
@@ -81,14 +138,7 @@ class GlassSizeGrip(QSizeGrip):
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor.fromRgbF(1.0, 1.0, 1.0, 0.4))
-        for row in range(GRIP_DOT_ROWS):
-            for col in range(GRIP_DOT_ROWS - row):
-                cx = SIZE_GRIP_SIDE - GRIP_DOT_INSET - col * GRIP_DOT_SPACING
-                cy = SIZE_GRIP_SIDE - GRIP_DOT_INSET - row * GRIP_DOT_SPACING
-                painter.drawEllipse(QPoint(cx, cy), 1, 1)
+        _paint_diagonal_dots(painter, SIZE_GRIP_SIDE)
         painter.end()
 
 
