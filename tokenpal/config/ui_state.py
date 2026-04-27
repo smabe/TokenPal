@@ -28,15 +28,17 @@ _LEGACY_KEY_TO_NAME: dict[str, str] = {
     "chat_log_visible": "chat",
     "news_visible": "news",
 }
+_DEFAULT_ZOOM = 1.0
 
 
 class UiState(TypedDict):
     buddy_visible: bool
     windows: dict[str, bool]
+    zoom: float
 
 
 def _default_state() -> UiState:
-    return {"buddy_visible": True, "windows": {}}
+    return {"buddy_visible": True, "windows": {}, "zoom": _DEFAULT_ZOOM}
 
 
 def _path_for(data_dir: Path) -> Path:
@@ -70,7 +72,12 @@ def load_ui_state(data_dir: Path) -> UiState:
         if legacy_key in raw and name not in windows:
             windows[name] = bool(raw[legacy_key])
 
-    return {"buddy_visible": buddy, "windows": windows}
+    zoom = _DEFAULT_ZOOM
+    raw_zoom = raw.get("zoom")
+    if isinstance(raw_zoom, int | float) and not isinstance(raw_zoom, bool):
+        zoom = float(raw_zoom)
+
+    return {"buddy_visible": buddy, "windows": windows, "zoom": zoom}
 
 
 def save_ui_state(data_dir: Path, state: UiState) -> Path:
@@ -83,6 +90,7 @@ def save_ui_state(data_dir: Path, state: UiState) -> Path:
             name: bool(visible)
             for name, visible in state.get("windows", {}).items()
         },
+        "zoom": float(state.get("zoom", _DEFAULT_ZOOM)),
     }
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.chmod(path, 0o600)

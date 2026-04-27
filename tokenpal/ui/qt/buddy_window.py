@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QImage,
     QMouseEvent,
@@ -39,7 +40,9 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
+from tokenpal.ui.qt._chrome import BuddyResizeGrip
 from tokenpal.ui.qt._screen_bounds import Rect, offscreen_rescue_target
+from tokenpal.ui.qt._text_fx import paint_block_char, scale_font
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
 from tokenpal.ui.qt.physics import RigidBodyConfig, RigidBodySimulator
 
@@ -70,17 +73,23 @@ _PHYSICS_DEBUG_LOG_PATH = "/tmp/tokenpal-physics.log"
 _FG_COLOR = QColor(BUDDY_GREEN)
 
 
+_BLOCK_PAINT_WIDTH_CACHE: dict[tuple[str, int], int] = {}
+
+
 def _measure_block_paint_width(font: QFont) -> int:
     """Return the width in pixels that a single U+2588 FULL BLOCK glyph
-    actually paints with ``font``. Used as the fixed grid step for the
-    buddy art so neighbouring blocks visually touch — see the note in
-    ``BuddyWindow._resize_to_frame`` for why we don't trust the font's
-    reported advance."""
+    actually paints with ``font``. Cached by (family, pointSize) so
+    drag-to-zoom doesn't re-rasterize the probe glyph every tick."""
+    key = (font.family(), font.pointSize())
+    cached = _BLOCK_PAINT_WIDTH_CACHE.get(key)
+    if cached is not None:
+        return cached
     img = QImage(64, 32, QImage.Format.Format_ARGB32)
     img.fill(0)
     painter = QPainter(img)
     painter.setFont(font)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
     painter.setPen(QColor("white"))
     painter.drawText(8, 24, "█")
     painter.end()
@@ -92,8 +101,11 @@ def _measure_block_paint_width(font: QFont) -> int:
                 hi = x
                 break
     if lo is None or hi is None:
-        return max(1, int(font.pointSize() * 0.7))
-    return max(1, hi - lo + 1)
+        result = max(1, int(font.pointSize() * 0.7))
+    else:
+        result = max(1, hi - lo + 1)
+    _BLOCK_PAINT_WIDTH_CACHE[key] = result
+    return result
 
 
 class BuddyWindow(QWidget):
@@ -111,6 +123,9 @@ class BuddyWindow(QWidget):
     # resized the window. Followers (bubble, dock) use this to track
     # the buddy across the screen.
     position_changed = Signal()
+    # Re-emitted from the bottom-right resize grip. The overlay
+    # integrates these per-pixel deltas into a clamped zoom factor.
+    zoom_drag_delta = Signal(int)
 
 
     def __init__(
@@ -125,8 +140,16 @@ class BuddyWindow(QWidget):
         self._frame_lines = list(frame_lines)
         self._on_right_click: Callable[[QPoint], None] | None = None
 
-        self._font = QFont(font_family, font_size)
-        self._font.setStyleHint(QFont.StyleHint.Monospace)
+        self._base_font = QFont(font_family, font_size)
+        self._base_font.setStyleHint(QFont.StyleHint.Monospace)
+        # Greyscale AA only; subpixel AA on translucent widgets dots glyphs
+        # (QTBUG-43774).
+        self._base_font.setStyleStrategy(
+            QFont.StyleStrategy.PreferAntialias
+            | QFont.StyleStrategy.NoSubpixelAntialias,
+        )
+        self._zoom = 1.0
+        self._font = QFont(self._base_font)
 
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -159,9 +182,10 @@ class BuddyWindow(QWidget):
 
         self._measure_cells()
 
-        cfg = physics_config or RigidBodyConfig()
-        cfg = dataclasses.replace(cfg, inertia=self._compute_inertia(cfg.mass))
-        self._sim = RigidBodySimulator(home=initial_anchor, config=cfg)
+        self._base_physics = physics_config or RigidBodyConfig()
+        self._sim = RigidBodySimulator(
+            home=initial_anchor, config=self._zoomed_physics_config(),
+        )
 
         # _recompute_geometry reads sim.theta, so the sim must exist first.
         self._recompute_geometry()
@@ -179,6 +203,10 @@ class BuddyWindow(QWidget):
         self._timer.timeout.connect(self._on_tick)
         self._last_tick_ts = time.monotonic()
         # Start settled — the simulator wakes on grab / impulse.
+
+        self._resize_grip = BuddyResizeGrip(self)
+        self._resize_grip.zoom_drag_delta.connect(self.zoom_drag_delta)
+        self._position_resize_grip()
 
         self._debug_tick_counter = 0
         self._debug_log_fp = None
@@ -208,6 +236,43 @@ class BuddyWindow(QWidget):
         # justify rebuilding inertia. Body keeps its initial moment.
         self._refresh_view()
 
+    def set_zoom(self, factor: float) -> None:
+        """Rescale the buddy by ``factor`` (1.0 = original size).
+        Recomputes the physics config so gravity, inertia, upright
+        bias, and settle thresholds all track the new size — otherwise
+        a 2× buddy swings ~√2× slower than 1× and rights itself half
+        as snappily because the force-magnitude params stay constant
+        while inertia (which scales as size²) doesn't."""
+        if factor <= 0.0 or factor == self._zoom:
+            return
+        self._zoom = factor
+        self._font = scale_font(self._base_font, factor)
+        self._measure_cells()
+        self._sim.set_config(self._zoomed_physics_config())
+        self._refresh_view()
+
+    def _zoomed_physics_config(self) -> RigidBodyConfig:
+        """Apply the current zoom to length / force-magnitude fields of
+        ``_base_physics``. Frequencies, damping ratios, and rotational
+        quantities (rad/s, rad) are scale-free and pass through.
+
+        Exponents fall out of the dimensional analysis — gravity scales
+        linearly so visual swing frequency stays the same; upright bias
+        scales as z² to match inertia growth (I ∝ R²) so the righting
+        time-constant is invariant under zoom."""
+        base = self._base_physics
+        z = self._zoom
+        return dataclasses.replace(
+            base,
+            inertia=self._compute_inertia(base.mass),
+            gravity=base.gravity * z,
+            max_linear_speed=base.max_linear_speed * z,
+            upright_bias_strength=base.upright_bias_strength * z * z,
+            upright_bias_radius=base.upright_bias_radius * z,
+            settle_speed=base.settle_speed * z,
+            settle_distance=base.settle_distance * z,
+        )
+
     # --- Geometry --------------------------------------------------------
 
     def _measure_cells(self) -> None:
@@ -235,7 +300,7 @@ class BuddyWindow(QWidget):
         block art never descends below the baseline; the extra padding
         just opens gaps between stacked blocks.
         """
-        fm = self.fontMetrics()
+        fm = QFontMetrics(self._font)
         self._cell_w = max(_measure_block_paint_width(self._font) - 1, 1)
         self._line_h = fm.ascent()
 
@@ -421,7 +486,19 @@ class BuddyWindow(QWidget):
         self._recompute_geometry()
         self._move_to_com()
         self._update_click_mask()
+        self._position_resize_grip()
         self.update()
+
+    def _position_resize_grip(self) -> None:
+        """Park the grip at the widget's bottom-right corner. Stays a
+        fixed pixel size regardless of buddy zoom so it's grabbable at
+        0.5× as well as 2.5×."""
+        grip = self._resize_grip
+        grip.move(
+            max(0, self.width() - grip.width()),
+            max(0, self.height() - grip.height()),
+        )
+        grip.raise_()
 
     # --- Tick / timer ---------------------------------------------------
 
@@ -631,24 +708,28 @@ class BuddyWindow(QWidget):
         # transparent before this runs, so no fillRect needed.
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.setFont(self._font)
         # Apply the same transform the hit-test uses, so what's painted
         # and what can be clicked agree.
         painter.setWorldTransform(self._build_transform())
 
-        fm = self.fontMetrics()
         line_h = self._line_h
         cell_w = self._cell_w
-        y = fm.ascent()
+        y = line_h
         total_w = self._cols * cell_w
         for line in self._frame_lines:
             chars = len(stripped_text(line))
             base_x = (total_w - chars * cell_w) // 2
             col = 0
             for seg in parse_markup(line):
-                painter.setPen(QColor(seg.color) if seg.color else _FG_COLOR)
+                color = QColor(seg.color) if seg.color else _FG_COLOR
+                painter.setPen(color)
                 for ch in seg.text:
-                    painter.drawText(base_x + col * cell_w, y, ch)
+                    x = base_x + col * cell_w
+                    rect = QRect(x, y - line_h, cell_w + 1, line_h)
+                    if not paint_block_char(painter, ch, rect, color):
+                        painter.drawText(x, y, ch)
                     col += 1
             y += line_h
 

@@ -16,6 +16,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QTimer  # noqa: E402
+from PySide6.QtGui import QFont  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tokenpal.ui.qt.app import build_shell  # noqa: E402
@@ -45,6 +46,14 @@ def test_buddy_window_has_frameless_flags(qapp: QApplication) -> None:
     flags = shell.buddy.windowFlags()
     assert flags & Qt.WindowType.FramelessWindowHint
     assert flags & Qt.WindowType.WindowStaysOnTopHint
+    shell.buddy.close()
+
+
+def test_buddy_font_disables_subpixel_antialias(qapp: QApplication) -> None:
+    # QTBUG-43774: subpixel AA dots glyphs on WA_TranslucentBackground.
+    shell = build_shell(app=qapp)
+    strategy = shell.buddy._font.styleStrategy()
+    assert strategy & QFont.StyleStrategy.NoSubpixelAntialias
     shell.buddy.close()
 
 

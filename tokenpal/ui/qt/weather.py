@@ -34,22 +34,32 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QPainter,
     QPaintEvent,
+    QPixmap,
 )
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.ui.ascii_props import (
+    MOON_SPRITE,
+    OVERCAST_CLOUD_A,
+    RAIN_CLOUD_SPRITE,
+    SUN_SPRITE,
+    PropSprite,
+)
 from tokenpal.ui.buddy_environment import (
     CloudDrift,
     EnvironmentSnapshot,
     EnvState,
     Kind,
 )
+from tokenpal.ui.qt._text_fx import render_sprite_pixmap
 
 # --- Timing ---------------------------------------------------------------
 
@@ -113,50 +123,11 @@ _SNOW_GLYPHS = ("*", "·", "*")
 _SPLASH_GLYPHS = ("·", "'", ".")
 _STAR_GLYPH = "*"
 
-# --- Sprite lines (scaled-down variants — see plan goal) -----------------
-
-SUN_LINES = (
-    "   ░▓░   ",
-    " █▓░▓░▓█ ",
-    " ░▒███▒░ ",
-    "█░█████░█",
-    " ░▒███▒░ ",
-    " █▓░▓░▓█ ",
-    "   ░▓░   ",
-)  # 9 wide x 7 tall
-
-MOON_LINES = (
-    "  ▒███▒  ",
-    " █░░░░██ ",
-    "      ░██",
-    "      ▒██",
-    " █░░░░██ ",
-    "  ▒███▒  ",
-)  # 9 wide x 6 tall
-
-# Single drifting cloud above the rain column — matches Textual's
-# RAIN_CLOUD_SPRITE (buddy_environment.py:107-115). Rendered ~10%
-# larger than nominal cell size via a paint-time scale in
-# ``_paint_clouds``; the ASCII stays 8×3 so the spawn footprint math
-# (``cloud_px_w = len * self.cell_px``) stays meaningful.
-RAIN_CLOUD_LINES = (
-    "  .--.  ",
-    " (    ).",
-    "(___.__)",
-)  # 8 wide x 3 tall
+# --- Sprite layout -------------------------------------------------------
 
 # Paint-time scale applied to the drifting rain cloud (both rendered
 # size AND the spawn footprint width the rain column infers).
 _RAIN_CLOUD_SCALE = 1.1
-
-# Overcast double-stack. Port of _OVERCAST_CLOUD_LINES (ascii_props.py:124)
-# but narrowed to match the scaled sun's 9-cell width.
-_OVERCAST_CLOUD_LINES = (
-    " ░▒▒▒▒▒░ ",
-    "░▓▓▓▓▓▓▓░",
-    "▒▓▓███▓▓▒",
-    " ░▒▒▒▒▒░ ",
-)  # 9 wide x 4 tall
 
 # Anti-phase drift amplitudes for the two overcast cloud layers.
 _OVERCAST_DRIFT_AMP = 3.0  # cells
@@ -500,11 +471,13 @@ class WeatherSim:
         if sky.isEmpty():
             return
         # Spawn in the rain cloud's footprint, drifted by cloud offset.
-        cloud_px_w = len(RAIN_CLOUD_LINES[0]) * self.cell_px
+        cloud_px_w = RAIN_CLOUD_SPRITE.width * self.cell_px
         drift = self.cloud_drift.offset_x(_OVERCAST_DRIFT_AMP, 0.0) * self.cell_px
         cx = sky.center().x() + drift
         x = cx + self.rng.uniform(-cloud_px_w / 2.0, cloud_px_w / 2.0)
-        y = sky.top() + self.line_px * (1.0 + len(RAIN_CLOUD_LINES) * _RAIN_CLOUD_SCALE)
+        y = sky.top() + self.line_px * (
+            1.0 + RAIN_CLOUD_SPRITE.height * _RAIN_CLOUD_SCALE
+        )
         vy_cells = self.rng.uniform(
             _RAIN_VY_MIN + 4.0 * intensity,
             _RAIN_VY_BASE + _RAIN_VY_SPREAD * intensity,
@@ -531,11 +504,13 @@ class WeatherSim:
         sky = self.sky_rect_provider()
         if sky.isEmpty():
             return
-        cloud_px_w = len(RAIN_CLOUD_LINES[0]) * self.cell_px
+        cloud_px_w = RAIN_CLOUD_SPRITE.width * self.cell_px
         drift = self.cloud_drift.offset_x(_OVERCAST_DRIFT_AMP, 0.0) * self.cell_px
         cx = sky.center().x() + drift
         x = cx + self.rng.uniform(-cloud_px_w / 2.0, cloud_px_w / 2.0)
-        y = sky.top() + self.line_px * (1.0 + len(RAIN_CLOUD_LINES) * _RAIN_CLOUD_SCALE)
+        y = sky.top() + self.line_px * (
+            1.0 + RAIN_CLOUD_SPRITE.height * _RAIN_CLOUD_SCALE
+        )
         vy = self.rng.uniform(_SNOW_VY_MIN, _SNOW_VY_MAX) * self.cell_px
         phase = self.rng.uniform(0.0, 2.0 * math.pi)
         self.particles.append(WeatherParticle(
@@ -554,9 +529,8 @@ class WeatherSim:
         sky = self.sky_rect_provider()
         if sky.isEmpty():
             return
-        # Moon rect — approximate from MOON_LINES anchored top-right of sky.
-        mw = len(MOON_LINES[0]) * self.cell_px
-        mh = len(MOON_LINES) * self.cell_px
+        mw = MOON_SPRITE.width * self.cell_px
+        mh = MOON_SPRITE.height * self.cell_px
         mx = sky.right() - mw - self.cell_px
         my = sky.top() + self.cell_px
         moon = QRectF(mx, my, mw, mh)
@@ -742,14 +716,20 @@ class SkyWindow(QWidget):
         self._sim = sim
         self._overlay_update = overlay_update_hook
         self._buddy_rect_provider = buddy_rect_provider
+        self._base_font_size = font_size
+        self._zoom = 1.0
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._cell_w = max(self._measure_cell_w(), 1)
-        self._line_h = self.fontMetrics().ascent()
+        self._line_h = QFontMetrics(self._font).ascent()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
+        self._sprite_cache: dict[
+            tuple[tuple[str, ...], int, int, int], QPixmap,
+        ] = {}
 
         _apply_transparent_window_flags(self)
         self.resize(_SKY_W_PX, _SKY_H_PX)
+        self._base_size = (_SKY_W_PX, _SKY_H_PX)
         self._last_anchor: tuple[int, int] = (-9999, -9999)
         self.reanchor()
 
@@ -768,6 +748,30 @@ class SkyWindow(QWidget):
 
     def stop(self) -> None:
         self._timer.stop()
+
+    def set_zoom(self, factor: float) -> None:
+        if factor == self._zoom:
+            return
+        self._zoom = factor
+        new_size = max(int(round(self._base_font_size * factor)), 4)
+        self._font.setPointSize(new_size)
+        self._cell_w = max(self._measure_cell_w(), 1)
+        # QFontMetrics(self._font), not self.fontMetrics(): the widget's
+        # inherited font is unrelated to ``self._font``, so the latter
+        # would leave line_h at the default-font value while cell_w
+        # scaled — sprite renders horizontally stretched.
+        self._line_h = QFontMetrics(self._font).ascent()
+        self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
+        self._sprite_cache.clear()
+        # Grow the sky panel itself so a 2× sun isn't clipped.
+        base_w, base_h = self._base_size
+        self.resize(
+            max(1, int(round(base_w * factor))),
+            max(1, int(round(base_h * factor))),
+        )
+        self._last_anchor = (-9999, -9999)  # force reanchor on next call
+        self.reanchor()
+        self.update()
 
     def _measure_cell_w(self) -> int:
         # Import lazily to avoid a circular when buddy_window is the first
@@ -824,6 +828,7 @@ class SkyWindow(QWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.setFont(self._font)
 
         world = self._world_rect()
@@ -855,75 +860,83 @@ class SkyWindow(QWidget):
         # "you can't see the sky right now."
         if env.kind not in (Kind.CLEAR, Kind.CLOUDY):
             return
-        sprite = SUN_LINES if env.is_day else MOON_LINES
-        color = _COL_SUN if env.is_day else _COL_MOON
-        painter.setPen(QColor(color))
-        width_px = len(sprite[0]) * self._cell_w
-        x0 = self.width() - width_px - self._cell_w
-        y0 = self._line_h
-        for row, line in enumerate(sprite):
-            y = y0 + row * self._line_h
-            for col, ch in enumerate(line):
-                if ch == " ":
-                    continue
-                painter.drawText(x0 + col * self._cell_w, y, ch)
+        sprite = SUN_SPRITE if env.is_day else MOON_SPRITE
+        color = QColor(_COL_SUN if env.is_day else _COL_MOON)
+        nat_w = sprite.width * self._cell_w
+        nat_h = sprite.height * self._line_h
+        x0 = self.width() - nat_w - self._cell_w
+        self._draw_sprite_pix(
+            painter, sprite, target=QRect(x0, 0, nat_w, nat_h), color=color,
+        )
 
     def _paint_clouds(self, painter: QPainter, env: EnvState) -> None:
+        cloud_color = QColor(_COL_CLOUD)
         # Overcast (cloudy + intensity >= 0.7): double-stack anti-phase.
         if env.kind is Kind.CLOUDY and env.intensity >= _OVERCAST_INTENSITY:
-            painter.setPen(QColor(_COL_CLOUD))
-            width_px = len(_OVERCAST_CLOUD_LINES[0]) * self._cell_w
-            base_x = self.width() - width_px - self._cell_w
-            base_y = self._line_h
-
+            sprite = OVERCAST_CLOUD_A
+            nat_w = sprite.width * self._cell_w
+            nat_h = sprite.height * self._line_h
+            base_x = self.width() - nat_w - self._cell_w
             drift_a = self._sim.cloud_drift.offset_x(
                 _OVERCAST_DRIFT_AMP, _OVERCAST_A_PHASE,
             ) * self._cell_w
             drift_b = self._sim.cloud_drift.offset_x(
                 _OVERCAST_DRIFT_AMP, _OVERCAST_B_PHASE,
             ) * self._cell_w
-
-            self._draw_sprite(
-                painter, _OVERCAST_CLOUD_LINES,
-                x=int(base_x + drift_a),
-                y=int(base_y + _OVERCAST_A_DY * self._line_h),
+            self._draw_sprite_pix(
+                painter, sprite,
+                target=QRect(
+                    int(base_x + drift_a),
+                    _OVERCAST_A_DY * self._line_h,
+                    nat_w, nat_h,
+                ),
+                color=cloud_color,
             )
-            self._draw_sprite(
-                painter, _OVERCAST_CLOUD_LINES,
-                x=int(base_x + _OVERCAST_B_DX * self._cell_w + drift_b),
-                y=int(base_y + _OVERCAST_B_DY * self._line_h),
+            self._draw_sprite_pix(
+                painter, sprite,
+                target=QRect(
+                    int(base_x + _OVERCAST_B_DX * self._cell_w + drift_b),
+                    _OVERCAST_B_DY * self._line_h,
+                    nat_w, nat_h,
+                ),
+                color=cloud_color,
             )
             return
 
-        # Rain/drizzle/storm/snow: the small drifting rain-cloud, scaled
-        # up at paint time so the ASCII source stays the reference size
-        # (keeps spawn-footprint math honest) while the cloud reads ~10%
-        # chunkier on screen than the sun/moon.
         if env.kind in (Kind.RAIN, Kind.DRIZZLE, Kind.STORM, Kind.SNOW):
-            painter.setPen(QColor(_COL_CLOUD))
-            width_px = len(RAIN_CLOUD_LINES[0]) * self._cell_w
+            nat_w = RAIN_CLOUD_SPRITE.width * self._cell_w
+            nat_h = RAIN_CLOUD_SPRITE.height * self._line_h
+            scaled_w = int(round(nat_w * _RAIN_CLOUD_SCALE))
+            scaled_h = int(round(nat_h * _RAIN_CLOUD_SCALE))
             drift = self._sim.cloud_drift.offset_x(
                 _OVERCAST_DRIFT_AMP, 0.0,
             ) * self._cell_w
-            scaled_w = width_px * _RAIN_CLOUD_SCALE
             cx = self.width() / 2
             x = int(cx - scaled_w / 2 + drift)
-            y = self._line_h
-            painter.save()
-            painter.translate(x, y)
-            painter.scale(_RAIN_CLOUD_SCALE, _RAIN_CLOUD_SCALE)
-            self._draw_sprite(painter, RAIN_CLOUD_LINES, x=0, y=0)
-            painter.restore()
+            self._draw_sprite_pix(
+                painter, RAIN_CLOUD_SPRITE,
+                target=QRect(x, 0, scaled_w, scaled_h),
+                color=cloud_color,
+            )
 
-    def _draw_sprite(
-        self, painter: QPainter, lines: tuple[str, ...], *, x: int, y: int,
+    def _sprite_pixmap(self, sprite: PropSprite, color: QColor) -> QPixmap:
+        key = (sprite.lines, color.rgb(), self._cell_w, self._line_h)
+        cached = self._sprite_cache.get(key)
+        if cached is not None:
+            return cached
+        pix = render_sprite_pixmap(
+            sprite.lines, color,
+            cell_w=self._cell_w, line_h=self._line_h,
+            font=self._font, dpr=self.devicePixelRatioF(),
+        )
+        self._sprite_cache[key] = pix
+        return pix
+
+    def _draw_sprite_pix(
+        self, painter: QPainter, sprite: PropSprite, *,
+        target: QRect, color: QColor,
     ) -> None:
-        for row, line in enumerate(lines):
-            py = y + row * self._line_h
-            for col, ch in enumerate(line):
-                if ch == " ":
-                    continue
-                painter.drawText(x + col * self._cell_w, py, ch)
+        painter.drawPixmap(target, self._sprite_pixmap(sprite, color))
 
     def _paint_shooting_stars(self, painter: QPainter, world: QRectF) -> None:
         for s in self._sim.shooting_stars:
@@ -990,6 +1003,8 @@ class BuddyRainOverlay(QWidget):
     ) -> None:
         super().__init__()
         self._sim = sim
+        self._base_font_size = font_size
+        self._zoom = 1.0
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._buddy_rect_provider = buddy_rect_provider
@@ -997,6 +1012,13 @@ class BuddyRainOverlay(QWidget):
         _apply_transparent_window_flags(self)
         self.resize(200, 200)
         self._last_anchor: tuple[int, int] = (-9999, -9999)
+
+    def set_zoom(self, factor: float) -> None:
+        if factor == self._zoom:
+            return
+        self._zoom = factor
+        self._font.setPointSize(max(int(round(self._base_font_size * factor)), 4))
+        self.update()
 
     def reanchor(self) -> None:
         """Idempotent re-anchor to current buddy rect + padding. ``position_

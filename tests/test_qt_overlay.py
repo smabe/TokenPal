@@ -173,18 +173,18 @@ def test_news_toggle_persists_and_restores(qapp: QApplication) -> None:
     same dict across a re-construct."""
     overlay = QtOverlay(config={})
     overlay.setup()
-    saved: list[tuple[bool, dict[str, bool]]] = []
-    overlay.set_ui_state_persist_callback(
-        lambda b, w: saved.append((b, dict(w))),
-    )
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
     try:
         overlay._do_toggle_window("news")
         assert overlay._user_visible["news"] is True
-        assert saved[-1][1]["news"] is True
+        overlay.flush_pending_persist()
+        assert saved[-1]["windows"]["news"] is True
 
         overlay._do_toggle_window("news")
         assert overlay._user_visible["news"] is False
-        assert saved[-1][1]["news"] is False
+        overlay.flush_pending_persist()
+        assert saved[-1]["windows"]["news"] is False
     finally:
         overlay.teardown()
 
@@ -208,8 +208,8 @@ def test_arbitrary_window_can_be_registered(qapp: QApplication) -> None:
 
     overlay = QtOverlay(config={})
     overlay.setup()
-    saved: list[dict[str, bool]] = []
-    overlay.set_ui_state_persist_callback(lambda _b, w: saved.append(dict(w)))
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
     try:
         extra = TranslucentLogWindow(title="extra")
         overlay._log_windows["extra"] = extra
@@ -217,11 +217,13 @@ def test_arbitrary_window_can_be_registered(qapp: QApplication) -> None:
 
         overlay._do_toggle_window("extra")
         assert overlay._user_visible["extra"] is True
-        assert saved[-1]["extra"] is True
+        overlay.flush_pending_persist()
+        assert saved[-1]["windows"]["extra"] is True
 
         overlay._do_toggle_window("extra")
         assert overlay._user_visible["extra"] is False
-        assert saved[-1]["extra"] is False
+        overlay.flush_pending_persist()
+        assert saved[-1]["windows"]["extra"] is False
     finally:
         overlay.teardown()
 

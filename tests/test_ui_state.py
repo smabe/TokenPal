@@ -8,7 +8,7 @@ from pathlib import Path
 
 from tokenpal.config.ui_state import load_ui_state, save_ui_state
 
-_DEFAULTS = {"buddy_visible": True, "windows": {}}
+_DEFAULTS = {"buddy_visible": True, "windows": {}, "zoom": 1.0}
 
 
 def test_load_missing_returns_defaults(tmp_path: Path) -> None:
@@ -19,11 +19,16 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
 def test_save_and_load_roundtrip(tmp_path: Path) -> None:
     save_ui_state(
         tmp_path,
-        {"buddy_visible": False, "windows": {"chat": True, "news": True}},
+        {
+            "buddy_visible": False,
+            "windows": {"chat": True, "news": True},
+            "zoom": 1.5,
+        },
     )
     assert load_ui_state(tmp_path) == {
         "buddy_visible": False,
         "windows": {"chat": True, "news": True},
+        "zoom": 1.5,
     }
 
 
@@ -32,7 +37,11 @@ def test_arbitrary_window_names_persist(tmp_path: Path) -> None:
     the persistence layer accepts any registered name."""
     save_ui_state(
         tmp_path,
-        {"buddy_visible": True, "windows": {"chat": True, "stats_dashboard": True}},
+        {
+            "buddy_visible": True,
+            "windows": {"chat": True, "stats_dashboard": True},
+            "zoom": 1.0,
+        },
     )
     state = load_ui_state(tmp_path)
     assert state["windows"]["stats_dashboard"] is True
@@ -62,6 +71,36 @@ def test_missing_keys_get_defaults(tmp_path: Path) -> None:
     state = load_ui_state(tmp_path)
     assert state["buddy_visible"] is False
     assert state["windows"] == {}
+    assert state["zoom"] == 1.0
+
+
+def test_missing_zoom_defaults_to_one(tmp_path: Path) -> None:
+    """Existing installs predate the zoom field; loader must not error."""
+    (tmp_path / ".ui_state.json").write_text(
+        '{"buddy_visible": true, "windows": {"chat": true}}',
+        encoding="utf-8",
+    )
+    state = load_ui_state(tmp_path)
+    assert state["zoom"] == 1.0
+
+
+def test_malformed_zoom_defaults_to_one(tmp_path: Path) -> None:
+    """Garbage in the zoom field must not crash the loader."""
+    (tmp_path / ".ui_state.json").write_text(
+        '{"buddy_visible": true, "windows": {}, "zoom": "huge"}',
+        encoding="utf-8",
+    )
+    state = load_ui_state(tmp_path)
+    assert state["zoom"] == 1.0
+
+
+def test_zoom_roundtrip_preserves_float(tmp_path: Path) -> None:
+    save_ui_state(
+        tmp_path,
+        {"buddy_visible": True, "windows": {}, "zoom": 0.75},
+    )
+    state = load_ui_state(tmp_path)
+    assert state["zoom"] == 0.75
 
 
 def test_legacy_flat_keys_migrate_into_windows_dict(tmp_path: Path) -> None:

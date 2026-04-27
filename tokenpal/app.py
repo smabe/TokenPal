@@ -56,7 +56,7 @@ from tokenpal.config.senses_writer import (
     set_ssid_label,
 )
 from tokenpal.config.tools_writer import set_enabled_tools
-from tokenpal.config.ui_state import load_ui_state, save_ui_state
+from tokenpal.config.ui_state import UiState, load_ui_state, save_ui_state
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.registry import discover_backends, resolve_backend
@@ -221,15 +221,11 @@ def main() -> None:
         overlay.restore_visibility_state(
             buddy_visible=ui_state["buddy_visible"],
             windows=dict(ui_state["windows"]),
+            zoom=ui_state["zoom"],
         )
 
-        def _persist_ui_state(
-            buddy_visible: bool, windows: dict[str, bool],
-        ) -> None:
-            save_ui_state(
-                data_dir,
-                {"buddy_visible": buddy_visible, "windows": dict(windows)},
-            )
+        def _persist_ui_state(state: UiState) -> None:
+            save_ui_state(data_dir, state)
 
         overlay.set_ui_state_persist_callback(_persist_ui_state)
 

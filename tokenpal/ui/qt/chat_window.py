@@ -25,11 +25,13 @@ from tokenpal.ui.qt._log_window import TranslucentLogWindow
 from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
     glass_pill_stylesheet,
+    scale_font,
     transparent_window_flags,
 )
 
 _DOCK_DEFAULT_WIDTH = 360
 _DOCK_INPUT_HEIGHT = 32
+_DOCK_STATUS_ROW_HEIGHT = 26
 _HISTORY_DEFAULT_SIZE = (520, 380)
 
 
@@ -49,6 +51,8 @@ class ChatDock(QWidget):
     ) -> None:
         super().__init__()
         self._on_submit = on_submit
+        self._zoom = 1.0
+        self._base_font: QFont | None = None
         install_zoom_shortcuts(self, on_zoom)
 
         self.setWindowFlags(transparent_window_flags())
@@ -66,7 +70,7 @@ class ChatDock(QWidget):
         self._input = QLineEdit(self)
         self._input.setPlaceholderText("Talk to your buddy (or /help)")
         self._input.setFixedHeight(_DOCK_INPUT_HEIGHT)
-        self._input.setStyleSheet(glass_pill_stylesheet())
+        self._input.setStyleSheet(self._pill_stylesheet())
         self._input.returnPressed.connect(self._submit)
         # The line edit is the only focusable child. The transparent
         # parent is NoFocus so tabbing or clicking the strip never pulls
@@ -100,7 +104,7 @@ class ChatDock(QWidget):
         layout.addWidget(self._status, 0)
 
         self._input.setMinimumWidth(0)
-        self.resize(_DOCK_DEFAULT_WIDTH, _DOCK_INPUT_HEIGHT + 26)
+        self.resize(*self._floating_size())
 
     def _submit(self) -> None:
         text = self._input.text().strip()
@@ -119,10 +123,45 @@ class ChatDock(QWidget):
     def restore_floating_size(self) -> None:
         """Reset to the floating-pill default. Call after reparenting
         back out of an embedded layout that stretched the widget."""
-        self.resize(_DOCK_DEFAULT_WIDTH, _DOCK_INPUT_HEIGHT + 26)
+        self.resize(*self._floating_size())
 
     def apply_font(self, font: QFont) -> None:
-        self._input.setFont(font)
+        self._base_font = QFont(font)
+        self._reapply_font()
+
+    def set_zoom(self, factor: float) -> None:
+        """Rescale the dock by ``factor`` (1.0 = original size).
+        Multiplies font size, input row height, status row height,
+        and overall pill width."""
+        if factor <= 0.0 or factor == self._zoom:
+            return
+        self._zoom = factor
+        self._reapply_font()
+        self._input.setFixedHeight(self._scaled(_DOCK_INPUT_HEIGHT))
+        # Re-derive the stylesheet so the corner radius scales with the
+        # height — a fixed 14-px radius gets clamped near-flat once the
+        # input shrinks below ~28 px.
+        self._input.setStyleSheet(self._pill_stylesheet())
+        self.resize(*self._floating_size())
+
+    def _pill_stylesheet(self) -> str:
+        return glass_pill_stylesheet(
+            radius=max(2, self._scaled(_DOCK_INPUT_HEIGHT) // 2),
+        )
+
+    def _floating_size(self) -> tuple[int, int]:
+        return (
+            self._scaled(_DOCK_DEFAULT_WIDTH),
+            self._scaled(_DOCK_INPUT_HEIGHT + _DOCK_STATUS_ROW_HEIGHT),
+        )
+
+    def _scaled(self, value: int) -> int:
+        return max(1, int(round(value * self._zoom)))
+
+    def _reapply_font(self) -> None:
+        if self._base_font is None:
+            return
+        self._input.setFont(scale_font(self._base_font, self._zoom))
 
 
 class ChatHistoryWindow(TranslucentLogWindow):

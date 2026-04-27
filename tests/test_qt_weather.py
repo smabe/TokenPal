@@ -17,8 +17,10 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRectF  # noqa: E402
+from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from tokenpal.ui.ascii_props import SUN_SPRITE  # noqa: E402
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot, Kind  # noqa: E402
 from tokenpal.ui.qt import weather as w  # noqa: E402
 
@@ -327,3 +329,55 @@ def test_buddy_overlay_reanchor_idempotent(qapp: QApplication) -> None:
     overlay.reanchor()
     second = overlay.pos()
     assert (first.x(), first.y()) == (second.x(), second.y())
+
+
+# --- Sprite pixmap cache -------------------------------------------------
+
+
+def test_sprite_pixmap_cache_hits_on_second_call(qapp: QApplication) -> None:
+    """Repeated requests for the same sprite + color + cell size must
+    return the cached QPixmap, not rebuild it. Without the cache, every
+    paint would supersample-render and downsample anew."""
+    sim = _make_sim(weather_code=0, seed=20)
+    sky = w.SkyWindow(sim)
+    color = QColor("#ffcc44")
+    pix1 = sky._sprite_pixmap(SUN_SPRITE, color)
+    pix2 = sky._sprite_pixmap(SUN_SPRITE, color)
+    assert pix1 is pix2
+    assert len(sky._sprite_cache) == 1
+
+
+def test_sprite_pixmap_cache_busted_on_zoom(qapp: QApplication) -> None:
+    """``set_zoom`` recomputes cell metrics and must clear the cache so
+    the next paint rebuilds at the new size."""
+    sim = _make_sim(weather_code=0, seed=21)
+    sky = w.SkyWindow(sim)
+    sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
+    assert len(sky._sprite_cache) == 1
+    sky.set_zoom(1.5)
+    assert len(sky._sprite_cache) == 0
+
+
+def test_overcast_clouds_share_pixmap_cache_entry(qapp: QApplication) -> None:
+    """OVERCAST_CLOUD_A and OVERCAST_CLOUD_B are separate PropSprite
+    instances that share the same ``lines`` tuple. The cache keys on
+    ``sprite.lines`` so both must hit the same entry — otherwise we
+    waste a pixmap rendering the same content twice."""
+    from tokenpal.ui.ascii_props import OVERCAST_CLOUD_A, OVERCAST_CLOUD_B
+    sim = _make_sim(weather_code=0, seed=23)
+    sky = w.SkyWindow(sim)
+    color = QColor("#aaaaaa")
+    pix_a = sky._sprite_pixmap(OVERCAST_CLOUD_A, color)
+    pix_b = sky._sprite_pixmap(OVERCAST_CLOUD_B, color)
+    assert pix_a is pix_b
+    assert len(sky._sprite_cache) == 1
+
+
+def test_set_zoom_no_op_on_same_factor(qapp: QApplication) -> None:
+    """Calling set_zoom with the current factor must not bust the cache
+    (avoids needless rebuilds when the orchestrator fans out a no-op)."""
+    sim = _make_sim(weather_code=0, seed=22)
+    sky = w.SkyWindow(sim)
+    sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
+    sky.set_zoom(1.0)
+    assert len(sky._sprite_cache) == 1
