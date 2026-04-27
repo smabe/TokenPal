@@ -70,7 +70,7 @@ class ChatDock(QWidget):
         self._input = QLineEdit(self)
         self._input.setPlaceholderText("Talk to your buddy (or /help)")
         self._input.setFixedHeight(_DOCK_INPUT_HEIGHT)
-        self._input.setStyleSheet(glass_pill_stylesheet())
+        self._input.setStyleSheet(self._pill_stylesheet())
         self._input.returnPressed.connect(self._submit)
         # The line edit is the only focusable child. The transparent
         # parent is NoFocus so tabbing or clicking the strip never pulls
@@ -138,7 +138,16 @@ class ChatDock(QWidget):
         self._zoom = factor
         self._reapply_font()
         self._input.setFixedHeight(self._scaled(_DOCK_INPUT_HEIGHT))
+        # Re-derive the stylesheet so the corner radius scales with the
+        # height — a fixed 14-px radius gets clamped near-flat once the
+        # input shrinks below ~28 px.
+        self._input.setStyleSheet(self._pill_stylesheet())
         self.resize(*self._floating_size())
+
+    def _pill_stylesheet(self) -> str:
+        return glass_pill_stylesheet(
+            radius=max(2, self._scaled(_DOCK_INPUT_HEIGHT) // 2),
+        )
 
     def _floating_size(self) -> tuple[int, int]:
         return (
