@@ -305,13 +305,13 @@ class BuddyWindow(QWidget):
         painter doesn't actually draw — stepping exactly at the reported
         advance leaves 1-pixel seams between blocks. We step by the
         glyph's painted width minus one so neighbours merge into a solid
-        field. Row step uses ``ascent()`` instead of ``height()`` because
-        block art never descends below the baseline; the extra padding
-        just opens gaps between stacked blocks.
+        field. Row step uses ``height()`` so the cell aspect matches the
+        terminal cell aspect Textual renders against — block fills extend
+        full ``line_h`` so adjacent rows still touch with zero gap.
         """
         fm = QFontMetrics(self._font)
         self._cell_w = max(_measure_block_paint_width(self._font) - 1, 1)
-        self._line_h = fm.ascent()
+        self._line_h = fm.height()
 
     def _com_art(self) -> tuple[float, float]:
         """Center of mass in art-frame coords. Head-heavy (see

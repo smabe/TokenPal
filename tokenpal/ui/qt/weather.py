@@ -721,7 +721,7 @@ class SkyWindow(QWidget):
         self._font = QFont(font_family, font_size)
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._cell_w = max(self._measure_cell_w(), 1)
-        self._line_h = QFontMetrics(self._font).ascent()
+        self._line_h = QFontMetrics(self._font).height()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache: dict[
             tuple[tuple[str, ...], int, int, int], QPixmap,
@@ -760,7 +760,7 @@ class SkyWindow(QWidget):
         # inherited font is unrelated to ``self._font``, so the latter
         # would leave line_h at the default-font value while cell_w
         # scaled — sprite renders horizontally stretched.
-        self._line_h = QFontMetrics(self._font).ascent()
+        self._line_h = QFontMetrics(self._font).height()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache.clear()
         # Grow the sky panel itself so a 2× sun isn't clipped.
