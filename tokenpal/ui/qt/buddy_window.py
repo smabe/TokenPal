@@ -27,6 +27,7 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QImage,
     QMouseEvent,
@@ -40,6 +41,7 @@ from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
 from tokenpal.ui.qt._screen_bounds import Rect, offscreen_rescue_target
+from tokenpal.ui.qt._text_fx import paint_block_char, scale_font
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
 from tokenpal.ui.qt.physics import RigidBodyConfig, RigidBodySimulator
 
@@ -70,12 +72,17 @@ _PHYSICS_DEBUG_LOG_PATH = "/tmp/tokenpal-physics.log"
 _FG_COLOR = QColor(BUDDY_GREEN)
 
 
+_BLOCK_PAINT_WIDTH_CACHE: dict[tuple[str, int], int] = {}
+
+
 def _measure_block_paint_width(font: QFont) -> int:
     """Return the width in pixels that a single U+2588 FULL BLOCK glyph
-    actually paints with ``font``. Used as the fixed grid step for the
-    buddy art so neighbouring blocks visually touch — see the note in
-    ``BuddyWindow._resize_to_frame`` for why we don't trust the font's
-    reported advance."""
+    actually paints with ``font``. Cached by (family, pointSize) so
+    drag-to-zoom doesn't re-rasterize the probe glyph every tick."""
+    key = (font.family(), font.pointSize())
+    cached = _BLOCK_PAINT_WIDTH_CACHE.get(key)
+    if cached is not None:
+        return cached
     img = QImage(64, 32, QImage.Format.Format_ARGB32)
     img.fill(0)
     painter = QPainter(img)
@@ -93,8 +100,11 @@ def _measure_block_paint_width(font: QFont) -> int:
                 hi = x
                 break
     if lo is None or hi is None:
-        return max(1, int(font.pointSize() * 0.7))
-    return max(1, hi - lo + 1)
+        result = max(1, int(font.pointSize() * 0.7))
+    else:
+        result = max(1, hi - lo + 1)
+    _BLOCK_PAINT_WIDTH_CACHE[key] = result
+    return result
 
 
 class BuddyWindow(QWidget):
@@ -126,14 +136,16 @@ class BuddyWindow(QWidget):
         self._frame_lines = list(frame_lines)
         self._on_right_click: Callable[[QPoint], None] | None = None
 
-        self._font = QFont(font_family, font_size)
-        self._font.setStyleHint(QFont.StyleHint.Monospace)
+        self._base_font = QFont(font_family, font_size)
+        self._base_font.setStyleHint(QFont.StyleHint.Monospace)
         # Greyscale AA only; subpixel AA on translucent widgets dots glyphs
         # (QTBUG-43774).
-        self._font.setStyleStrategy(
+        self._base_font.setStyleStrategy(
             QFont.StyleStrategy.PreferAntialias
             | QFont.StyleStrategy.NoSubpixelAntialias,
         )
+        self._zoom = 1.0
+        self._font = QFont(self._base_font)
 
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -215,6 +227,17 @@ class BuddyWindow(QWidget):
         # justify rebuilding inertia. Body keeps its initial moment.
         self._refresh_view()
 
+    def set_zoom(self, factor: float) -> None:
+        """Rescale the buddy by ``factor`` (1.0 = original size).
+        Recomputes inertia so physics tracks the new bounding box."""
+        if factor <= 0.0 or factor == self._zoom:
+            return
+        self._zoom = factor
+        self._font = scale_font(self._base_font, factor)
+        self._measure_cells()
+        self._sim.set_inertia(self._compute_inertia(self._sim.config.mass))
+        self._refresh_view()
+
     # --- Geometry --------------------------------------------------------
 
     def _measure_cells(self) -> None:
@@ -242,7 +265,7 @@ class BuddyWindow(QWidget):
         block art never descends below the baseline; the extra padding
         just opens gaps between stacked blocks.
         """
-        fm = self.fontMetrics()
+        fm = QFontMetrics(self._font)
         self._cell_w = max(_measure_block_paint_width(self._font) - 1, 1)
         self._line_h = fm.ascent()
 
@@ -644,19 +667,22 @@ class BuddyWindow(QWidget):
         # and what can be clicked agree.
         painter.setWorldTransform(self._build_transform())
 
-        fm = self.fontMetrics()
         line_h = self._line_h
         cell_w = self._cell_w
-        y = fm.ascent()
+        y = line_h
         total_w = self._cols * cell_w
         for line in self._frame_lines:
             chars = len(stripped_text(line))
             base_x = (total_w - chars * cell_w) // 2
             col = 0
             for seg in parse_markup(line):
-                painter.setPen(QColor(seg.color) if seg.color else _FG_COLOR)
+                color = QColor(seg.color) if seg.color else _FG_COLOR
+                painter.setPen(color)
                 for ch in seg.text:
-                    painter.drawText(base_x + col * cell_w, y, ch)
+                    x = base_x + col * cell_w
+                    rect = QRect(x, y - line_h, cell_w + 1, line_h)
+                    if not paint_block_char(painter, ch, rect, color):
+                        painter.drawText(x, y, ch)
                     col += 1
             y += line_h
 

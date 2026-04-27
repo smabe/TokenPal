@@ -35,7 +35,7 @@ from tokenpal.config.chatlog_writer import (
     normalize_hex_color,
 )
 from tokenpal.config.schema import FontConfig
-from tokenpal.ui.qt._text_fx import qt_font_from_config
+from tokenpal.ui.qt._text_fx import qt_font_from_config, scale_font
 
 _TYPING_INTERVAL_MS = 30
 _BUBBLE_PADDING = 12
@@ -67,8 +67,10 @@ class SpeechBubble(QWidget):
         self._bg_color = QColor(DEFAULT_BACKGROUND_COLOR)
         self._bg_color.setAlpha(_BUBBLE_BG_ALPHA)
         self._fg_color = QColor(DEFAULT_FONT_COLOR)
-        self._font = QFont(font_family, font_size)
-        self._font.setStyleHint(QFont.StyleHint.Monospace)
+        self._base_font = QFont(font_family, font_size)
+        self._base_font.setStyleHint(QFont.StyleHint.Monospace)
+        self._zoom = 1.0
+        self._font = QFont(self._base_font)
         # Must apply to the widget itself, not just the painter, so
         # self.fontMetrics() measures the same font we later paint with.
         # Otherwise wrap uses proportional-font advances while paint
@@ -157,10 +159,23 @@ class SpeechBubble(QWidget):
         when ``cfg.family`` is empty."""
         font = qt_font_from_config(
             cfg,
-            fallback_family=fallback_family or self._font.family(),
+            fallback_family=fallback_family or self._base_font.family(),
             fallback_size=fallback_size,
         )
         font.setStyleHint(QFont.StyleHint.Monospace)
+        self._base_font = font
+        self._reapply_font()
+
+    def set_zoom(self, factor: float) -> None:
+        """Rescale the bubble by ``factor`` (1.0 = original size).
+        Multiplies the base font size and rebuilds the box."""
+        if factor <= 0.0 or factor == self._zoom:
+            return
+        self._zoom = factor
+        self._reapply_font()
+
+    def _reapply_font(self) -> None:
+        font = scale_font(self._base_font, self._zoom)
         self._font = font
         self.setFont(font)
         # fontMetrics changed — wrap cache and widget size are stale.

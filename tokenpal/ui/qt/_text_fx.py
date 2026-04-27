@@ -251,6 +251,17 @@ def qt_font_from_config(
     return font
 
 
+def scale_font(base: QFont, factor: float) -> QFont:
+    """Return a copy of ``base`` whose point size is multiplied by
+    ``factor`` (clamped to >= 1pt). Style hints/strategy carry over via
+    ``QFont``'s copy ctor."""
+    font = QFont(base)
+    base_size = base.pointSize()
+    if base_size > 0 and factor > 0.0:
+        font.setPointSize(max(1, int(round(base_size * factor))))
+    return font
+
+
 def transparent_window_flags() -> Qt.WindowType:
     """Shared window-flag bundle for the frameless transparent surfaces.
 
