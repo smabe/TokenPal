@@ -170,6 +170,8 @@ _PREFIX_LOCK_TOKEN_COUNT = 3
 _PREFIX_LOCK_MIN_MATCHES = 3
 _RECENT_OUTPUTS_MAX = 10
 
+_CONTEXT_LOG_HEARTBEAT_S = 30.0
+
 # Conversation-only suppression window. Decoupled from _RECENT_OUTPUTS_MAX so
 # observations don't poison the conv suppression check (and vice versa).
 _CONV_RECENT_OUTPUTS_MAX = 5
@@ -319,6 +321,9 @@ class Brain:
         self._threshold = interestingness_threshold
         self._context = ContextWindowBuilder(max_tokens=context_max_tokens)
         self._last_comment_time: float = time.monotonic()
+        self._last_context_log: str | None = None
+        self._last_context_log_at: float = 0.0
+        self._log_context_full = os.environ.get("TOKENPAL_LOG_CONTEXT_FULL") == "1"
         self._running = False
 
         # Actions (LLM-callable tools)
@@ -631,6 +636,26 @@ class Brain:
             log.debug("first_session_of_day probe failed", exc_info=True)
             return True
 
+    def _maybe_log_context(self, snapshot: str) -> None:
+        """Emit the per-tick context dump only when meaningful.
+
+        Brain loop ticks every 2s; logging the full snapshot every tick floods
+        --verbose. Emit only on change, with a heartbeat for forensic
+        continuity. Set TOKENPAL_LOG_CONTEXT_FULL=1 to restore per-tick emit
+        for deep debugging.
+        """
+        if not log.isEnabledFor(logging.DEBUG):
+            return
+        now = time.monotonic()
+        if not self._log_context_full and (
+            snapshot == self._last_context_log
+            and now - self._last_context_log_at < _CONTEXT_LOG_HEARTBEAT_S
+        ):
+            return
+        log.debug("Context: %s", snapshot.replace("\n", " | "))
+        self._last_context_log = snapshot
+        self._last_context_log_at = now
+
     async def _run_loop(self) -> None:
         while self._running:
             try:
@@ -640,7 +665,7 @@ class Brain:
                     self._dispatch_news(readings)
 
                 snapshot = self._context.snapshot()
-                log.debug("Context: %s", snapshot.replace("\n", " | "))
+                self._maybe_log_context(snapshot)
 
                 # Update personality state each cycle
                 self._personality.update_mood(snapshot)
