@@ -17,6 +17,10 @@ from tokenpal.ui.qt._text_fx import apply_drop_shadow, glass_button_stylesheet
 
 DRAG_HANDLE_HEIGHT = 22
 SIZE_GRIP_SIDE = 16
+# BuddyResizeGrip widget is bigger than its painted dots so the hit
+# area extends inward — the 16-px dot pattern alone is too small to
+# grab reliably without flush-edge precision.
+BUDDY_GRIP_HIT_SIDE = 24
 GRIP_DOT_ROWS = 3
 GRIP_DOT_SPACING = 5
 GRIP_DOT_INSET = 3
@@ -85,18 +89,23 @@ def _paint_diagonal_dots(painter: QPainter, side: int) -> None:
 class BuddyResizeGrip(QWidget):
     """Bottom-right corner grip on the buddy. Drag y emits per-pixel
     deltas via ``zoom_drag_delta``; the overlay integrates them into a
-    clamped zoom factor."""
+    clamped zoom factor.
+
+    The widget is larger than the painted dots so the hit area extends
+    inward — flush-edge 16-px dots alone are too fiddly to grab."""
 
     zoom_drag_delta = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setFixedSize(SIZE_GRIP_SIDE, SIZE_GRIP_SIDE)
+        self.setFixedSize(BUDDY_GRIP_HIT_SIDE, BUDDY_GRIP_HIT_SIDE)
         self.setCursor(Qt.CursorShape.SizeFDiagCursor)
         self._last_y: int | None = None
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
+        offset = BUDDY_GRIP_HIT_SIDE - SIZE_GRIP_SIDE
+        painter.translate(offset, offset)
         _paint_diagonal_dots(painter, SIZE_GRIP_SIDE)
         painter.end()
 
