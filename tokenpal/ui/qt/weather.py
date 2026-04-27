@@ -723,7 +723,7 @@ class SkyWindow(QWidget):
         self._line_h = self.fontMetrics().ascent()
         self._sim.set_cell_px(float(self._cell_w), float(self._line_h))
         self._sprite_cache: dict[
-            tuple[int, str, int, int], QPixmap,
+            tuple[PropSprite, int, int, int], QPixmap,
         ] = {}
 
         _apply_transparent_window_flags(self)
@@ -748,8 +748,6 @@ class SkyWindow(QWidget):
         self._timer.stop()
 
     def set_zoom(self, factor: float) -> None:
-        """Rescale font + cell metrics by ``factor`` and bust the sprite
-        cache so the next paint rebuilds pixmaps at the new size."""
         if factor == self._zoom:
             return
         self._zoom = factor
@@ -891,9 +889,6 @@ class SkyWindow(QWidget):
             )
             return
 
-        # Rain/drizzle/storm/snow: the drifting rain-cloud rendered ~10%
-        # larger than nominal cell size — bilinear handles the upscale
-        # since the source pixmap was supersampled at cache-build.
         if env.kind in (Kind.RAIN, Kind.DRIZZLE, Kind.STORM, Kind.SNOW):
             nat_w = RAIN_CLOUD_SPRITE.width * self._cell_w
             nat_h = RAIN_CLOUD_SPRITE.height * self._line_h
@@ -911,12 +906,7 @@ class SkyWindow(QWidget):
             )
 
     def _sprite_pixmap(self, sprite: PropSprite, color: QColor) -> QPixmap:
-        key = (
-            id(sprite.lines),
-            color.name(QColor.NameFormat.HexRgb),
-            self._cell_w,
-            self._line_h,
-        )
+        key = (sprite, color.rgb(), self._cell_w, self._line_h)
         cached = self._sprite_cache.get(key)
         if cached is not None:
             return cached

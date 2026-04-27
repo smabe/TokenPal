@@ -17,8 +17,10 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRectF  # noqa: E402
+from PySide6.QtGui import QColor  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
+from tokenpal.ui.ascii_props import SUN_SPRITE  # noqa: E402
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot, Kind  # noqa: E402
 from tokenpal.ui.qt import weather as w  # noqa: E402
 
@@ -336,9 +338,6 @@ def test_sprite_pixmap_cache_hits_on_second_call(qapp: QApplication) -> None:
     """Repeated requests for the same sprite + color + cell size must
     return the cached QPixmap, not rebuild it. Without the cache, every
     paint would supersample-render and downsample anew."""
-    from PySide6.QtGui import QColor
-
-    from tokenpal.ui.ascii_props import SUN_SPRITE
     sim = _make_sim(weather_code=0, seed=20)
     sky = w.SkyWindow(sim)
     color = QColor("#ffcc44")
@@ -351,9 +350,6 @@ def test_sprite_pixmap_cache_hits_on_second_call(qapp: QApplication) -> None:
 def test_sprite_pixmap_cache_busted_on_zoom(qapp: QApplication) -> None:
     """``set_zoom`` recomputes cell metrics and must clear the cache so
     the next paint rebuilds at the new size."""
-    from PySide6.QtGui import QColor
-
-    from tokenpal.ui.ascii_props import SUN_SPRITE
     sim = _make_sim(weather_code=0, seed=21)
     sky = w.SkyWindow(sim)
     sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
@@ -365,9 +361,6 @@ def test_sprite_pixmap_cache_busted_on_zoom(qapp: QApplication) -> None:
 def test_set_zoom_no_op_on_same_factor(qapp: QApplication) -> None:
     """Calling set_zoom with the current factor must not bust the cache
     (avoids needless rebuilds when the orchestrator fans out a no-op)."""
-    from PySide6.QtGui import QColor
-
-    from tokenpal.ui.ascii_props import SUN_SPRITE
     sim = _make_sim(weather_code=0, seed=22)
     sky = w.SkyWindow(sim)
     sky._sprite_pixmap(SUN_SPRITE, QColor("#ffcc44"))
