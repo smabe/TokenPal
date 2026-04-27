@@ -41,7 +41,7 @@ Load the relevant doc on demand rather than reading all of them.
 - `./run.sh` (macOS/Linux), `.\run.ps1` (Windows) — day-to-day launchers at the **repo root** (NOT `scripts/`). Activate venv, auto-sync deps via `pip install -e .[<extras>]` when `pyproject.toml` is newer than `.venv/.tokenpal-deps-synced`, then exec tokenpal with passed args. Force resync: `TOKENPAL_FORCE_SYNC=1`. `scripts/` holds one-shot installers + utilities, never runtime wrappers -- edit `run.sh`/`run.ps1` in place when touching launch behavior
 - `tokenpal --check` — quick verify: inference engine, model, senses, actions
 - `tokenpal --validate` — full preflight: Python version, platform deps, git, inference engine, model, config, senses, macOS permissions
-- `tokenpal --verbose` — show debug logs in terminal
+- `tokenpal --verbose` — show debug logs in terminal. The 2s context-snapshot dump is rate-limited to change-only + 30s heartbeat; set `TOKENPAL_LOG_CONTEXT_FULL=1` to restore per-tick emit. Idle-tool skip reasons dedupe on a reason key, so a 3-min cooldown logs once, not 90 times.
 - `tokenpal --skip-welcome` -- bypass first-run wizard
 - `tokenpal --overlay {auto|qt|textual|console|tkinter}` -- override `[ui] overlay` from config at launch (e.g. `--overlay textual` for rich TUI in the terminal without editing config.toml)
 - `scripts/download-model.ps1` -- interactive GGUF picker for llamacpp path (Windows). Downloads, updates config + bat.
