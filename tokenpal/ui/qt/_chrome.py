@@ -85,12 +85,7 @@ def _paint_diagonal_dots(painter: QPainter, side: int) -> None:
 class BuddyResizeGrip(QWidget):
     """Bottom-right corner grip on the buddy. Drag y emits per-pixel
     deltas via ``zoom_drag_delta``; the overlay integrates them into a
-    clamped zoom factor.
-
-    Distinct from ``GlassSizeGrip`` (which subclasses ``QSizeGrip`` and
-    triggers a window resize) — this one fans out to many widgets via
-    a signal, not the native resize path.
-    """
+    clamped zoom factor."""
 
     zoom_drag_delta = Signal(int)
 
