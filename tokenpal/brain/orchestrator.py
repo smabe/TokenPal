@@ -471,6 +471,10 @@ class Brain:
         if self._status_callback:
             self._status_callback(f"Loading {self._llm.model_name}...")
         await self._llm.setup()
+        if self._status_callback:
+            # Re-emit after setup so auto-adopted server-side models show
+            # the real name instead of the pre-adopt config default.
+            self._status_callback(f"Loaded {self._llm.model_name}")
         log.info("Brain started — polling every %.1fs", self._poll_interval)
 
         # Voice input: start the wake/VAD/ASR thread once we know the loop
@@ -512,7 +516,13 @@ class Brain:
         if self._git_nudge.enabled:
             asyncio.create_task(self._git_nudge.hydrate())
 
-        await self._run_loop()
+        try:
+            await self._run_loop()
+        finally:
+            # Teardown runs in the brain's own loop so async resources
+            # (httpx client, etc.) are closed on the loop they were created
+            # on. stop() from another thread only flips _running.
+            await self._teardown_components()
 
     def _maybe_fire_pending_eod(self) -> None:
         """Spawn the EOD bubble for yesterday if it hasn't been shown yet."""
@@ -2888,9 +2898,13 @@ class Brain:
             return f"{m.group(1)}{m.group(2)} {m.group(3)}"
         return summary[:15]
 
-    async def stop(self) -> None:
-        """Shut down all components."""
+    def stop(self) -> None:
+        """Request shutdown. Safe to call from any thread; only flips the
+        run flag. Component teardown runs inside start()'s finally so it
+        stays on the brain's own loop."""
         self._running = False
+
+    async def _teardown_components(self) -> None:
         for sense in self._senses:
             try:
                 await sense.teardown()

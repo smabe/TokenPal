@@ -83,6 +83,11 @@ class AudioPipeline:
         except FileNotFoundError as e:
             log.warning("voice input not started: %s", e)
             self._input = None
+        except Exception:
+            # PortAudio/RDP-redirected mics, missing devices, sounddevice
+            # init failures — voice is optional, the brain must keep going.
+            log.exception("voice input failed to start; continuing without voice")
+            self._input = None
 
     async def stop_input(self) -> None:
         if self._input is not None:

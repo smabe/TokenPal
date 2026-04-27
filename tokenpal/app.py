@@ -1805,7 +1805,13 @@ def main() -> None:
     try:
         overlay.run_loop()
     finally:
-        asyncio.run(brain.stop())
+        # Sync request — brain finishes its tick and runs teardown inside
+        # its own loop (so httpx etc. close on the loop they were opened
+        # on). Then we wait for the thread to actually exit.
+        brain.stop()
+        brain_thread.join(timeout=5.0)
+        if brain_thread.is_alive():
+            log.warning("Brain thread did not exit within 5s; abandoning.")
         if memory:
             memory.teardown()
         _unload_model(llm.model_name)
