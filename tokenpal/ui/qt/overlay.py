@@ -26,6 +26,7 @@ from PySide6.QtWidgets import QApplication, QDialog
 from tokenpal.brain.news_buffer import NewsItem
 from tokenpal.config.chatlog_writer import clamp_font_size
 from tokenpal.config.schema import FontConfig
+from tokenpal.config.ui_state import UiState
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
@@ -69,11 +70,32 @@ _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
 _DOCK_PARK_X = -10000
 _DOCK_PARK_Y = -10000
 
+_ZOOM_MIN = 0.5
+_ZOOM_MAX = 2.5
+# Drag-zoom sensitivity: vertical pixels of grip-drag → zoom delta.
+# 0.005 makes a 200 px drag = 1.0× zoom delta, fitting the 0.5–2.5
+# range comfortably in a single drag without feeling twitchy.
+_ZOOM_PER_DRAG_PX = 0.005
+# Float-precision floor — drag arithmetic produces non-canonical
+# floats; snap to 4dp so identical-looking factors short-circuit.
+_ZOOM_PRECISION_DP = 4
+# Coalesce persist requests so a 60 Hz drag-zoom doesn't hammer
+# ``save_ui_state`` (synchronous JSON write + chmod on Linux) on the
+# Qt main thread. Far enough out to debounce a continuous drag, short
+# enough that the user still sees state survive an immediate quit.
+_PERSIST_DEBOUNCE_MS = 250
+
 # Stable registry keys for the overlay's toggleable log windows.
 # These names go to disk via UiState, so don't rename without a
 # migration step.
 _WINDOW_CHAT = "chat"
 _WINDOW_NEWS = "news"
+
+
+def _clamp_zoom(factor: float) -> float:
+    """Clamp ``factor`` into [_ZOOM_MIN, _ZOOM_MAX] and snap to 4dp so
+    drag-arithmetic noise doesn't churn the persist pipeline."""
+    return round(max(_ZOOM_MIN, min(_ZOOM_MAX, factor)), _ZOOM_PRECISION_DP)
 
 
 def _to_font_config(raw: Any) -> FontConfig:
@@ -186,8 +208,11 @@ class QtOverlay(AbstractOverlay):
             Callable[[FontConfig], None] | None
         ) = None
         self._ui_state_persist_callback: (
-            Callable[[bool, dict[str, bool]], None] | None
+            Callable[[UiState], None] | None
         ) = None
+        self._zoom: float = 1.0
+        self._persist_ui_state_timer: QTimer | None = None
+        self._persist_pending: bool = False
 
         # Pre-setup buffers. The brain may call any adapter method before
         # setup() runs; stash the payload and drain on mount.
@@ -315,6 +340,13 @@ class QtOverlay(AbstractOverlay):
             buddy_rect_provider=self._buddy_world_rect_for_sim,
         )
         self._buddy.position_changed.connect(self._reanchor_weather)
+        self._buddy.zoom_drag_delta.connect(self._on_zoom_drag_delta)
+
+        # Apply any zoom restored from disk so initial layout uses the
+        # persisted scale instead of 1.0×. ``_fan_out_zoom`` skips the
+        # equality guard in ``set_zoom`` and the persist round-trip.
+        if self._zoom != 1.0:
+            self._fan_out_zoom(self._zoom)
 
         def _toggle_buddy() -> None:
             if self._buddy is None:
@@ -466,6 +498,7 @@ class QtOverlay(AbstractOverlay):
         self._app.exec()
 
     def teardown(self) -> None:
+        self.flush_pending_persist()
         if self._hide_bubble_timer is not None:
             self._hide_bubble_timer.stop()
         # Weather teardown order: stop the tick BEFORE deleteLater so the
@@ -806,14 +839,14 @@ class QtOverlay(AbstractOverlay):
         self._chat_font_persist_callback = persist
 
     def set_ui_state_persist_callback(
-        self, persist: Callable[[bool, dict[str, bool]], None],
+        self, persist: Callable[[UiState], None],
     ) -> None:
-        """Register a callback invoked on every visibility toggle.
+        """Register a callback invoked on every visibility toggle or
+        zoom change. Receives the full ``UiState`` dict so future
+        fields don't need to thread through this signature.
 
-        Args are ``(buddy_visible, windows)``, where ``windows`` is a
-        ``{name: visible}`` dict covering every registered log window.
-        The callback runs synchronously on the Qt main thread, so keep
-        it cheap: app.py uses it to write a small JSON file.
+        Runs synchronously on the Qt main thread; app.py uses it to
+        write a small JSON file.
         """
         self._ui_state_persist_callback = persist
 
@@ -822,6 +855,7 @@ class QtOverlay(AbstractOverlay):
         *,
         buddy_visible: bool,
         windows: dict[str, bool] | None = None,
+        zoom: float | None = None,
     ) -> None:
         """Override the defaults before ``run_loop`` decides what to show.
 
@@ -829,21 +863,93 @@ class QtOverlay(AbstractOverlay):
         keys. Unknown keys are ignored; missing keys keep their default.
         Safe to call before ``setup()`` populates the registry — the
         intent is stashed and consumed via ``setdefault`` at register time.
+
+        ``zoom`` is stashed and applied to the buddy/bubble/dock/sky/rain
+        on first ``setup()``; clamped to the same range as ``set_zoom``.
         """
         self._buddy_user_visible = bool(buddy_visible)
         if windows is not None:
             for name, visible in windows.items():
                 self._user_visible[name] = bool(visible)
+        if zoom is not None:
+            self._zoom = _clamp_zoom(zoom)
+
+    def set_zoom(self, factor: float) -> None:
+        """Wholesale-rescale buddy + bubble + dock + sky + rain by
+        ``factor``. Clamped to [0.5, 2.5] and snapped to 4dp. No-op if
+        the clamped factor matches the current zoom. Persists to disk
+        on every change so a freshly-zoomed buddy survives a restart."""
+        clamped = _clamp_zoom(factor)
+        if clamped == self._zoom:
+            return
+        self._fan_out_zoom(clamped)
+        self._persist_ui_state()
+
+    def _fan_out_zoom(self, factor: float) -> None:
+        """Apply ``factor`` to every owned widget and reanchor followers.
+        Bypasses the noop guard + persist in ``set_zoom`` — used by
+        ``set_zoom`` itself and by setup-time restore where the guard
+        would skip the work."""
+        self._zoom = factor
+        if self._buddy is not None:
+            self._buddy.set_zoom(factor)
+        if self._bubble is not None:
+            self._bubble.set_zoom(factor)
+        if self._dock is not None:
+            self._dock.set_zoom(factor)
+        if self._sky_window is not None:
+            self._sky_window.set_zoom(factor)
+        if self._buddy_rain_overlay is not None:
+            self._buddy_rain_overlay.set_zoom(factor)
+        self._reanchor_weather()
+        self._reposition_bubble()
+        self._reposition_dock()
+
+    def _on_zoom_drag_delta(self, dy: int) -> None:
+        """Slot for ``BuddyResizeGrip.zoom_drag_delta``. Drag-down grows
+        the buddy, drag-up shrinks (matches the SizeFDiagCursor
+        convention used by the corner grip)."""
+        self.set_zoom(self._zoom + dy * _ZOOM_PER_DRAG_PX)
 
     def _persist_ui_state(self) -> None:
+        """Coalesced persist: schedules a single write ~250 ms after
+        the last call, so a 60 Hz drag-zoom doesn't pin the Qt main
+        thread on synchronous JSON writes + chmod."""
+        if self._ui_state_persist_callback is None:
+            return
+        self._persist_pending = True
+        timer = self._persist_ui_state_timer
+        if timer is None:
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._flush_ui_state)
+            self._persist_ui_state_timer = timer
+        timer.start(_PERSIST_DEBOUNCE_MS)
+
+    def flush_pending_persist(self) -> None:
+        """Force any debounced persist to fire immediately. Used by
+        ``teardown`` so a final drag-zoom isn't lost on shutdown, and
+        by tests that assert the callback fired. No-op if no write is
+        pending."""
+        if not self._persist_pending:
+            return
+        timer = self._persist_ui_state_timer
+        if timer is not None and timer.isActive():
+            timer.stop()
+        self._flush_ui_state()
+
+    def _flush_ui_state(self) -> None:
+        self._persist_pending = False
         cb = self._ui_state_persist_callback
         if cb is None:
             return
+        state: UiState = {
+            "buddy_visible": self._buddy_user_visible,
+            "windows": {name: bool(v) for name, v in self._user_visible.items()},
+            "zoom": self._zoom,
+        }
         try:
-            cb(
-                self._buddy_user_visible,
-                {name: bool(v) for name, v in self._user_visible.items()},
-            )
+            cb(state)
         except Exception:
             log.exception("ui_state persist callback failed")
 

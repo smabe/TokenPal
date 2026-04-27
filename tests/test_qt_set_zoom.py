@@ -145,3 +145,109 @@ def test_dock_set_zoom_chains_from_base(qapp: QApplication) -> None:
         assert dock._input.font().pointSize() == 12
     finally:
         dock.close()
+
+
+# --- QtOverlay orchestrator -------------------------------------------------
+from tokenpal.ui.qt.overlay import QtOverlay  # noqa: E402
+
+
+def test_overlay_set_zoom_clamps_and_fans_out(qapp: QApplication) -> None:
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay.set_zoom(5.0)  # above max
+        assert overlay._zoom == 2.5
+        assert overlay._buddy is not None and overlay._buddy._zoom == 2.5
+        assert overlay._bubble is not None and overlay._bubble._zoom == 2.5
+
+        overlay.set_zoom(0.1)  # below min
+        assert overlay._zoom == 0.5
+        assert overlay._buddy._zoom == 0.5
+        assert overlay._dock is not None and overlay._dock._zoom == 0.5
+    finally:
+        overlay.teardown()
+
+
+def test_overlay_set_zoom_persists(qapp: QApplication) -> None:
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
+    try:
+        overlay.set_zoom(1.5)
+        overlay.flush_pending_persist()
+        assert saved, "set_zoom should fire the persist callback"
+        assert saved[-1]["zoom"] == 1.5
+    finally:
+        overlay.teardown()
+
+
+def test_overlay_set_zoom_noop_short_circuits_persist(
+    qapp: QApplication,
+) -> None:
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
+    try:
+        overlay.set_zoom(1.5)
+        overlay.flush_pending_persist()
+        baseline = len(saved)
+        overlay.set_zoom(1.5)
+        overlay.set_zoom(1.50001)  # snaps to 1.5 at 4dp
+        overlay.flush_pending_persist()
+        assert len(saved) == baseline, (
+            "no-op zoom changes must not enqueue a persist"
+        )
+    finally:
+        overlay.teardown()
+
+
+def test_overlay_restore_visibility_state_applies_zoom_at_setup(
+    qapp: QApplication,
+) -> None:
+    overlay = QtOverlay(config={})
+    overlay.restore_visibility_state(buddy_visible=True, zoom=1.75)
+    overlay.setup()
+    try:
+        assert overlay._zoom == 1.75
+        assert overlay._buddy is not None and overlay._buddy._zoom == 1.75
+        assert overlay._bubble is not None and overlay._bubble._zoom == 1.75
+        assert overlay._dock is not None and overlay._dock._zoom == 1.75
+    finally:
+        overlay.teardown()
+
+
+def test_overlay_persist_includes_zoom_on_visibility_toggle(
+    qapp: QApplication,
+) -> None:
+    """Latent bug from phase-0 callback: a visibility toggle must NOT
+    silently clobber a non-default zoom on disk."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
+    try:
+        overlay.set_zoom(1.5)
+        overlay._do_toggle_window("news")
+        overlay.flush_pending_persist()
+        assert saved[-1]["zoom"] == 1.5, (
+            "visibility toggle must preserve zoom across persist"
+        )
+    finally:
+        overlay.teardown()
+
+
+def test_buddy_zoom_drag_delta_signal_drives_overlay(
+    qapp: QApplication,
+) -> None:
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._buddy is not None
+        # Emit a drag delta on the buddy directly. _ZOOM_PER_DRAG_PX = 0.005
+        # → 100 px drag = +0.5 zoom delta from 1.0 → 1.5.
+        overlay._buddy.zoom_drag_delta.emit(100)
+        assert overlay._zoom == 1.5
+    finally:
+        overlay.teardown()

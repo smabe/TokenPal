@@ -24,6 +24,7 @@ from typing import Any, ClassVar
 
 from tokenpal.brain.news_buffer import NewsItem
 from tokenpal.config.schema import FontConfig
+from tokenpal.config.ui_state import UiState
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
@@ -145,12 +146,12 @@ class AbstractOverlay(abc.ABC):
         persisted chat log no-op."""
 
     def set_ui_state_persist_callback(
-        self, persist: Callable[[bool, dict[str, bool]], None],
+        self,
+        persist: Callable[[UiState], None],
     ) -> None:
-        """Wire visibility-state write-through. Args are
-        ``(buddy_visible, windows)`` where ``windows`` maps each
-        toggleable window's registered name to its show/hide intent.
-        Optional — overlays without per-window toggles no-op."""
+        """Wire visibility / zoom write-through. Receives the full
+        ``UiState`` dict. Optional — overlays without per-window
+        toggles no-op."""
 
     def set_chat_history_background_color(self, hex_color: str) -> None:
         """Recolor the chat history panel background. Optional."""
