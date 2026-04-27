@@ -84,19 +84,13 @@ def render_sprite_pixmap(
     dpr: float = 1.0,
     supersample: int = 2,
 ) -> QPixmap:
-    """Rasterize an ASCII-art sprite to a ``QPixmap`` once, for cached
-    ``drawPixmap`` use under arbitrary scale/rotation later.
+    """Rasterize an ASCII-art sprite to a ``QPixmap`` cached for later
+    ``drawPixmap`` use under arbitrary scale/rotation.
 
-    Renders the sprite at ``cell_w * line_h`` per cell, oversampled by
-    ``dpr * supersample`` so the source bitmap has headroom for the
-    ``SmoothPixmapTransform`` bilinear filter at runtime. Block-shade
-    chars (``█▓▀▄``) hit ``paint_block_char``'s solid-fill path; lighter
-    shades (``░ ▒``) fall through to ``drawText`` and are anti-aliased
-    by the font engine at supersampled resolution.
-
-    Returns a pixmap whose ``devicePixelRatio`` is ``dpr``, so subsequent
-    ``drawPixmap(target_rect, pix)`` interprets ``target_rect`` in
-    logical pixels.
+    Source render is oversampled by ``dpr * supersample`` so the bilinear
+    filter has headroom. The returned pixmap's ``devicePixelRatio`` is
+    ``dpr``, so subsequent ``drawPixmap(target_rect, pix)`` consumes
+    ``target_rect`` in logical pixels.
     """
     if not lines:
         return QPixmap()
