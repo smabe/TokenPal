@@ -16,10 +16,12 @@ rotation, widget sizing for the rotated art).
 from __future__ import annotations
 
 import dataclasses
+import logging
 import math
 import os
 import sys
 import time
+from collections import deque
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, QTimer, Signal
@@ -45,6 +47,8 @@ from tokenpal.ui.qt._text_fx import paint_block_char, scale_font
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
 from tokenpal.ui.qt.physics import RigidBodyConfig, RigidBodySimulator
 
+log = logging.getLogger(__name__)
+
 _PHYSICS_HZ = 60
 _TICK_MS = int(1000 / _PHYSICS_HZ)
 _EDGE_DOCK_THRESHOLD = 20       # px from screen edge triggers snap
@@ -68,6 +72,14 @@ _FOLLOWER_OMEGA_EPS = 0.1
 _PHYSICS_DEBUG = bool(os.environ.get("TOKENPAL_PHYSICS_DEBUG"))
 _PHYSICS_DEBUG_LOG_EVERY = 3
 _PHYSICS_DEBUG_LOG_PATH = "/tmp/tokenpal-physics.log"
+
+# TOKENPAL_TICK_PROFILE=1 logs Qt-main-thread tick latency at 1 Hz so we
+# can see whether stutter is the timer slipping (GIL contention) or the
+# tick body itself getting heavy. Interval = wall-clock between two
+# consecutive _on_tick fires; body = how long _on_tick spent. If interval
+# p95 >> 16.7ms while body p95 stays small, the main thread is starving
+# for the GIL.
+_TICK_PROFILE = bool(os.environ.get("TOKENPAL_TICK_PROFILE"))
 
 _FG_COLOR = QColor(BUDDY_GREEN)
 
@@ -206,6 +218,11 @@ class BuddyWindow(QWidget):
             self._debug_log_fp = open(  # noqa: SIM115 — lifetime = widget
                 _PHYSICS_DEBUG_LOG_PATH, "w", buffering=1,
             )
+
+        self._tick_intervals: deque[float] = deque(maxlen=600)
+        self._tick_durations: deque[float] = deque(maxlen=600)
+        self._tick_profile_last_log = 0.0
+        self._tick_profile_last_perf = 0.0
 
     def set_right_click_handler(
         self, handler: Callable[[QPoint], None] | None,
@@ -483,6 +500,7 @@ class BuddyWindow(QWidget):
     # --- Tick / timer ---------------------------------------------------
 
     def _on_tick(self) -> None:
+        body_start = time.perf_counter() if _TICK_PROFILE else 0.0
         now = time.monotonic()
         dt = now - self._last_tick_ts
         self._last_tick_ts = now
@@ -495,11 +513,47 @@ class BuddyWindow(QWidget):
             self._debug_tick_counter += 1
             if self._debug_tick_counter % _PHYSICS_DEBUG_LOG_EVERY == 0:
                 self._log_physics_debug()
+        if _TICK_PROFILE:
+            self._record_tick_profile(now, time.perf_counter() - body_start)
         rescue_pending = (
             self._offscreen_since is not None or self._rescue_t0 is not None
         )
         if self._sim.sleeping and not self._drag_active and not rescue_pending:
             self._sleep_timer()
+
+    def _record_tick_profile(self, now: float, body_s: float) -> None:
+        prev = self._tick_profile_last_perf
+        self._tick_profile_last_perf = now
+        if prev > 0.0:
+            interval = now - prev
+            # Drop wake-from-sleep gaps; sim sleeps when settled.
+            if interval < 0.5:
+                self._tick_intervals.append(interval)
+        self._tick_durations.append(body_s)
+        if now - self._tick_profile_last_log < 1.0:
+            return
+        self._tick_profile_last_log = now
+        if not self._tick_intervals:
+            return
+        intervals = sorted(self._tick_intervals)
+        durations = sorted(self._tick_durations)
+
+        def pct(xs: list[float], p: float) -> float:
+            return xs[min(len(xs) - 1, int(len(xs) * p))] * 1000.0
+
+        total = sum(intervals)
+        fps = len(intervals) / total if total > 0 else 0.0
+        log.info(
+            "tick: %.0ffps n=%d  interval p50/p95/p99/max=%.1f/%.1f/%.1f/%.1fms  "
+            "body p50/p95/p99/max=%.2f/%.2f/%.2f/%.2fms",
+            fps, len(intervals),
+            pct(intervals, 0.50), pct(intervals, 0.95),
+            pct(intervals, 0.99), intervals[-1] * 1000.0,
+            pct(durations, 0.50), pct(durations, 0.95),
+            pct(durations, 0.99), durations[-1] * 1000.0,
+        )
+        self._tick_intervals.clear()
+        self._tick_durations.clear()
 
     def _wake_timer(self) -> None:
         if not self._timer.isActive():

@@ -1,11 +1,14 @@
-"""Kokoro-onnx TTS backend.
+"""Kokoro-onnx TTS backend (subprocess-isolated).
 
-Default voice for both ambient and voice-conversation paths. Concrete
-implementation around https://github.com/thewh1teagle/kokoro-onnx.
+Synthesis runs in a child process — see ``_kokoro_worker.py`` for the
+protocol — so its ONNX inference + numpy glue can't hold the parent's
+GIL during a 60Hz Qt tick. Without this, dragging the buddy while a
+reply was being synthesized stuttered visibly even after we collapsed
+chunk-streaming into whole-utterance pre-synth.
 
-Heavy imports (kokoro_onnx, numpy) are kept inside methods so the modularity
-test stays green: ambient-only boots that never call ``warmup()`` /
-``synthesize()`` won't touch onnxruntime.
+The parent process never imports ``kokoro_onnx`` — that import lives
+inside the worker. ``list_voices()`` reads ``voices-v1.0.bin`` directly
+with numpy so the options dropdown works without spawning a worker.
 
 Model files live at ``<data_dir>/audio/`` and are fetched by
 ``tokenpal.audio.deps.install_models()``:
@@ -18,16 +21,19 @@ Model files live at ``<data_dir>/audio/`` and are fetched by
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import struct
+import subprocess
+import sys
+import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import ClassVar, Literal
 
 from tokenpal.audio.base import TTSBackend, VoiceInfo
 from tokenpal.audio.registry import register_tts_backend
-
-if TYPE_CHECKING:
-    from kokoro_onnx import Kokoro
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +50,82 @@ MODEL_FILENAMES: dict[Quantization, str] = {
 }
 VOICES_FILENAME = "voices-v1.0.bin"
 
+_WORKER_MODULE = "tokenpal.audio.backends._kokoro_worker"
+
+
+class _KokoroWorker:
+    """Owns the subprocess Popen + IPC framing.
+
+    All IO is synchronous (one outstanding command at a time, paired
+    write/read on each call). Callers wrap synth() in run_in_executor so
+    the asyncio loop stays responsive.
+    """
+
+    def __init__(self, model_path: Path, voices_path: Path) -> None:
+        self._proc = subprocess.Popen(  # noqa: S603 — sys.executable is trusted
+            [
+                sys.executable, "-m", _WORKER_MODULE,
+                str(model_path), str(voices_path),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+        threading.Thread(
+            target=self._drain_stderr,
+            name="kokoro-worker-stderr",
+            daemon=True,
+        ).start()
+        # Wait for the model-loaded handshake so warmup() can guarantee
+        # the next synth pays no model-load cost.
+        self._read_exact(4)
+
+    def _drain_stderr(self) -> None:
+        assert self._proc.stderr is not None
+        for raw in iter(self._proc.stderr.readline, b""):
+            line = raw.decode("utf-8", errors="replace").rstrip()
+            if line:
+                log.warning("kokoro worker: %s", line)
+
+    def _read_exact(self, n: int) -> bytes:
+        assert self._proc.stdout is not None
+        buf = bytearray()
+        while len(buf) < n:
+            chunk = self._proc.stdout.read(n - len(buf))
+            if not chunk:
+                raise RuntimeError("kokoro worker died")
+            buf.extend(chunk)
+        return bytes(buf)
+
+    def synth(self, text: str, voice: str, speed: float) -> bytes:
+        assert self._proc.stdin is not None
+        cmd = (
+            json.dumps({
+                "op": "synth", "text": text, "voice": voice, "speed": speed,
+            }) + "\n"
+        ).encode("utf-8")
+        self._proc.stdin.write(cmd)
+        self._proc.stdin.flush()
+        (n,) = struct.unpack(">I", self._read_exact(4))
+        return self._read_exact(n) if n else b""
+
+    def close(self) -> None:
+        if self._proc.poll() is not None:
+            return
+        try:
+            if self._proc.stdin is not None:
+                self._proc.stdin.write(b'{"op":"exit"}\n')
+                self._proc.stdin.flush()
+                self._proc.stdin.close()
+        except (BrokenPipeError, OSError):
+            pass
+        try:
+            self._proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            self._proc.kill()
+            self._proc.wait()
+
 
 @register_tts_backend("kokoro")
 class KokoroBackend(TTSBackend):
@@ -54,7 +136,7 @@ class KokoroBackend(TTSBackend):
     def __init__(self, data_dir: Path, quantization: Quantization = "fp16") -> None:
         self._audio_dir = data_dir / "audio"
         self._quantization = quantization
-        self._kokoro: Kokoro | None = None
+        self._worker: _KokoroWorker | None = None
 
     @property
     def model_path(self) -> Path:
@@ -68,55 +150,52 @@ class KokoroBackend(TTSBackend):
         return self.model_path.exists() and self.voices_path.exists()
 
     def list_voices(self) -> list[VoiceInfo]:
-        if self._kokoro is None:
-            # Cold call — read the voices file directly so the options dropdown
-            # works without paying the onnxruntime session cost.
-            if not self.voices_path.exists():
-                return []
-            try:
-                import numpy as np
-                voices = np.load(self.voices_path)
-                names = sorted(voices.keys())
-            except Exception as e:
-                log.warning("kokoro: failed to read voices file: %s", e)
-                return []
-        else:
-            names = self._kokoro.get_voices()
+        if not self.voices_path.exists():
+            return []
+        try:
+            import numpy as np
+            voices = np.load(self.voices_path)
+            names = sorted(voices.keys())
+        except Exception as e:
+            log.warning("kokoro: failed to read voices file: %s", e)
+            return []
         return [
             VoiceInfo(id=f"kokoro:{n}", raw=n, backend="kokoro", label=n)
             for n in names
         ]
 
     async def warmup(self) -> None:
-        if self._kokoro is not None:
+        if self._worker is not None:
             return
         if not self.models_present():
             raise FileNotFoundError(
                 f"Kokoro model files missing under {self._audio_dir}. "
                 f"Run /voice-io install to fetch them.",
             )
-        # Heavy import deferred to first use.
-        from kokoro_onnx import Kokoro
-        self._kokoro = Kokoro(str(self.model_path), str(self.voices_path))
-        log.debug("kokoro: warmed up (%s)", self._quantization)
+        loop = asyncio.get_running_loop()
+        self._worker = await loop.run_in_executor(
+            None, _KokoroWorker, self.model_path, self.voices_path,
+        )
+        log.debug("kokoro: worker ready (%s)", self._quantization)
 
     async def synthesize(
         self, text: str, voice_id: str, *, speed: float = 1.0,
     ) -> AsyncIterator[bytes]:
-        if self._kokoro is None:
+        if self._worker is None:
             await self.warmup()
-        assert self._kokoro is not None
-        # Accept the namespaced id ("kokoro:af_bella") and the raw form for
-        # tests / direct callers. Anything else is a config typo we want loud.
+        assert self._worker is not None
         raw = voice_id.removeprefix("kokoro:")
-        async for samples, _sr in self._kokoro.create_stream(
-            text, voice=raw, speed=speed,
-        ):
-            # samples is float32 mono @ 24kHz; .tobytes() is the PCM bytes the
-            # output sink expects (declared by sample_format).
-            yield samples.tobytes()
+        loop = asyncio.get_running_loop()
+        pcm = await loop.run_in_executor(
+            None, self._worker.synth, text, raw, speed,
+        )
+        if pcm:
+            yield pcm
 
     async def aclose(self) -> None:
-        # The onnxruntime InferenceSession releases on GC; dropping the ref
-        # is sufficient for the toggle-off "free RAM" case.
-        self._kokoro = None
+        if self._worker is None:
+            return
+        worker = self._worker
+        self._worker = None
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, worker.close)

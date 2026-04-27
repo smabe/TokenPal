@@ -6,9 +6,10 @@ Routing rules:
 * ``voice`` requires ``voice_conversation_enabled``.
 
 Playback:
-* The text is split on ``.!?\\n`` and synthesized one sentence at a time so
-  the first sentence starts playing before the rest is generated. Backends
-  that already stream (Kokoro) yield mid-sentence chunks too; we just iterate.
+* The full utterance is synthesized into a single buffer before the
+  output stream is opened, so synth and playback never run concurrently.
+  Text is still split on ``.!?\\n`` for backends that re-prime state per
+  sentence.
 * ``sounddevice.OutputStream`` is opened with the active backend's declared
   ``sample_rate`` / ``channels`` / ``sample_format`` so a future Piper backend
   at 22050Hz int16 plugs in without changes here.
@@ -108,6 +109,15 @@ async def speak(
     np_dtype = np.float32 if backend.sample_format == "float32" else np.int16
 
     async with _playback_lock():
+        buf: list[np.ndarray] = []
+        for sentence in _sentences(text):
+            async for chunk in backend.synthesize(sentence, voice_id):
+                if chunk:
+                    buf.append(np.frombuffer(chunk, dtype=np_dtype))
+        if not buf:
+            return
+        samples = buf[0] if len(buf) == 1 else np.concatenate(buf)
+
         stream = sd.OutputStream(
             samplerate=backend.sample_rate,
             channels=backend.channels,
@@ -116,15 +126,7 @@ async def speak(
         stream.start()
         loop = asyncio.get_running_loop()
         try:
-            for sentence in _sentences(text):
-                async for chunk in backend.synthesize(sentence, voice_id):
-                    if not chunk:
-                        continue
-                    samples = np.frombuffer(chunk, dtype=np_dtype)
-                    # OutputStream.write blocks until the device drains;
-                    # the executor keeps the asyncio loop responsive so a
-                    # typed-input cancellation can land between chunks.
-                    await loop.run_in_executor(None, stream.write, samples)
+            await loop.run_in_executor(None, stream.write, samples)
         except asyncio.CancelledError:
             stream.abort(ignore_errors=True)
             raise
