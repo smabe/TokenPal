@@ -647,20 +647,26 @@ class Brain:
         """Emit the per-tick context dump only when meaningful.
 
         Brain loop ticks every 2s; logging the full snapshot every tick floods
-        --verbose. Emit only on change, with a heartbeat for forensic
-        continuity. Set TOKENPAL_LOG_CONTEXT_FULL=1 to restore per-tick emit
-        for deep debugging.
+        --verbose. Strip the hardware line (CPU/RAM tick on each 10s poll and
+        defeat change-detection without telling us anything we read), then
+        emit only on change with a heartbeat for forensic continuity. The
+        full snapshot — hardware included — still goes to the LLM. Set
+        TOKENPAL_LOG_CONTEXT_FULL=1 to restore per-tick emit for deep
+        debugging.
         """
         if not log.isEnabledFor(logging.DEBUG):
             return
+        loggable = "\n".join(
+            line for line in snapshot.split("\n") if not line.startswith("CPU ")
+        )
         now = time.monotonic()
         if not self._log_context_full and (
-            snapshot == self._last_context_log
+            loggable == self._last_context_log
             and now - self._last_context_log_at < _CONTEXT_LOG_HEARTBEAT_S
         ):
             return
-        log.debug("Context: %s", snapshot.replace("\n", " | "))
-        self._last_context_log = snapshot
+        log.debug("Context: %s", loggable.replace("\n", " | "))
+        self._last_context_log = loggable
         self._last_context_log_at = now
 
     async def _run_loop(self) -> None:
