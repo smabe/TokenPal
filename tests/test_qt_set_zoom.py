@@ -73,10 +73,10 @@ def test_buddy_set_zoom_noop_for_same_factor_and_rejects_zero(
 def test_buddy_set_zoom_scales_force_magnitude_physics(
     qapp: QApplication,
 ) -> None:
-    """Gravity, max_linear_speed, upright_bias, and settle thresholds
-    must all rescale on zoom — otherwise the buddy at 2× swings
-    visibly slower and rights himself less snappily because inertia
-    grew 4× while the forces stayed put."""
+    """max_linear_speed, upright_bias, and settle thresholds rescale
+    on zoom; gravity does NOT (drag-zoom can't land exactly on 1.0,
+    so scaling g would leave it off-base every time the buddy is
+    visually back to normal size)."""
     buddy = BuddyWindow(
         frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0), font_size=14,
     )
@@ -84,7 +84,7 @@ def test_buddy_set_zoom_scales_force_magnitude_physics(
         cfg_1x = buddy._sim.config
         buddy.set_zoom(2.0)
         cfg_2x = buddy._sim.config
-        assert cfg_2x.gravity == cfg_1x.gravity * 2.0
+        assert cfg_2x.gravity == cfg_1x.gravity
         assert cfg_2x.max_linear_speed == cfg_1x.max_linear_speed * 2.0
         assert cfg_2x.upright_bias_strength == cfg_1x.upright_bias_strength * 4.0
         assert cfg_2x.upright_bias_radius == cfg_1x.upright_bias_radius * 2.0

@@ -50,8 +50,22 @@ from tokenpal.ui.qt.physics import RigidBodyConfig, RigidBodySimulator
 
 log = logging.getLogger(__name__)
 
-_PHYSICS_HZ = 60
-_TICK_MS = int(1000 / _PHYSICS_HZ)
+# Pump rate for the accumulator loop. Qt's PreciseTimer floor on
+# Windows 11 is ~6 ms regardless of setInterval (multimedia-timer
+# dispatch jitter), so asking for less is wasted.
+_TICK_INTERVAL_MS = 6
+# Fixed physics step. Decoupled from the pump rate: each pump call
+# accumulates wall-clock time and runs as many ``FIXED_DT`` integrations
+# as needed to drain the accumulator. Matches Glenn Fiedler's "Fix Your
+# Timestep" — physics state advances by an invariant dt every step,
+# eliminating dt-jitter as a source of integration noise. 240 Hz is
+# above every common display refresh so the accumulator drains in
+# 1-2 steps per pump regardless of vsync rate.
+_FIXED_DT_S = 1.0 / 240.0
+# Cap accumulated time to avoid the death-spiral failure mode (a long
+# stall building up many seconds of physics to catch up on, which then
+# blows the next pump's budget and stalls again).
+_MAX_FRAME_TIME_S = 0.25
 _EDGE_DOCK_THRESHOLD = 20       # px from screen edge triggers snap
 # 2 s grace lets a fling overshoot and bounce back via momentum before
 # the rescue stomps in.
@@ -67,6 +81,17 @@ _COM_Y_FRACTION = 0.30
 # unrotated form. Anything smaller is indistinguishable from rest.
 _FOLLOWER_ROTATION_EPS = 0.01
 _FOLLOWER_OMEGA_EPS = 0.1
+
+# Reference zoom factor at which the invariant master sprite is
+# rasterized. paintEvent's drawPixmap implicitly scales to the current
+# zoom, so the master stays crisp from 0.5× up to roughly this value;
+# beyond it bilinear sampling starts to read soft. Per-pose memory grows
+# as MASTER_ZOOM² × supersample² — see plans/master-sprite.md.
+_MASTER_ZOOM = 2.0
+# Supersample factor applied on top of MASTER_ZOOM. Pushes the rotation
+# source resolution well above the paint surface so bilinear sampling
+# during a rotated blit reads clean.
+_MASTER_SUPERSAMPLE = 2
 
 # Enable an on-screen HUD + file log of body state by setting
 # TOKENPAL_PHYSICS_DEBUG=1 in the environment before launch.
@@ -159,6 +184,17 @@ class BuddyWindow(QWidget):
         )
         self._zoom = 1.0
         self._font = QFont(self._base_font)
+        # Master sprite font + cell metrics. Fixed at _MASTER_ZOOM and
+        # never touched after init, so the per-pose pixmap cache is
+        # zoom-invariant: zooming changes the destination rect of
+        # drawPixmap, not the source bitmap. Render path is one
+        # bilinear sample of the master through the world transform —
+        # sprite-quad style.
+        self._master_font = scale_font(self._base_font, _MASTER_ZOOM)
+        self._cell_w_master = max(
+            _measure_block_paint_width(self._master_font) - 1, 1,
+        )
+        self._line_h_master = QFontMetrics(self._master_font).height()
 
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -184,14 +220,25 @@ class BuddyWindow(QWidget):
         self._line_h = 1
         self._art_w = 1
         self._art_h = 1
-        # Cached pixmap of the current frame rendered at natural-glyph
-        # aspect (line_h = ascent). paintEvent blits it stretched to art-
-        # rect dims so block fills and drawText glyphs agree on cell size.
+        # Cached static sprite for the current frame. Rendered once per
+        # (frame_lines, font) tuple at supersampled resolution;
+        # paintEvent blits it through a rotation transform — same model
+        # as a game sprite. The 200-glyph paint loop we used to do
+        # every frame re-hinted text per sub-pixel position and
+        # produced visible per-frame aliasing variance ("breaking up at
+        # the edges"). Bitmap-blit has no such per-frame variance:
+        # source is invariant, only sampling moves.
         self._art_pixmap: QPixmap | None = None
+        # Sprite atlas keyed by (lines, font_family). Master is
+        # rasterized once at _MASTER_ZOOM × _MASTER_SUPERSAMPLE; zoom
+        # falls out via drawPixmap's destination rect, so a single
+        # entry per pose serves every zoom level.
+        self._pixmap_cache: dict[tuple[object, ...], QPixmap] = {}
         # Where the COM sits inside the widget after the rotated-AABB
         # padding. Set by _recompute_geometry; equals the COM's
         # screen-space offset from the widget's top-left.
         self._com_widget: tuple[int, int] = (0, 0)
+        self._last_mask_rect: QRect = QRect()
 
         self._measure_cells()
 
@@ -199,6 +246,20 @@ class BuddyWindow(QWidget):
         self._sim = RigidBodySimulator(
             home=initial_anchor, config=self._zoomed_physics_config(),
         )
+
+        # Fix-Your-Timestep state must be initialized before the first
+        # _recompute_geometry call (it reads _theta_prev for AABB
+        # slack). ``_build_transform`` lerps between (_theta_prev,
+        # sim.theta) using α = (now − _last_step_ts) / _FIXED_DT_S.
+        # _pos_prev mirrors _theta_prev so paint can lerp position the
+        # same way — without it, position is up to one physics step
+        # stale at paint time and the staleness scales with screen-px
+        # velocity, which scales with zoom.
+        now = time.monotonic()
+        self._accumulator = 0.0
+        self._theta_prev = self._sim.theta
+        self._pos_prev = self._sim.position
+        self._last_step_ts = now
 
         # _recompute_geometry reads sim.theta, so the sim must exist first.
         self._recompute_geometry()
@@ -212,9 +273,10 @@ class BuddyWindow(QWidget):
         self._rescue_target: tuple[float, float] = (0.0, 0.0)
 
         self._timer = QTimer(self)
-        self._timer.setInterval(_TICK_MS)
+        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self._timer.setInterval(_TICK_INTERVAL_MS)
         self._timer.timeout.connect(self._on_tick)
-        self._last_tick_ts = time.monotonic()
+        self._last_tick_ts = now
         # Start settled — the simulator wakes on grab / impulse.
 
         self._debug_tick_counter = 0
@@ -270,16 +332,16 @@ class BuddyWindow(QWidget):
         ``_base_physics``. Frequencies, damping ratios, and rotational
         quantities (rad/s, rad) are scale-free and pass through.
 
-        Exponents fall out of the dimensional analysis — gravity scales
-        linearly so visual swing frequency stays the same; upright bias
-        scales as z² to match inertia growth (I ∝ R²) so the righting
-        time-constant is invariant under zoom."""
+        Gravity is left untouched — drag-zoom can't land exactly on 1.0,
+        so scaling g would leave gravity off-base whenever the buddy is
+        visually "back to normal." Upright bias still scales as z² to
+        match inertia growth (I ∝ R²) so the righting time-constant is
+        invariant under zoom."""
         base = self._base_physics
         z = self._zoom
         return dataclasses.replace(
             base,
             inertia=self._compute_inertia(base.mass),
-            gravity=base.gravity * z,
             max_linear_speed=base.max_linear_speed * z,
             upright_bias_strength=base.upright_bias_strength * z * z,
             upright_bias_radius=base.upright_bias_radius * z,
@@ -341,32 +403,63 @@ class BuddyWindow(QWidget):
 
     def _recompute_geometry(self) -> None:
         """Size the widget to the AABB of the rotated art at the current
-        body angle, then place ``_com_widget`` so the body's COM lands
-        at the right spot inside the widget."""
-        angle_deg = math.degrees(self._sim.theta)
+        body angle (plus a slack for paint-time θ extrapolation), then
+        place ``_com_widget`` so the body's COM lands at the right spot
+        inside the widget.
+
+        ``_build_transform`` paints with α-lerp between ``_theta_prev``
+        and ``sim.theta``, where α grows continuously between pumps and
+        can exceed 1 if the pump interval slips past ``_FIXED_DT_S``.
+        AABB must cover the full range of paintable θ to keep the
+        input mask from clipping silhouettes. Slack to α=2 (covers up
+        to one full extra step of forward extrapolation)."""
         com_x, com_y = self._com_art()
-        rot = QTransform()
-        rot.translate(com_x, com_y)
-        rot.rotate(angle_deg)
-        rot.translate(-com_x, -com_y)
-        corners = (
-            rot.map(QPointF(0.0, 0.0)),
-            rot.map(QPointF(float(self._art_w), 0.0)),
-            rot.map(QPointF(0.0, float(self._art_h))),
-            rot.map(QPointF(float(self._art_w), float(self._art_h))),
+        # Shortest-arc delta — same wraparound fix as _build_transform.
+        # Without it, AABB endpoints during a θ=±π crossing point at
+        # nonsense angles and the widget resizes wrong for one tick.
+        delta_theta = self._sim.theta - self._theta_prev
+        if delta_theta > math.pi:
+            delta_theta -= 2.0 * math.pi
+        elif delta_theta < -math.pi:
+            delta_theta += 2.0 * math.pi
+        angles = (
+            self._theta_prev,
+            self._sim.theta + delta_theta,  # α=2 forward extrapolation
         )
+        corners: list[QPointF] = []
+        for angle in angles:
+            rot = QTransform()
+            rot.translate(com_x, com_y)
+            rot.rotate(math.degrees(angle))
+            rot.translate(-com_x, -com_y)
+            corners.append(rot.map(QPointF(0.0, 0.0)))
+            corners.append(rot.map(QPointF(float(self._art_w), 0.0)))
+            corners.append(rot.map(QPointF(0.0, float(self._art_h))))
+            corners.append(rot.map(
+                QPointF(float(self._art_w), float(self._art_h)),
+            ))
         xs = [p.x() for p in corners]
         ys = [p.y() for p in corners]
-        # 1 px slack so antialiased glyph edges at AABB corners don't
-        # clip during rotation. Same convention as the click mask.
-        min_x = int(math.floor(min(xs))) - 1
-        min_y = int(math.floor(min(ys))) - 1
-        max_x = int(math.ceil(max(xs))) + 1
-        max_y = int(math.ceil(max(ys))) + 1
+        # 1 px slack for AA glyph edges + extra slack for the
+        # position-lerp residual baked into _build_transform: paint may
+        # shift the bitmap by up to one physics step's worth of motion
+        # (|v| × FIXED_DT) plus 1 px integer quantization. Without the
+        # extra slack, fast motion clips the bitmap at the AABB edge.
+        vx, vy = self._sim.velocity
+        pos_slack = int(math.ceil(max(abs(vx), abs(vy)) * _FIXED_DT_S)) + 1
+        min_x = int(math.floor(min(xs))) - 1 - pos_slack
+        min_y = int(math.floor(min(ys))) - 1 - pos_slack
+        max_x = int(math.ceil(max(xs))) + 1 + pos_slack
+        max_y = int(math.ceil(max(ys))) + 1 + pos_slack
         width = max(max_x - min_x, 1)
         height = max(max_y - min_y, 1)
         self._com_widget = (int(com_x) - min_x, int(com_y) - min_y)
-        self.resize(width, height)
+        # Skip the WM resize when nothing changed. resize() is called
+        # every tick from _refresh_view; on Windows even a no-op resize
+        # can dispatch WM_SIZE handling that costs ~1 ms — enough to
+        # push the tick interval past vsync.
+        if self.size().width() != width or self.size().height() != height:
+            self.resize(width, height)
 
     def _move_to_com(self) -> None:
         """Position the widget so ``_com_widget`` lands on the
@@ -478,12 +571,56 @@ class BuddyWindow(QWidget):
 
     def _build_transform(self) -> QTransform:
         """Forward art-frame → widget-frame transform: translate art
-        origin to ``-com_art``, rotate by ``sim.theta``, translate to
-        ``com_widget``. ``paintEvent`` applies the same ops via
-        ``painter.translate/rotate`` so hit-test stays in sync."""
+        origin to ``-com_art``, rotate by ``θ_paint``, translate to
+        ``com_widget`` (plus a sub-pixel residual that absorbs
+        widget.move integer quantization and the position lerp gap).
+        ``paintEvent`` applies the same transform so hit-test stays in
+        sync.
+
+        ``θ_paint`` linearly interpolates between the two most recent
+        physics snapshots: ``_theta_prev`` (state before the latest
+        ``FIXED_DT`` step) and ``sim.theta`` (state after). Alpha is
+        wall-clock progress past the latest step, in units of
+        ``FIXED_DT``. Slope between snapshots = avg ω during that step
+        = constant — no per-paint slope variance regardless of when
+        paint samples the wall clock. If the pump has stalled past
+        one step's worth of time, alpha runs past 1 and the lerp
+        becomes extrapolation at the same constant slope (graceful
+        rather than freezing).
+
+        Position is lerped the same way (with α clamped to [0, 1] so
+        the residual stays bounded by AABB slack — see
+        ``_recompute_geometry``). The painted COM lands at the
+        continuous lerped position, not at ``int(sim.position)`` — the
+        latter would judder by up to one physics step's worth of motion
+        per paint, and that judder scales with screen-pixel velocity,
+        which scales with zoom."""
+        delta_s = max(0.0, time.monotonic() - self._last_step_ts)
+        alpha = delta_s / _FIXED_DT_S
+        # Shortest-arc delta. The simulator wraps θ to (-π, π], so a
+        # body crossing π flips its θ from +π to -π between snapshots.
+        # A naive subtract gives a delta of nearly -2π and the lerp
+        # snaps the rendered θ to ~0 mid-step — a one-frame "ghost
+        # flash" through upright when the buddy is flipped over.
+        delta_theta = self._sim.theta - self._theta_prev
+        if delta_theta > math.pi:
+            delta_theta -= 2.0 * math.pi
+        elif delta_theta < -math.pi:
+            delta_theta += 2.0 * math.pi
+        theta = self._theta_prev + delta_theta * alpha
+
+        pos_alpha = min(1.0, max(0.0, alpha))
+        px, py = self._sim.position
+        ppx, ppy = self._pos_prev
+        cx_lerp = ppx + (px - ppx) * pos_alpha
+        cy_lerp = ppy + (py - ppy) * pos_alpha
+        widget_pos = self.pos()
+        sub_x = cx_lerp - widget_pos.x() - self._com_widget[0]
+        sub_y = cy_lerp - widget_pos.y() - self._com_widget[1]
+
         t = QTransform()
-        t.translate(self._com_widget[0], self._com_widget[1])
-        t.rotate(math.degrees(self._sim.theta))
+        t.translate(self._com_widget[0] + sub_x, self._com_widget[1] + sub_y)
+        t.rotate(math.degrees(theta))
         com_x, com_y = self._com_art()
         t.translate(-com_x, -com_y)
         return t
@@ -492,8 +629,17 @@ class BuddyWindow(QWidget):
         """Mask the buddy to its widget rect so clicks fall through to
         whatever's behind any antialias slack. Since
         ``_recompute_geometry`` sizes the widget to the rotated-art
-        AABB, the widget rect is already the tightest legal mask."""
-        self.setMask(QRegion(self.rect()))
+        AABB, the widget rect is already the tightest legal mask.
+
+        Skip the setMask call when the widget rect hasn't changed.
+        setMask hands a QRegion to the WM and on Windows the round-trip
+        costs ~1 ms — at 250 Hz that's 25 % of the tick budget burned
+        re-asserting the same mask."""
+        rect = self.rect()
+        if rect == self._last_mask_rect:
+            return
+        self.setMask(QRegion(rect))
+        self._last_mask_rect = rect
 
     def _refresh_view(self) -> None:
         """Resize the widget to the rotated-art AABB, position it on
@@ -508,11 +654,20 @@ class BuddyWindow(QWidget):
     def _on_tick(self) -> None:
         body_start = time.perf_counter() if _TICK_PROFILE else 0.0
         now = time.monotonic()
-        dt = now - self._last_tick_ts
+        frame_time = min(now - self._last_tick_ts, _MAX_FRAME_TIME_S)
         self._last_tick_ts = now
-        # Clamp dt to survive timer stalls — soft-constraint γ/β are
-        # dt-dependent and a 200ms hiccup would over-correct visibly.
-        self._sim.tick(min(dt, 1.0 / 30.0))
+        # Fix-Your-Timestep accumulator. Drain in fixed-dt steps so the
+        # integrator and constraint solver always see the same dt — no
+        # γ/β jitter, no damping noise. Save the state *before* each
+        # step so paintEvent can lerp between (prev, curr) for a smooth
+        # rendered θ regardless of when the paint samples wall-clock.
+        self._accumulator += frame_time
+        while self._accumulator >= _FIXED_DT_S:
+            self._theta_prev = self._sim.theta
+            self._pos_prev = self._sim.position
+            self._sim.tick(_FIXED_DT_S)
+            self._accumulator -= _FIXED_DT_S
+            self._last_step_ts = now
         self._tick_offscreen_rescue(now)
         self._refresh_view()
         if _PHYSICS_DEBUG:
@@ -563,7 +718,18 @@ class BuddyWindow(QWidget):
 
     def _wake_timer(self) -> None:
         if not self._timer.isActive():
-            self._last_tick_ts = time.monotonic()
+            now = time.monotonic()
+            self._last_tick_ts = now
+            # Reset interpolation state on wake. Otherwise _last_step_ts
+            # is stale (frozen at sleep time), the next paint's α
+            # explodes (elapsed = now - very_old), and the render
+            # extrapolates θ to nonsense. _theta_prev is set to current
+            # so the first lerp before any new step renders the static
+            # pose.
+            self._accumulator = 0.0
+            self._theta_prev = self._sim.theta
+            self._pos_prev = self._sim.position
+            self._last_step_ts = now
             self._timer.start()
 
     def _sleep_timer(self) -> None:
@@ -747,12 +913,16 @@ class BuddyWindow(QWidget):
         # WA_TranslucentBackground already clears the region to fully
         # transparent before this runs, so no fillRect needed.
         painter = QPainter(self)
+        # Bilinear sample of the master pixmap through the world
+        # transform — same op as a game engine drawing a sprite quad.
+        # Master is rasterized at _MASTER_ZOOM × _MASTER_SUPERSAMPLE so
+        # zoom + rotation share one resampling pass with plenty of
+        # source resolution.
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        # Apply the same transform the hit-test uses, so what's painted
-        # and what can be clicked agree.
         painter.setWorldTransform(self._build_transform())
         painter.drawPixmap(
-            QRect(0, 0, self._art_w, self._art_h), self._render_art_pixmap(),
+            QRect(0, 0, self._art_w, self._art_h),
+            self._render_art_pixmap(),
         )
 
         if _PHYSICS_DEBUG:
@@ -762,25 +932,40 @@ class BuddyWindow(QWidget):
             self._paint_physics_debug(painter)
 
     def _render_art_pixmap(self) -> QPixmap:
-        """Rasterize the current frame to a pixmap at natural-glyph row
-        height (``fm.ascent()``). ``paintEvent`` blits it stretched to
-        ``_art_h`` (= ``rows * fm.height()``) so block fills and drawText
-        glyphs agree on cell size while the overall art keeps terminal-
-        cell aspect. Cached until the next ``_measure_cells`` invalidates.
-        """
+        """Return the master sprite for the current frame. Looks up the
+        atlas by ``(lines, font_family)`` — zoom is not in the key
+        because the master is rasterized once at ``_MASTER_ZOOM`` and
+        ``paintEvent``'s ``drawPixmap`` rescales to the active zoom via
+        a single bilinear sample.
+
+        Each cell is ``_line_h_master`` tall (matching block-fill
+        geometry) and glyphs are stretched vertically via
+        ``painter.scale(1, line_h/ascent)`` so drawText output fills
+        the same rect as ``paint_block_char`` — no empty strip on
+        Windows where Consolas's height/ascent ratio is larger than
+        Menlo's."""
         if self._art_pixmap is not None:
             return self._art_pixmap
+        cache_key = (
+            tuple(self._frame_lines),
+            self._master_font.family(),
+        )
+        cached = self._pixmap_cache.get(cache_key)
+        if cached is not None:
+            self._art_pixmap = cached
+            return cached
 
-        cell_w = self._cell_w
+        cell_w = self._cell_w_master
         cols = self._cols
         rows = len(self._frame_lines)
-        ascent = max(QFontMetrics(self._font).ascent(), 1)
+        line_h = self._line_h_master
+        ascent = max(QFontMetrics(self._master_font).ascent(), 1)
+        y_stretch = line_h / ascent
 
         dpr = self.devicePixelRatioF()
-        supersample = 2
-        scale = max(dpr * supersample, 1.0)
+        scale = max(dpr * _MASTER_SUPERSAMPLE, 1.0)
         phys_w = max(int(math.ceil(cols * cell_w * scale)), 1)
-        phys_h = max(int(math.ceil(rows * ascent * scale)), 1)
+        phys_h = max(int(math.ceil(rows * line_h * scale)), 1)
 
         image = QImage(
             phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied,
@@ -790,10 +975,10 @@ class BuddyWindow(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         painter.scale(scale, scale)
-        painter.setFont(self._font)
+        painter.setFont(self._master_font)
 
         total_w = cols * cell_w
-        y = ascent
+        y_top = 0
         for line in self._frame_lines:
             chars = len(stripped_text(line))
             base_x = (total_w - chars * cell_w) // 2
@@ -803,24 +988,20 @@ class BuddyWindow(QWidget):
                 painter.setPen(color)
                 for ch in seg.text:
                     x = base_x + col * cell_w
-                    rect = QRect(x, y - ascent, cell_w + 1, ascent)
+                    rect = QRect(x, y_top, cell_w + 1, line_h)
                     if not paint_block_char(painter, ch, rect, color):
-                        painter.drawText(x, y, ch)
+                        painter.save()
+                        painter.translate(x, y_top)
+                        painter.scale(1.0, y_stretch)
+                        painter.drawText(0, ascent, ch)
+                        painter.restore()
                     col += 1
-            y += ascent
+            y_top += line_h
         painter.end()
 
-        if supersample > 1:
-            target_w = max(int(math.ceil(cols * cell_w * dpr)), 1)
-            target_h = max(int(math.ceil(rows * ascent * dpr)), 1)
-            image = image.scaled(
-                target_w, target_h,
-                Qt.AspectRatioMode.IgnoreAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-
         pixmap = QPixmap.fromImage(image)
-        pixmap.setDevicePixelRatio(dpr)
+        pixmap.setDevicePixelRatio(dpr * _MASTER_SUPERSAMPLE)
+        self._pixmap_cache[cache_key] = pixmap
         self._art_pixmap = pixmap
         return pixmap
 
