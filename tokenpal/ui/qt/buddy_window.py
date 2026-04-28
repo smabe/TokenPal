@@ -83,17 +83,6 @@ _COM_Y_FRACTION = 0.30
 _FOLLOWER_ROTATION_EPS = 0.01
 _FOLLOWER_OMEGA_EPS = 0.1
 
-# Quantization step for the buddy widget's outer rect. _recompute_geometry
-# rounds width and height up to this multiple so per-tick rotation doesn't
-# trigger 166 Hz of WM resize + backbuffer realloc + setMask round-trip
-# — measured paint intervals during rotation were 8–14 ms with ~5 ms of
-# variance because of that churn, while the un-resizing weather window
-# was steady. Resize and setMask now fire only when the AABB crosses a
-# grid boundary; the up-to-(STEP-1) px of padding on each axis is
-# transparent slack and the click mask still matches the widget rect so
-# it grows in step with the resize.
-_AABB_STEP_PX = 16
-
 # Reference zoom factor at which the invariant master sprite is
 # rasterized. paintEvent's drawPixmap implicitly scales to the current
 # zoom, so the master stays crisp from 0.5× up to roughly this value;
@@ -479,20 +468,13 @@ class BuddyWindow(QWidget):
         max_y = int(math.ceil(max(ys))) + 1 + pos_slack
         width = max(max_x - min_x, 1)
         height = max(max_y - min_y, 1)
-        # Round up to _AABB_STEP_PX so resize / setMask only fire on
-        # grid crossings, not every tick during rotation. Pad evenly on
-        # both axes so the COM stays centered within the slack.
-        step = _AABB_STEP_PX
-        quant_w = ((width + step - 1) // step) * step
-        quant_h = ((height + step - 1) // step) * step
-        pad_x = (quant_w - width) // 2
-        pad_y = (quant_h - height) // 2
-        self._com_widget = (
-            int(com_x) - min_x + pad_x,
-            int(com_y) - min_y + pad_y,
-        )
-        if self.size().width() != quant_w or self.size().height() != quant_h:
-            self.resize(quant_w, quant_h)
+        self._com_widget = (int(com_x) - min_x, int(com_y) - min_y)
+        # Skip the WM resize when nothing changed. resize() is called
+        # every tick from _refresh_view; on Windows even a no-op resize
+        # can dispatch WM_SIZE handling that costs ~1 ms — enough to
+        # push the tick interval past vsync.
+        if self.size().width() != width or self.size().height() != height:
+            self.resize(width, height)
 
     def _move_to_com(self) -> None:
         """Position the widget so ``_com_widget`` lands on the
