@@ -46,6 +46,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.ascii_props import (
     MOON_SPRITE,
     OVERCAST_CLOUD_A,
@@ -833,6 +834,11 @@ class SkyWindow(QWidget):
         env = self._sim.env
         if env is None:
             return
+        if _paint_trace.enabled():
+            pos = self.pos()
+            _paint_trace.log_paint(
+                "sky", pos=(float(pos.x()), float(pos.y())),
+            )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
@@ -1057,6 +1063,11 @@ class BuddyRainOverlay(QWidget):
         return QRectF(pos.x(), pos.y(), self.width(), self.height())
 
     def paintEvent(self, _event: QPaintEvent) -> None:
+        if _paint_trace.enabled():
+            pos = self.pos()
+            _paint_trace.log_paint(
+                "rain", pos=(float(pos.x()), float(pos.y())),
+            )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setFont(self._font)

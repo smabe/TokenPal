@@ -29,6 +29,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.ui.qt import _paint_trace
+
 from tokenpal.config.chatlog_writer import (
     DEFAULT_BACKGROUND_COLOR,
     DEFAULT_FONT_COLOR,
@@ -309,6 +311,14 @@ class SpeechBubble(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         if self._content_w <= 0 or self._content_h <= 0:
             return
+        if _paint_trace.enabled():
+            tx, ty = self._tail_widget
+            pos = self.pos()
+            _paint_trace.log_paint(
+                "bubble",
+                theta=self._body_angle_rad,
+                pos=(float(pos.x() + tx), float(pos.y() + ty)),
+            )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)

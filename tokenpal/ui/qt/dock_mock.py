@@ -23,6 +23,8 @@ from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QPainter, QPaintEvent, QPixmap, QTransform
 from PySide6.QtWidgets import QWidget
 
+from tokenpal.ui.qt import _paint_trace
+
 _ROTATION_MARGIN = 4
 
 
@@ -79,6 +81,14 @@ class DockMock(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         if self._pixmap is None or self._pixmap.isNull():
             return
+        if _paint_trace.enabled():
+            ax, ay = self._anchor_widget
+            pos = self.pos()
+            _paint_trace.log_paint(
+                "dock_mock",
+                theta=self._angle_rad,
+                pos=(float(pos.x() + ax), float(pos.y() + ay)),
+            )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)

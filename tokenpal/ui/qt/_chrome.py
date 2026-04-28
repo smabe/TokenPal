@@ -25,6 +25,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QLabel, QSizeGrip, QWidget
 
+from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt._text_fx import apply_drop_shadow, glass_button_stylesheet
 
 DRAG_HANDLE_HEIGHT = 22
@@ -192,6 +193,14 @@ class BuddyResizeGrip(QWidget):
         self.setMask(QRegion(QRect(x, y, max(x2 - x, 1), max(y2 - y, 1))))
 
     def paintEvent(self, _event: QPaintEvent) -> None:
+        if _paint_trace.enabled():
+            ax_t, ay_t = self._anchor_widget
+            pos_t = self.pos()
+            _paint_trace.log_paint(
+                "grip",
+                theta=self._angle_rad,
+                pos=(float(pos_t.x() + ax_t), float(pos_t.y() + ay_t)),
+            )
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         ax, ay = self._anchor_widget

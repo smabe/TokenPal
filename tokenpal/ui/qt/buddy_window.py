@@ -43,6 +43,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.palette import BUDDY_GREEN
+from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt._screen_bounds import Rect, offscreen_rescue_target
 from tokenpal.ui.qt._text_fx import paint_block_char, scale_font
 from tokenpal.ui.qt.markup import parse_markup, stripped_text
@@ -569,51 +570,41 @@ class BuddyWindow(QWidget):
             widget_pos.y() + p_widget.y(),
         )
 
-    def _build_transform(self) -> QTransform:
-        """Forward art-frame → widget-frame transform: translate art
-        origin to ``-com_art``, rotate by ``θ_paint``, translate to
-        ``com_widget`` (plus a sub-pixel residual that absorbs
-        widget.move integer quantization and the position lerp gap).
-        ``paintEvent`` applies the same transform so hit-test stays in
-        sync.
-
-        ``θ_paint`` linearly interpolates between the two most recent
-        physics snapshots: ``_theta_prev`` (state before the latest
-        ``FIXED_DT`` step) and ``sim.theta`` (state after). Alpha is
-        wall-clock progress past the latest step, in units of
-        ``FIXED_DT``. Slope between snapshots = avg ω during that step
-        = constant — no per-paint slope variance regardless of when
-        paint samples the wall clock. If the pump has stalled past
-        one step's worth of time, alpha runs past 1 and the lerp
-        becomes extrapolation at the same constant slope (graceful
-        rather than freezing).
-
-        Position is lerped the same way (with α clamped to [0, 1] so
-        the residual stays bounded by AABB slack — see
-        ``_recompute_geometry``). The painted COM lands at the
-        continuous lerped position, not at ``int(sim.position)`` — the
-        latter would judder by up to one physics step's worth of motion
-        per paint, and that judder scales with screen-pixel velocity,
-        which scales with zoom."""
+    def _lerped_state(self) -> tuple[float, float, float]:
+        """Lerped ``(theta, com_x, com_y)`` between the two most recent
+        physics snapshots. Alpha is wall-clock progress past the latest
+        step in units of ``FIXED_DT``. Theta extrapolates past α=1 at
+        constant slope (graceful pump-stall recovery); position alpha is
+        clamped to [0, 1] so the residual stays bounded by AABB slack
+        (see ``_recompute_geometry``). Shortest-arc delta avoids a
+        one-frame ghost flash through upright when θ crosses ±π."""
         delta_s = max(0.0, time.monotonic() - self._last_step_ts)
         alpha = delta_s / _FIXED_DT_S
-        # Shortest-arc delta. The simulator wraps θ to (-π, π], so a
-        # body crossing π flips its θ from +π to -π between snapshots.
-        # A naive subtract gives a delta of nearly -2π and the lerp
-        # snaps the rendered θ to ~0 mid-step — a one-frame "ghost
-        # flash" through upright when the buddy is flipped over.
         delta_theta = self._sim.theta - self._theta_prev
         if delta_theta > math.pi:
             delta_theta -= 2.0 * math.pi
         elif delta_theta < -math.pi:
             delta_theta += 2.0 * math.pi
         theta = self._theta_prev + delta_theta * alpha
-
         pos_alpha = min(1.0, max(0.0, alpha))
         px, py = self._sim.position
         ppx, ppy = self._pos_prev
-        cx_lerp = ppx + (px - ppx) * pos_alpha
-        cy_lerp = ppy + (py - ppy) * pos_alpha
+        return (
+            theta,
+            ppx + (px - ppx) * pos_alpha,
+            ppy + (py - ppy) * pos_alpha,
+        )
+
+    def _build_transform(self) -> QTransform:
+        """Forward art-frame → widget-frame transform: translate art
+        origin to ``-com_art``, rotate by lerped θ, translate to
+        ``com_widget`` plus a sub-pixel residual that absorbs
+        widget.move integer quantization and the position-lerp gap.
+        ``paintEvent`` applies the same transform so hit-test stays
+        in sync. Painted COM lands at the continuous lerped position,
+        not at ``int(sim.position)`` — the latter judders by up to one
+        physics step's worth of motion per paint, scaled by zoom."""
+        theta, cx_lerp, cy_lerp = self._lerped_state()
         widget_pos = self.pos()
         sub_x = cx_lerp - widget_pos.x() - self._com_widget[0]
         sub_y = cy_lerp - widget_pos.y() - self._com_widget[1]
@@ -924,6 +915,9 @@ class BuddyWindow(QWidget):
             QRect(0, 0, self._art_w, self._art_h),
             self._render_art_pixmap(),
         )
+        if _paint_trace.enabled():
+            theta, cx, cy = self._lerped_state()
+            _paint_trace.log_paint("buddy", theta=theta, pos=(cx, cy))
 
         if _PHYSICS_DEBUG:
             # Debug HUD paints on top of the rotated art but in widget-
