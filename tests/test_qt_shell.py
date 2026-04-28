@@ -52,7 +52,7 @@ def test_buddy_window_has_frameless_flags(qapp: QApplication) -> None:
 def test_buddy_font_disables_subpixel_antialias(qapp: QApplication) -> None:
     # QTBUG-43774: subpixel AA dots glyphs on WA_TranslucentBackground.
     shell = build_shell(app=qapp)
-    strategy = shell.buddy._font.styleStrategy()
+    strategy = shell.buddy.core._font.styleStrategy()
     assert strategy & QFont.StyleStrategy.NoSubpixelAntialias
     shell.buddy.close()
 

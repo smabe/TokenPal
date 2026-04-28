@@ -40,8 +40,8 @@ def test_dock_repositions_when_buddy_moves(qapp: QApplication) -> None:
         # snap_home teleports the body + home anchor with zeroed
         # velocity so the buddy stays upright → real dock (not the
         # mid-swing mock) is the active follower under test.
-        overlay._buddy._sim.snap_home(1100.0, 600.0)
-        overlay._buddy._wake_timer()
+        overlay._buddy.sim.snap_home(1100.0, 600.0)
+        overlay._buddy.wake_tick_timer()
         _pump(qapp, ms=150)
 
         after = (overlay._dock.x(), overlay._dock.y())

@@ -41,8 +41,8 @@ def test_bubble_repositions_when_buddy_moves(qapp: QApplication) -> None:
         # Nudge the buddy sideways and let the physics settle long
         # enough for the move to propagate to the bubble via the
         # position_changed signal.
-        overlay._buddy._sim.snap_home(900.0, 500.0)
-        overlay._buddy._wake_timer()
+        overlay._buddy.sim.snap_home(900.0, 500.0)
+        overlay._buddy.wake_tick_timer()
         _pump(qapp, ms=120)
 
         after = (overlay._bubble.x(), overlay._bubble.y())
@@ -66,8 +66,8 @@ def test_buddy_emits_position_changed_every_tick(qapp: QApplication) -> None:
         # Force a move — snap_home teleports body + home anchor;
         # _on_tick refreshes the view and emits position_changed
         # unconditionally (the emit doesn't gate on sleeping state).
-        buddy._sim.snap_home(700.0, 400.0)
-        buddy._on_tick()
+        buddy.sim.snap_home(700.0, 400.0)
+        buddy.core._on_tick()
         assert fires, "position_changed should fire on every tick"
     finally:
         buddy.close()

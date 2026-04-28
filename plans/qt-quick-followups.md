@@ -26,7 +26,7 @@ Land the remaining follow-ups so the QtQuick buddy is a solid daily-driver acros
 - **Phase 2** — shipped in `aaff25f`.
 - **Phase 3** — shipped in `6739b54` ("Phase 3 multi-monitor mixed DPRs"). Per-screen `_ScreenWindow` + reparenting on edge cross is live in `tokenpal/ui/quick/buddy_window.py`.
 - **Phase 4** — **deferred**. Cursor-poll click-through is good enough on the dev box; global low-level mouse hook risks AV friction without a clear payoff. Reopen if 240 fps idle drain becomes a real complaint.
-- **Phase 5** — *in progress* (this session).
+- **Phase 5** — shipped across 5a/5b/5c (this session). `BuddyCore(QObject)` at `tokenpal/ui/buddy_core.py` owns physics, art, lerp, master sprite, mouse-grab, offscreen rescue. `BuddyWindow(QWidget)` is a thin adapter that forwards the public surface; the Quick path consumes `BuddyCore` directly with the `WA_DontShowOnScreen` hack gone.
 
 ## Files to touch
 

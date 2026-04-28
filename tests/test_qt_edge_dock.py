@@ -14,7 +14,8 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE  # noqa: E402
-from tokenpal.ui.qt.buddy_window import _EDGE_DOCK_THRESHOLD, BuddyWindow  # noqa: E402
+from tokenpal.ui.buddy_core import EDGE_DOCK_THRESHOLD as _EDGE_DOCK_THRESHOLD
+from tokenpal.ui.qt.buddy_window import BuddyWindow  # noqa: E402
 
 
 @pytest.fixture
@@ -33,9 +34,9 @@ def test_dropping_near_left_edge_snaps_to_left(qapp: QApplication) -> None:
     left, top, _right, _bottom = _screen_geom(qapp)
     buddy = BuddyWindow(frame_lines=BUDDY_IDLE, initial_anchor=(float(left), 400.0))
     try:
-        buddy._sim.snap_home(float(left + _EDGE_DOCK_THRESHOLD - 5), 400.0)
-        buddy._maybe_edge_dock()
-        assert buddy._sim.home[0] == float(left)
+        buddy.core.sim.snap_home(float(left + _EDGE_DOCK_THRESHOLD - 5), 400.0)
+        buddy.core.maybe_edge_dock()
+        assert buddy.core.sim.home[0] == float(left)
     finally:
         buddy.close()
 
@@ -47,11 +48,11 @@ def test_dropping_near_top_edge_snaps_to_top(qapp: QApplication) -> None:
         initial_anchor=(float(left + 300), float(top)),
     )
     try:
-        buddy._sim.snap_home(
+        buddy.core.sim.snap_home(
             float(left + 300), float(top + _EDGE_DOCK_THRESHOLD - 5),
         )
-        buddy._maybe_edge_dock()
-        assert buddy._sim.home[1] == float(top)
+        buddy.core.maybe_edge_dock()
+        assert buddy.core.sim.home[1] == float(top)
     finally:
         buddy.close()
 
@@ -62,8 +63,8 @@ def test_dropping_far_from_edge_does_not_snap(qapp: QApplication) -> None:
     mid_y = float((top + bottom) / 2)
     buddy = BuddyWindow(frame_lines=BUDDY_IDLE, initial_anchor=(mid_x, mid_y))
     try:
-        buddy._sim.snap_home(mid_x, mid_y)
-        buddy._maybe_edge_dock()
-        assert buddy._sim.home == (mid_x, mid_y)
+        buddy.core.sim.snap_home(mid_x, mid_y)
+        buddy.core.maybe_edge_dock()
+        assert buddy.core.sim.home == (mid_x, mid_y)
     finally:
         buddy.close()

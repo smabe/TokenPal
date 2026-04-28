@@ -30,6 +30,7 @@ from tokenpal.config.schema import FontConfig
 from tokenpal.config.ui_state import UiState
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE, BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
+from tokenpal.ui.buddy_core import BuddyCore
 from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt._chrome import BuddyResizeGrip
@@ -41,7 +42,6 @@ from tokenpal.ui.qt.buddy_window import (
 from tokenpal.ui.qt.buddy_window import (
     DOCK_OFFSET_Y as _DOCK_OFFSET_Y,
 )
-from tokenpal.ui.buddy_core import BuddyCore
 from tokenpal.ui.qt.buddy_window import (
     BuddyWindow,
 )

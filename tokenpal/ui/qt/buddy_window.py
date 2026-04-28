@@ -13,12 +13,10 @@ from __future__ import annotations
 
 import math
 import sys
-import time
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, Signal
 from PySide6.QtGui import (
-    QGuiApplication,
     QMouseEvent,
     QPainter,
     QPaintEvent,
@@ -28,13 +26,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from tokenpal.ui.buddy_core import (
-    BuddyCore,
-    EDGE_DOCK_THRESHOLD as _EDGE_DOCK_THRESHOLD,
-    FIXED_DT_S,
-    _PHYSICS_DEBUG,
-    measure_block_paint_width as _measure_block_paint_width,
-)
+from tokenpal.ui.buddy_core import _PHYSICS_DEBUG, FIXED_DT_S, BuddyCore
 from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt.physics import RigidBodyConfig
 
@@ -113,9 +105,50 @@ class BuddyWindow(QWidget):
     def core(self) -> BuddyCore:
         return self._core
 
+    # Forward the public BuddyCore surface so overlay code can treat
+    # ``_buddy`` as ``BuddyWindow | BuddyCore`` without dispatching on
+    # type. Read-only — mutators (set_frame / set_zoom / set_grab_target
+    # / etc.) are exposed below as explicit methods.
+
     @property
     def sim(self):  # type: ignore[no-untyped-def]
         return self._core.sim
+
+    @property
+    def zoom(self) -> float:
+        return self._core.zoom
+
+    @property
+    def art_w(self) -> int:
+        return self._core.art_w
+
+    @property
+    def art_h(self) -> int:
+        return self._core.art_h
+
+    @property
+    def cell_w(self) -> int:
+        return self._core.cell_w
+
+    @property
+    def line_h(self) -> int:
+        return self._core.line_h
+
+    @property
+    def frame_lines(self) -> list[str]:
+        return self._core.frame_lines
+
+    def com_art(self) -> tuple[float, float]:
+        return self._core.com_art()
+
+    def lerped_state(self) -> tuple[float, float, float]:
+        return self._core.lerped_state()
+
+    def wake_tick_timer(self) -> None:
+        self._core.wake_tick_timer()
+
+    def sleep_tick_timer(self) -> None:
+        self._core.sleep_tick_timer()
 
     def set_right_click_handler(
         self, handler: Callable[[QPoint], None] | None,
@@ -342,107 +375,3 @@ class BuddyWindow(QWidget):
     def closeEvent(self, event):  # type: ignore[no-untyped-def]
         self._core.sleep_tick_timer()
         super().closeEvent(event)
-
-    # --- Backward-compat private-attr shims ----------------------------
-    # The Quick path and tests reach into ``_sim``, ``_wake_timer``,
-    # etc. directly. After all callers migrate to the public BuddyCore
-    # API these can be deleted; for now they keep the QWidget surface
-    # source-compatible with the pre-split BuddyWindow.
-
-    @property
-    def _sim(self):  # type: ignore[no-untyped-def]
-        return self._core.sim
-
-    @property
-    def _art_w(self) -> int:
-        return self._core.art_w
-
-    @property
-    def _art_h(self) -> int:
-        return self._core.art_h
-
-    @property
-    def _cell_w(self) -> int:
-        return self._core.cell_w
-
-    @property
-    def _line_h(self) -> int:
-        return self._core.line_h
-
-    @property
-    def _zoom(self) -> float:
-        return self._core.zoom
-
-    @property
-    def _font(self):  # type: ignore[no-untyped-def]
-        return self._core._font
-
-    @property
-    def _frame_lines(self) -> list[str]:
-        return self._core.frame_lines
-
-    @property
-    def _paint_target_ts(self) -> float | None:
-        return self._core.paint_target_ts
-
-    @property
-    def _last_step_ts(self) -> float:
-        return self._core.last_step_ts
-
-    @property
-    def _theta_prev(self) -> float:
-        return self._core.theta_prev
-
-    @property
-    def _pos_prev(self) -> tuple[float, float]:
-        return self._core.pos_prev
-
-    @property
-    def _drag_active(self) -> bool:
-        return self._core.is_dragging()
-
-    @_drag_active.setter
-    def _drag_active(self, value: bool) -> None:
-        self._core._drag_active = value
-
-    @property
-    def _on_right_click(self):  # type: ignore[no-untyped-def]
-        return self._core.right_click_handler
-
-    @property
-    def _timer(self):  # type: ignore[no-untyped-def]
-        return self._core._timer
-
-    def _com_art(self) -> tuple[float, float]:
-        return self._core.com_art()
-
-    def _render_art_pixmap(self):  # type: ignore[no-untyped-def]
-        return self._core.render_art_pixmap(self.devicePixelRatioF())
-
-    def _on_tick(self) -> None:
-        self._core._on_tick()
-
-    def _wake_timer(self) -> None:
-        self._core.wake_tick_timer()
-
-    def _sleep_timer(self) -> None:
-        self._core.sleep_tick_timer()
-
-    def _maybe_edge_dock(self) -> None:
-        self._core.maybe_edge_dock()
-
-    def _begin_drag(
-        self, art_pos: QPointF, cursor_global: QPointF,
-    ) -> None:
-        self._core.begin_drag(art_pos, cursor_global)
-
-    def _refresh_view(self) -> None:
-        """Compatibility shim — pre-split this resized + repainted in
-        one call. Now triggered by the core's tick signal; callers
-        forcing a manual refresh still work."""
-        self._on_core_tick()
-
-
-# Re-export for callers reaching into the QWidget module for these
-# constants (e.g. the Quick path's _clamped_lerp helper).
-_FIXED_DT_S = FIXED_DT_S

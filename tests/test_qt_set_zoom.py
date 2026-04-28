@@ -31,23 +31,23 @@ def test_buddy_set_zoom_rescales_font_cells_and_inertia(
         frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0), font_size=14,
     )
     try:
-        base_size = buddy._font.pointSize()
-        base_cell_w = buddy._cell_w
-        base_line_h = buddy._line_h
-        base_art_w = buddy._art_w
-        base_art_h = buddy._art_h
-        base_inertia = buddy._sim.config.inertia
+        base_size = buddy.core._font.pointSize()
+        base_cell_w = buddy.core.cell_w
+        base_line_h = buddy.core.line_h
+        base_art_w = buddy.core.art_w
+        base_art_h = buddy.core.art_h
+        base_inertia = buddy.core.sim.config.inertia
 
         buddy.set_zoom(2.0)
 
-        assert buddy._font.pointSize() == base_size * 2
-        assert buddy._cell_w >= base_cell_w
-        assert buddy._line_h > base_line_h
-        assert buddy._art_w > base_art_w
-        assert buddy._art_h > base_art_h
+        assert buddy.core._font.pointSize() == base_size * 2
+        assert buddy.core.cell_w >= base_cell_w
+        assert buddy.core.line_h > base_line_h
+        assert buddy.core.art_w > base_art_w
+        assert buddy.core.art_h > base_art_h
         # Inertia is mass × R²/2 with R derived from art bounds, so a
         # ~2× linear scale should land inertia near 4× the baseline.
-        assert buddy._sim.config.inertia > base_inertia * 2.5
+        assert buddy.core.sim.config.inertia > base_inertia * 2.5
     finally:
         buddy.close()
 
@@ -59,13 +59,13 @@ def test_buddy_set_zoom_noop_for_same_factor_and_rejects_zero(
         frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0),
     )
     try:
-        before = (buddy._font.pointSize(), buddy._sim.config.inertia)
+        before = (buddy.core._font.pointSize(), buddy.core.sim.config.inertia)
         buddy.set_zoom(1.0)
-        assert (buddy._font.pointSize(), buddy._sim.config.inertia) == before
+        assert (buddy.core._font.pointSize(), buddy.core.sim.config.inertia) == before
         buddy.set_zoom(0.0)
-        assert (buddy._font.pointSize(), buddy._sim.config.inertia) == before
+        assert (buddy.core._font.pointSize(), buddy.core.sim.config.inertia) == before
         buddy.set_zoom(-1.5)
-        assert (buddy._font.pointSize(), buddy._sim.config.inertia) == before
+        assert (buddy.core._font.pointSize(), buddy.core.sim.config.inertia) == before
     finally:
         buddy.close()
 
@@ -81,9 +81,9 @@ def test_buddy_set_zoom_scales_force_magnitude_physics(
         frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0), font_size=14,
     )
     try:
-        cfg_1x = buddy._sim.config
+        cfg_1x = buddy.core.sim.config
         buddy.set_zoom(2.0)
-        cfg_2x = buddy._sim.config
+        cfg_2x = buddy.core.sim.config
         assert cfg_2x.gravity == cfg_1x.gravity
         assert cfg_2x.max_linear_speed == cfg_1x.max_linear_speed * 2.0
         assert cfg_2x.upright_bias_strength == cfg_1x.upright_bias_strength * 4.0
@@ -110,11 +110,11 @@ def test_buddy_set_zoom_chains_from_base_not_current(
     )
     try:
         buddy.set_zoom(2.0)
-        size_at_2x = buddy._font.pointSize()
+        size_at_2x = buddy.core._font.pointSize()
         buddy.set_zoom(1.0)
-        assert buddy._font.pointSize() == 14
+        assert buddy.core._font.pointSize() == 14
         buddy.set_zoom(2.0)
-        assert buddy._font.pointSize() == size_at_2x
+        assert buddy.core._font.pointSize() == size_at_2x
     finally:
         buddy.close()
 
@@ -186,12 +186,12 @@ def test_overlay_set_zoom_clamps_and_fans_out(qapp: QApplication) -> None:
     try:
         overlay.set_zoom(5.0)  # above max
         assert overlay._zoom == 2.5
-        assert overlay._buddy is not None and overlay._buddy._zoom == 2.5
+        assert overlay._buddy is not None and overlay._buddy.zoom == 2.5
         assert overlay._bubble is not None and overlay._bubble._zoom == 2.5
 
         overlay.set_zoom(0.1)  # below min
         assert overlay._zoom == 0.5
-        assert overlay._buddy._zoom == 0.5
+        assert overlay._buddy.zoom == 0.5
         assert overlay._dock is not None and overlay._dock._zoom == 0.5
     finally:
         overlay.teardown()
@@ -240,7 +240,7 @@ def test_overlay_restore_visibility_state_applies_zoom_at_setup(
     overlay.setup()
     try:
         assert overlay._zoom == 1.75
-        assert overlay._buddy is not None and overlay._buddy._zoom == 1.75
+        assert overlay._buddy is not None and overlay._buddy.zoom == 1.75
         assert overlay._bubble is not None and overlay._bubble._zoom == 1.75
         assert overlay._dock is not None and overlay._dock._zoom == 1.75
     finally:
@@ -299,7 +299,7 @@ def test_resize_grip_pose_tracks_buddy_rotation(qapp: QApplication) -> None:
         upright_pos = overlay._resize_grip.pos()
 
         # Force a non-zero theta on the simulator and re-pose.
-        overlay._buddy._sim._theta = math.radians(30.0)
+        overlay._buddy.core.sim._theta = math.radians(30.0)
         overlay._reposition_grip()
 
         assert overlay._resize_grip._angle_rad != upright_angle, (

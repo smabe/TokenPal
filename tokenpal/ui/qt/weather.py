@@ -782,11 +782,8 @@ class SkyWindow(QWidget):
         self.update()
 
     def _measure_cell_w(self) -> int:
-        # Import lazily to avoid a circular when buddy_window is the first
-        # user of this helper. The routine is the same as
-        # BuddyWindow._measure_block_paint_width.
-        from tokenpal.ui.qt.buddy_window import _measure_block_paint_width
-        return max(_measure_block_paint_width(self._font) - 1, 1)
+        from tokenpal.ui.buddy_core import measure_block_paint_width
+        return max(measure_block_paint_width(self._font) - 1, 1)
 
     # --- Geometry ----------------------------------------------------
 
