@@ -28,13 +28,14 @@ from tokenpal.config.chatlog_writer import (
 )
 from tokenpal.config.schema import FontConfig
 from tokenpal.ui.qt._text_fx import qt_font_from_config, scale_font
-
-_TYPING_INTERVAL_MS = 30
-_BUBBLE_PADDING = 12
-_BUBBLE_MAX_WIDTH = 360
-_BUBBLE_WRAP_SLACK = 28
-_BUBBLE_RADIUS = 10
-_BUBBLE_BG_ALPHA = 232
+from tokenpal.ui.qt.speech_bubble import (
+    _BUBBLE_BG_ALPHA,
+    _BUBBLE_MAX_WIDTH,
+    _BUBBLE_PADDING,
+    _BUBBLE_RADIUS,
+    _BUBBLE_WRAP_SLACK,
+    _TYPING_INTERVAL_MS,
+)
 
 
 class BubbleQuickItem(QQuickItem):
@@ -73,8 +74,6 @@ class BubbleQuickItem(QQuickItem):
         self._visible_text = ""
         self._content_w = 0
         self._content_h = 0
-        self._wrapped_cache: list[str] = []
-        self._wrapped_cache_key: tuple[str, int] = ("", 0)
 
         self._anchor_parent = QPointF(0.0, 0.0)
 
@@ -155,7 +154,6 @@ class BubbleQuickItem(QQuickItem):
 
     def _reapply_font(self) -> None:
         self._font = scale_font(self._base_font, self._zoom)
-        self._wrapped_cache_key = ("", 0)
         if self._full_text:
             self._resize_for_text(self._full_text)
         self._image_dirty = True
@@ -188,9 +186,8 @@ class BubbleQuickItem(QQuickItem):
         self.setY(self._anchor_parent.y() - float(self._content_h))
 
     def _wrap_lines(self, text: str, fm: object) -> list[str]:
-        key = (text, self._content_w)
-        if key == self._wrapped_cache_key:
-            return self._wrapped_cache
+        # Visible text changes every typing tick, so a per-text cache
+        # never hits during the typing animation. Just rewrap each call.
         lines: list[str] = []
         for paragraph in text.splitlines() or [""]:
             if not paragraph:
@@ -209,8 +206,6 @@ class BubbleQuickItem(QQuickItem):
                     width += w
             if current:
                 lines.append(" ".join(current))
-        self._wrapped_cache = lines
-        self._wrapped_cache_key = key
         return lines
 
     def _render_image(self) -> QImage | None:
@@ -243,12 +238,10 @@ class BubbleQuickItem(QQuickItem):
         if self._image_dirty or self._image is None:
             self._image = self._render_image()
             self._image_dirty = False
-            if self._texture is not None:
-                self._texture = None
-        node = old_node
         if self._image is None:
             return None
-        if self._texture is None or self._tex_image_id != id(self._image):
+        node = old_node
+        if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
             if node is None:

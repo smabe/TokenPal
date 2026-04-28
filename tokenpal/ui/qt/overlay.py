@@ -34,7 +34,11 @@ from tokenpal.ui.qt import ensure_qapplication
 from tokenpal.ui.qt._chrome import BuddyResizeGrip
 from tokenpal.ui.qt._log_window import TranslucentLogWindow
 from tokenpal.ui.qt._text_fx import qt_font_from_config
-from tokenpal.ui.qt.buddy_window import BuddyWindow
+from tokenpal.ui.qt.buddy_window import (
+    BUBBLE_HOVER_OFFSET_Y as _BUBBLE_HOVER_OFFSET_Y,
+    DOCK_OFFSET_Y as _DOCK_OFFSET_Y,
+    BuddyWindow,
+)
 from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
 from tokenpal.ui.qt.cloud_dialog import CloudDialog
 from tokenpal.ui.qt.dock_mock import DockMock
@@ -68,8 +72,6 @@ _BUBBLE_HIDE_DELAY_MS = 15000  # minimum lingers before auto-hide
 # muted, which reads as "frozen UI" to the user.
 _BUBBLE_TTS_MS_PER_CHAR = 100
 _BUBBLE_TTS_PADDING_MS = 2000
-_BUBBLE_HOVER_OFFSET_Y = 16    # px above the buddy window
-_DOCK_OFFSET_Y = 4             # px below the buddy window's bottom edge
 _CHAT_FONT_DEFAULT_SIZE = 13   # fallback + Ctrl+0 reset target
 # Park position for the real ``ChatDock`` while the swing-mock is up.
 # Off-screen but alive — hiding the NSWindow instead was breaking the

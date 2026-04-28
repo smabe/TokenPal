@@ -83,6 +83,14 @@ _COM_Y_FRACTION = 0.30
 _FOLLOWER_ROTATION_EPS = 0.01
 _FOLLOWER_OMEGA_EPS = 0.1
 
+# Pixel offsets between the buddy and his attached followers. The
+# overlay applies these in screen-axis coords on the QWidget path
+# (rotated through `_body_aligned_offset`); the Quick path embeds
+# them directly into the pivot-local position so the pivot's
+# rotation supplies the body-aligned twist for free.
+BUBBLE_HOVER_OFFSET_Y = 16
+DOCK_OFFSET_Y = 4
+
 # Reference zoom factor at which the invariant master sprite is
 # rasterized. paintEvent's drawPixmap implicitly scales to the current
 # zoom, so the master stays crisp from 0.5× up to roughly this value;

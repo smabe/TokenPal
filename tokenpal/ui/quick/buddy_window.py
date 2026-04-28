@@ -31,18 +31,16 @@ from PySide6.QtCore import QPointF, QSizeF, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 
-from tokenpal.ui.qt.buddy_window import BuddyWindow
+from tokenpal.ui.qt.buddy_window import (
+    BUBBLE_HOVER_OFFSET_Y,
+    DOCK_OFFSET_Y,
+    BuddyWindow,
+)
 from tokenpal.ui.quick._clickthrough import ClickThroughToggle
 from tokenpal.ui.quick.bubble_item import BubbleQuickItem
 from tokenpal.ui.quick.buddy_item import BuddyQuickItem
 from tokenpal.ui.quick.dock_mock_item import DockMockQuickItem
 from tokenpal.ui.quick.grip_item import GripQuickItem
-
-# Mirror tokenpal/ui/qt/overlay.py constants. Pivot-local offsets
-# embed these directly so the body-aligned offset falls out of the
-# pivot's rotation -- no per-frame `_body_aligned_offset` math.
-_BUBBLE_HOVER_OFFSET_Y = 16
-_DOCK_OFFSET_Y = 4
 
 _TRACE = bool(os.environ.get("TOKENPAL_QUICK_TRACE"))
 _TRACE_EVERY = int(os.environ.get("TOKENPAL_QUICK_TRACE_EVERY", "1"))
@@ -135,6 +133,12 @@ class BuddyQuickWindow(QQuickWindow):
 
         self._grip_item = GripQuickItem()
         self._grip_item.setParentItem(self._pivot)
+
+        # Cache the art-geometry tuple driving follower anchor placement
+        # + buddy-item bounds. Recomputing those is fine; pushing them
+        # to the scene graph 240x/sec when nothing changed dirties
+        # transform nodes and emits geometry-change signals.
+        self._last_art_geom: tuple[int, int, float, float] | None = None
 
         self._click_through = ClickThroughToggle(
             self, self._opaque_probe, parent=self,
@@ -270,7 +274,6 @@ class BuddyQuickWindow(QQuickWindow):
 
     def _sync_geometry(self) -> None:
         m = self._model
-        com_x_art, com_y_art = m._com_art()
         theta, cx_lerp, cy_lerp = self._clamped_lerp()
 
         # Pivot lives in window-local coords. The window spans the
@@ -282,25 +285,30 @@ class BuddyQuickWindow(QQuickWindow):
         self._pivot.setX(cx_lerp - float(vox))
         self._pivot.setY(cy_lerp - float(voy))
         self._pivot.setRotation(math.degrees(theta))
+        self._buddy_item.update()
+
+        # Art geometry only changes on zoom / voice-frame swap; gate
+        # follower anchors + buddy-item bounds so we're not pushing
+        # the same numbers to the scene graph 240x/sec.
+        com_x_art, com_y_art = m._com_art()
+        geom = (m._art_w, m._art_h, com_x_art, com_y_art)
+        if geom == self._last_art_geom:
+            return
+        self._last_art_geom = geom
 
         self._buddy_item.setX(-com_x_art)
         self._buddy_item.setY(-com_y_art)
         self._buddy_item.setWidth(m._art_w)
         self._buddy_item.setHeight(m._art_h)
-        self._buddy_item.update()
 
         # Followers anchor in pivot-local space; pivot rotation gives
-        # them the body-aligned offset for free. Positions only depend
-        # on art geometry so this is a no-op when nothing changed.
-        head_px = m._art_w / 2.0 - com_x_art
-        head_py = -com_y_art
+        # them the body-aligned offset for free.
+        head_x = m._art_w / 2.0 - com_x_art
         self._bubble_item.set_anchor_in_parent(
-            head_px, head_py - float(_BUBBLE_HOVER_OFFSET_Y),
+            head_x, -com_y_art - float(BUBBLE_HOVER_OFFSET_Y),
         )
-        foot_px = m._art_w / 2.0 - com_x_art
-        foot_py = float(m._art_h) - com_y_art
         self._dock_mock_item.set_anchor_in_parent(
-            foot_px, foot_py + float(_DOCK_OFFSET_Y),
+            head_x, float(m._art_h) - com_y_art + float(DOCK_OFFSET_Y),
         )
         self._grip_item.set_anchor_in_parent(
             float(m._art_w) - com_x_art, float(m._art_h) - com_y_art,

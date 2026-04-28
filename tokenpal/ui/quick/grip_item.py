@@ -15,28 +15,15 @@ sampling instead of layered-window per-pixel hit-test).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtQuick import QQuickItem, QSGSimpleTextureNode
 
-# Mirror tokenpal/ui/qt/_chrome.py constants. Duplicated rather than
-# imported so the Quick path stays free of QWidget side imports.
-BUDDY_GRIP_HIT_SIDE = 48
-SIZE_GRIP_SIDE = 16
-GRIP_DOT_ROWS = 3
-GRIP_DOT_SPACING = 5
-GRIP_DOT_INSET = 3
-
-
-def _paint_diagonal_dots(painter: QPainter, side: int) -> None:
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor.fromRgbF(1.0, 1.0, 1.0, 0.4))
-    for row in range(GRIP_DOT_ROWS):
-        for col in range(GRIP_DOT_ROWS - row):
-            cx = side - GRIP_DOT_INSET - col * GRIP_DOT_SPACING
-            cy = side - GRIP_DOT_INSET - row * GRIP_DOT_SPACING
-            painter.drawEllipse(QPoint(cx, cy), 1, 1)
+from tokenpal.ui.qt._chrome import (
+    BUDDY_GRIP_HIT_SIDE,
+    SIZE_GRIP_SIDE,
+    _paint_diagonal_dots,
+)
 
 
 class GripQuickItem(QQuickItem):
@@ -53,9 +40,11 @@ class GripQuickItem(QQuickItem):
         self.setHeight(float(self._side))
 
         self._anchor_parent = QPointF(0.0, 0.0)
-        self._image: QImage | None = None
+        # Painted hit rect + dots are constant -- render once, reuse
+        # the same QImage forever; updatePaintNode's id-equality check
+        # then rebinds the existing QSGTexture each frame at zero cost.
+        self._image: QImage = self._render_image()
         self._texture = None
-        self._image_dirty = True
         self._tex_image_id: int | None = None
 
         self._last_y: int | None = None
@@ -82,11 +71,7 @@ class GripQuickItem(QQuickItem):
 
     def updatePaintNode(self, old_node, _data):
         node = old_node
-        if self._image_dirty or self._image is None:
-            self._image = self._render_image()
-            self._image_dirty = False
-            self._texture = None
-        if self._texture is None or self._tex_image_id != id(self._image):
+        if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
             if node is None:

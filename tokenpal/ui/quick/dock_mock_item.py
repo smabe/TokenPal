@@ -26,7 +26,6 @@ class DockMockQuickItem(QQuickItem):
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
         self._image: QImage | None = None
-        self._image_dirty = False
         self._texture = None
         self._tex_image_id: int | None = None
         self._anchor_parent = QPointF(0.0, 0.0)
@@ -43,8 +42,9 @@ class DockMockQuickItem(QQuickItem):
         self._content_w = pixmap.width() / dpr
         self._content_h = pixmap.height() / dpr
         # Convert once on the GUI thread; updatePaintNode just uploads.
+        # Fresh QImage gets a new id() so updatePaintNode's id-mismatch
+        # branch will rebuild the texture.
         self._image = pixmap.toImage()
-        self._image_dirty = True
         self.setWidth(self._content_w)
         self.setHeight(self._content_h)
         self._reposition()
@@ -80,17 +80,12 @@ class DockMockQuickItem(QQuickItem):
         self.setY(self._anchor_parent.y())
 
     def updatePaintNode(self, old_node, _data):
-        node = old_node
         if self._image is None:
             return None
-        if (
-            self._image_dirty
-            or self._texture is None
-            or self._tex_image_id != id(self._image)
-        ):
+        node = old_node
+        if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
-            self._image_dirty = False
             if node is None:
                 node = QSGSimpleTextureNode()
             node.setTexture(self._texture)
