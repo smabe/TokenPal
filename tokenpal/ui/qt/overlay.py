@@ -436,7 +436,7 @@ class QtOverlay(AbstractOverlay):
                     apply_macos_click_through(self._buddy_rain_overlay)
                     self._buddy_rain_overlay.reanchor()
                 if self._use_quick_backend and self._buddy_host is not None:
-                    self._buddy_host.raise_()  # type: ignore[union-attr]
+                    self._buddy_host.raise_()  # type: ignore[attr-defined]
             else:
                 self._buddy_host.hide()  # type: ignore[union-attr]
                 if self._resize_grip is not None:
@@ -549,7 +549,7 @@ class QtOverlay(AbstractOverlay):
                 apply_macos_click_through(self._buddy_rain_overlay)
                 self._buddy_rain_overlay.reanchor()
             if self._use_quick_backend and self._buddy_host is not None:
-                self._buddy_host.raise_()  # type: ignore[union-attr]
+                self._buddy_host.raise_()  # type: ignore[attr-defined]
             QTimer.singleShot(150, self._reanchor_weather)
         for name, window in self._log_windows.items():
             if self._user_visible.get(name, False):
@@ -616,7 +616,7 @@ class QtOverlay(AbstractOverlay):
             and self._buddy_host is not None
             and self._buddy_host is not self._buddy
         ):
-            self._buddy_host.close()  # type: ignore[union-attr]
+            self._buddy_host.close()  # type: ignore[attr-defined]
         if self._tray is not None:
             self._tray.hide()
         if self._app is not None:

@@ -98,8 +98,9 @@ def main() -> int:
         last[0] = now
         total[0] += 1
 
-    window.frameSwapped.connect(on_frame_swapped)
-    refresh = window.screen().refreshRate() if window.screen() else 60.0
+    aw = window.active_window
+    aw.frameSwapped.connect(on_frame_swapped)
+    refresh = aw.screen().refreshRate() if aw.screen() else 60.0
 
     def report() -> None:
         if not intervals_ms:

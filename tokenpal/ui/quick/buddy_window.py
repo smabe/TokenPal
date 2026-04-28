@@ -1,24 +1,34 @@
-"""QQuickWindow host for the buddy.
+"""QQuick host for the buddy.
 
-Wraps a hidden ``BuddyWindow`` (QWidget) as the physics + geometry
-model. The window is sized to span the primary screen and never moved
--- moving the window via SetWindowPos every frame stalls the Windows
-compositor (visible as 7-15 ms vsync gaps + microsecond catch-up
-bursts). The buddy moves *inside* the window via QQuickItem position,
-which is a pure scene-graph property change with no Win32 round-trip.
-This is the standard game-engine pattern: fixed window, content moves
-inside.
+One ``QQuickWindow`` per attached screen, each spanning that screen's
+geometry and never moved. The buddy items live under a single pivot
+``QQuickItem`` that is reparented to whichever window currently
+contains the buddy's COM. Only the active window drives physics via
+``frameSwapped``; the others render empty transparent surfaces.
 
-Click-through via ``ClickThroughToggle`` (Windows only). The
-QQuickItem hierarchy is::
+Why per-screen (not one virtual-desktop window): a single
+``QQuickWindow`` spanning ``virtualGeometry`` produces a disjointed /
+double-composite render on a secondary screen with a different DPR
+than the primary, because Qt's per-monitor DPI scaling can't apply
+cleanly to one DirectComposition surface that crosses a DPR boundary.
+
+Why fixed windows (not moving SetWindowPos every frame): moving a
+translucent window via SetWindowPos stalls the Windows compositor —
+visible as 7-15 ms vsync gaps + microsecond catch-up bursts. The
+buddy moves *inside* the active window via QQuickItem position, which
+is a pure scene-graph property change with no Win32 round-trip.
+
+Click-through via per-window ``ClickThroughToggle`` (Windows only).
+The QQuickItem hierarchy on the active window is::
 
     contentItem
-    └─ pivot (positioned at COM in window coords; rotated by theta)
+    └─ pivot (positioned at COM in window-local coords; rotated by theta)
        └─ buddy_item (offset -com_art so art-COM lands at pivot origin)
+       └─ bubble_item / dock_mock_item / grip_item
 
-This composition is necessary because ``QQuickItem.TransformOrigin``
-exposes only nine discrete pivot points. The COM is head-heavy
-(``_COM_Y_FRACTION = 0.30``) so it does not coincide with any of them.
+Composition is necessary because ``QQuickItem.TransformOrigin`` exposes
+only nine discrete pivot points; the COM is head-heavy
+(``_COM_Y_FRACTION = 0.30``) and does not coincide with any of them.
 """
 from __future__ import annotations
 
@@ -26,9 +36,10 @@ import math
 import os
 import sys
 import time
+from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QSizeF, Qt, QTimer
-from PySide6.QtGui import QColor, QGuiApplication
+from PySide6.QtCore import QObject, QPoint, QPointF, QSizeF, Qt, QTimer
+from PySide6.QtGui import QColor, QGuiApplication, QScreen
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 
 from tokenpal.ui.qt.buddy_window import (
@@ -50,15 +61,12 @@ _TRACE_PATH = os.environ.get(
 )
 
 
-class BuddyQuickWindow(QQuickWindow):
-    def __init__(
-        self,
-        frame_lines: list[str],
-        initial_anchor: tuple[float, float] = (400.0, 200.0),
-        font_family: str = "Courier",
-        font_size: int = 14,
-    ) -> None:
+class _ScreenWindow(QQuickWindow):
+    """One transparent QQuickWindow pinned to a single screen."""
+
+    def __init__(self, screen: QScreen) -> None:
         super().__init__()
+        self.screen_ref = screen
         self.setColor(QColor(Qt.GlobalColor.transparent))
         flags = (
             Qt.WindowType.FramelessWindowHint
@@ -68,24 +76,21 @@ class BuddyQuickWindow(QQuickWindow):
         if sys.platform != "darwin":
             flags |= Qt.WindowType.Tool
         self.setFlags(flags)
+        geo = screen.geometry()
+        self.setPosition(geo.x(), geo.y())
+        self.resize(geo.width(), geo.height())
+        self.virtual_origin: tuple[int, int] = (geo.x(), geo.y())
 
-        # Fixed window covering the primary screen -- never moved.
-        # Spanning the full virtualGeometry across all attached
-        # screens *almost* works: the buddy can slide across the
-        # screen edge -- but if the secondary monitor has a different
-        # DPR than the primary, Qt's per-monitor DPI handling against
-        # a single DirectComposition surface produces a disjointed /
-        # double-composite render on the secondary screen. The right
-        # fix is one QQuickWindow per screen with reparenting on edge
-        # cross (parking-lot item in plans/qt-it-quick-migration.md).
-        primary = QGuiApplication.primaryScreen()
-        if primary is not None:
-            geo = primary.geometry()
-            self.setPosition(geo.x(), geo.y())
-            self.resize(geo.width(), geo.height())
-            self._virtual_origin = (geo.x(), geo.y())
-        else:
-            self._virtual_origin = (0, 0)
+
+class BuddyQuickWindow(QObject):
+    def __init__(
+        self,
+        frame_lines: list[str],
+        initial_anchor: tuple[float, float] = (400.0, 200.0),
+        font_family: str = "Courier",
+        font_size: int = 14,
+    ) -> None:
+        super().__init__()
 
         self._model = BuddyWindow(
             frame_lines=frame_lines,
@@ -94,32 +99,18 @@ class BuddyQuickWindow(QQuickWindow):
             font_size=font_size,
         )
         self._model.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        # Suppress the QWidget paint path -- nothing visible to render
-        # there, and we don't want to spend cycles on it.
         self._model.paintEvent = lambda _event: None  # type: ignore[method-assign]
-        # Offscreen-rescue tick bails on !isVisible(); WA_DontShowOnScreen
-        # keeps this off the native window list.
+        # WA_DontShowOnScreen makes show() logical-only; required so the
+        # offscreen-rescue tick doesn't bail on !isVisible().
         self._model.show()
-        # Phase-lock physics to vsync. A QTimer at 4 ms beats against
-        # FIXED_DT=4.166 ms; about every 30 frames no physics step
-        # drains between two vsyncs and the SAME theta is painted twice,
-        # producing a visible "skip a beat". frameSwapped fires once
-        # per present, so we get exactly one physics tick + lerp + paint
-        # per vsync, alpha pinned at 1.0.
+        # Physics drives off frameSwapped (one tick per vsync, alpha pinned
+        # near 1) -- the model's own QTimer beats against FIXED_DT and
+        # produces visible skips at 240 Hz.
         self._model._timer.stop()
         self._model._wake_timer = lambda: None  # type: ignore[method-assign]
         self._model._sleep_timer = lambda: None  # type: ignore[method-assign]
-        self.frameSwapped.connect(self._on_sync_tick)
-        # Fallback: when nothing is painting (buddy settled, no
-        # update() calls), frameSwapped stops firing. Kick a paint at
-        # ~60 Hz so physics wakes on demand. Uses Qt.CoarseTimer because
-        # this is just a heartbeat, not a frame driver.
-        self._kick_timer = QTimer(self)
-        self._kick_timer.setInterval(16)
-        self._kick_timer.timeout.connect(lambda: self._buddy_item.update())
 
         self._pivot = QQuickItem()
-        self._pivot.setParentItem(self.contentItem())
         self._pivot.setSize(QSizeF(0.0, 0.0))
         self._pivot.setTransformOrigin(QQuickItem.TransformOrigin.TopLeft)
 
@@ -137,17 +128,33 @@ class BuddyQuickWindow(QQuickWindow):
         self._grip_item = GripQuickItem()
         self._grip_item.setParentItem(self._pivot)
 
-        # Cache the art-geometry tuple driving follower anchor placement
-        # + buddy-item bounds. Recomputing those is fine; pushing them
-        # to the scene graph 240x/sec when nothing changed dirties
-        # transform nodes and emits geometry-change signals.
+        self._windows: list[_ScreenWindow] = []
+        self._screen_to_window: dict[QScreen, _ScreenWindow] = {}
+        self._click_through: dict[_ScreenWindow, ClickThroughToggle] = {}
+        for screen in QGuiApplication.screens():
+            w = _ScreenWindow(screen)
+            self._windows.append(w)
+            self._screen_to_window[screen] = w
+            self._click_through[w] = ClickThroughToggle(
+                w, self._make_probe(w), parent=w,
+            )
+
+        # Pushing the same art-geometry to the scene graph 240x/sec
+        # dirties transform nodes and emits geometry-change signals.
         self._last_art_geom: tuple[int, int, float, float] | None = None
 
-        self._click_through = ClickThroughToggle(
-            self, self._opaque_probe, parent=self,
+        ax, ay = self._model._sim.position
+        self._active: _ScreenWindow = (
+            self._pick_screen(ax, ay) or self._windows[0]
         )
-        if not os.environ.get("TOKENPAL_QUICK_NO_CLICKTHROUGH"):
-            self._click_through.start()
+        self._pivot.setParentItem(self._active.contentItem())
+        self._active.frameSwapped.connect(self._on_sync_tick)
+
+        # frameSwapped pauses when nothing is painting; a 60 Hz kick wakes
+        # physics on demand.
+        self._kick_timer = QTimer(self)
+        self._kick_timer.setInterval(16)
+        self._kick_timer.timeout.connect(lambda: self._buddy_item.update())
 
         self._trace_count = 0
         self._trace_t0 = time.perf_counter()
@@ -155,18 +162,13 @@ class BuddyQuickWindow(QQuickWindow):
         if _TRACE:
             self._trace_fp = open(_TRACE_PATH, "w", buffering=1, encoding="utf-8")
             print(f"[trace] writing to {_TRACE_PATH}")
-            self.frameSwapped.connect(self._on_frame_swapped_trace)
+            self._active.frameSwapped.connect(self._on_frame_swapped_trace)
 
         self._sync_geometry()
         self._kick_timer.start()
-        # Bootstrap the frameSwapped chain: schedule an initial paint so
-        # the first vsync fires our sync.
         self._buddy_item.update()
 
-    def _on_frame_swapped_trace(self) -> None:
-        t = (time.perf_counter() - self._trace_t0) * 1000.0
-        if self._trace_fp is not None:
-            self._trace_fp.write(f"FS  t={t:8.3f}ms\n")
+    # --- public API consumed by QtOverlay -----------------------------
 
     @property
     def model(self) -> BuddyWindow:
@@ -188,29 +190,98 @@ class BuddyQuickWindow(QQuickWindow):
     def grip_item(self) -> GripQuickItem:
         return self._grip_item
 
-    def _opaque_probe(self, client_point: QPointF) -> bool:
-        if self._buddy_item.contains(
-            self._buddy_item.mapFromScene(client_point),
-        ):
-            return True
-        if self._bubble_item.isVisible() and self._bubble_item.contains(
-            self._bubble_item.mapFromScene(client_point),
-        ):
-            return True
-        if self._grip_item.isVisible() and self._grip_item.contains(
-            self._grip_item.mapFromScene(client_point),
-        ):
-            return True
-        return False
+    @property
+    def active_window(self) -> _ScreenWindow:
+        return self._active
+
+    def show(self) -> None:
+        for w in self._windows:
+            w.show()
+        if not os.environ.get("TOKENPAL_QUICK_NO_CLICKTHROUGH"):
+            for ct in self._click_through.values():
+                ct.start()
+
+    def hide(self) -> None:
+        for ct in self._click_through.values():
+            ct.stop()
+        for w in self._windows:
+            w.hide()
+
+    def raise_(self) -> None:
+        for w in self._windows:
+            w.raise_()
+
+    def close(self) -> None:
+        for ct in self._click_through.values():
+            ct.stop()
+        for w in self._windows:
+            w.close()
+        if self._trace_fp is not None:
+            self._trace_fp.close()
+            self._trace_fp = None
+
+    # --- multi-screen plumbing ---------------------------------------
+
+    def _pick_screen(self, x: float, y: float) -> _ScreenWindow | None:
+        screen = QGuiApplication.screenAt(QPoint(int(x), int(y)))
+        return self._screen_to_window.get(screen) if screen else None
+
+    def _make_probe(
+        self, w: _ScreenWindow,
+    ) -> Callable[[QPointF], bool]:
+        def probe(client_point: QPointF) -> bool:
+            if self._active is not w:
+                return False
+            if self._buddy_item.contains(
+                self._buddy_item.mapFromScene(client_point),
+            ):
+                return True
+            if self._bubble_item.isVisible() and self._bubble_item.contains(
+                self._bubble_item.mapFromScene(client_point),
+            ):
+                return True
+            if self._grip_item.isVisible() and self._grip_item.contains(
+                self._grip_item.mapFromScene(client_point),
+            ):
+                return True
+            return False
+        return probe
+
+    def _switch_active(self, target: _ScreenWindow) -> None:
+        if target is self._active:
+            return
+        self._active.frameSwapped.disconnect(self._on_sync_tick)
+        if _TRACE:
+            self._active.frameSwapped.disconnect(self._on_frame_swapped_trace)
+        self._pivot.setParentItem(target.contentItem())
+        self._active = target
+        self._active.frameSwapped.connect(self._on_sync_tick)
+        if _TRACE:
+            self._active.frameSwapped.connect(self._on_frame_swapped_trace)
+        # Textures are bound to the source window's scene graph.
+        self._invalidate_textures()
+        # Force re-push: pivot moved into a window with a different
+        # virtual_origin.
+        self._last_art_geom = None
+
+    def _invalidate_textures(self) -> None:
+        self._buddy_item._texture = None
+        self._buddy_item._cached_pixmap_id = None
+        for it in (self._bubble_item, self._dock_mock_item, self._grip_item):
+            it._texture = None
+            it._tex_image_id = None
+
+    # --- physics + paint loop ----------------------------------------
+
+    def _on_frame_swapped_trace(self) -> None:
+        t = (time.perf_counter() - self._trace_t0) * 1000.0
+        if self._trace_fp is not None:
+            self._trace_fp.write(f"FS  t={t:8.3f}ms\n")
 
     def _clamped_lerp(self) -> tuple[float, float, float]:
         """Like ``BuddyWindow._lerped_state`` but clamps theta alpha to
-        [0, 1]. The QWidget path repaints synchronously inside _on_tick
-        so alpha is always near 1; the Quick path's vsync paint can land
-        mid-pump-interval at alpha up to ~2, where the model's theta
-        extrapolation oscillates against the next pump's actual physics
-        state and produces visible back-stepping. Position alpha is
-        already clamped in the model -- we just override theta."""
+        [0, 1]. Quick-path vsync paints can land at alpha up to ~2, where
+        the model's unclamped theta extrapolation visibly back-steps."""
         from tokenpal.ui.qt.buddy_window import _FIXED_DT_S
         m = self._model
         sample_ts = (
@@ -231,10 +302,11 @@ class BuddyQuickWindow(QQuickWindow):
         return (theta, ppx + (px - ppx) * alpha, ppy + (py - ppy) * alpha)
 
     def _on_sync_tick(self) -> None:
-        # Drain physics (advances _last_step_ts to now, sets
-        # _paint_target_ts to next vsync inside _on_tick), then sync the
-        # scene graph. Coherent: alpha stays near 0.96 every frame.
         self._model._on_tick()
+        cx, cy = self._model._sim.position
+        target = self._pick_screen(cx, cy)
+        if target is not None and target is not self._active:
+            self._switch_active(target)
         self._sync_geometry()
         if _TRACE:
             self._trace_count += 1
@@ -267,8 +339,6 @@ class BuddyQuickWindow(QQuickWindow):
             self._trace_fp.write(line + "\n")
 
     def _trace_t0_mono(self) -> float:
-        # Anchor monotonic timestamps to the perf_counter t0 for readable
-        # millisecond offsets. Cache after first call.
         if not hasattr(self, "_t0_mono"):
             self._t0_mono = time.monotonic() - (
                 time.perf_counter() - self._trace_t0
@@ -279,20 +349,12 @@ class BuddyQuickWindow(QQuickWindow):
         m = self._model
         theta, cx_lerp, cy_lerp = self._clamped_lerp()
 
-        # Pivot lives in window-local coords. The window spans the
-        # virtual desktop, so window-local = screen - virtualGeometry
-        # topLeft (which can be negative when secondary screens sit
-        # left of / above the primary). The simulator's lerp output
-        # is in screen coords, so subtract the offset.
-        vox, voy = self._virtual_origin
+        vox, voy = self._active.virtual_origin
         self._pivot.setX(cx_lerp - float(vox))
         self._pivot.setY(cy_lerp - float(voy))
         self._pivot.setRotation(math.degrees(theta))
         self._buddy_item.update()
 
-        # Art geometry only changes on zoom / voice-frame swap; gate
-        # follower anchors + buddy-item bounds so we're not pushing
-        # the same numbers to the scene graph 240x/sec.
         com_x_art, com_y_art = m._com_art()
         geom = (m._art_w, m._art_h, com_x_art, com_y_art)
         if geom == self._last_art_geom:
@@ -304,8 +366,6 @@ class BuddyQuickWindow(QQuickWindow):
         self._buddy_item.setWidth(m._art_w)
         self._buddy_item.setHeight(m._art_h)
 
-        # Followers anchor in pivot-local space; pivot rotation gives
-        # them the body-aligned offset for free.
         head_x = m._art_w / 2.0 - com_x_art
         self._bubble_item.set_anchor_in_parent(
             head_x, -com_y_art - float(BUBBLE_HOVER_OFFSET_Y),
