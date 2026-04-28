@@ -1,5 +1,21 @@
 # qt-it-quick-migration
 
+## Shipped state (2026-04-28)
+
+Phases 1–4 landed on Windows: spike, buddy port, followers, backend dispatch, plus a simplify pass. Buddy renders via QtQuick scene graph at sustained 240 fps on the dev panel (4K @ 240 Hz). Architecture is single-`QQuickWindow` with `QQuickItem` followers under a pivot; hidden `BuddyWindow` (`WA_DontShowOnScreen`) is the model. `[ui] backend = "qt" | "quick"` config gates the choice; default still `"qt"`.
+
+**Phase 5 (retire QWidget) is NOT shipped** — gated on cross-platform validation (macOS M-series + AMD laptop/desktop with Linux KDE/X11) we can't run from this box. When that hardware is available, a separate plan picks up Phase 5: flip the default, ship a bridge release, delete QWidget code paths.
+
+**Deferred from the original done criteria** (moved to `plans/qt-quick-followups.md`):
+- Multi-monitor support (works on single-screen; mixed-DPR multi-monitor produces disjoint render — needs per-screen QQuickWindow with reparenting on edge cross).
+- Cross-platform smoke pass on macOS / Linux KDE / Linux X11.
+- Automated tests under `tests/test_quick/`. Manual smokes (`tests/manual/quick_buddy.py`, `quick_followers.py`, `quick_backend_smoke.py`) have done the validation work in practice.
+- `docs/claude/ui.md` doc note for the Quick path.
+- Open-but-cosmetic bugs: bubble z-order vs. weather; off-buddy 240 fps throttle from `WS_EX_TRANSPARENT`; offscreen rescue silently disabled.
+- BuddyCore extraction (refactor the hidden QWidget out of `BuddyQuickWindow.model`).
+
+The full original spec, parking lot, and per-phase commit notes follow.
+
 ## Context
 
 Phase A of `plans/qt-it.md` shipped:
