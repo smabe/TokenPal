@@ -71,25 +71,21 @@ class BuddyQuickWindow(QQuickWindow):
             flags |= Qt.WindowType.Tool
         self.setFlags(flags)
 
-        # Fixed window covering the entire virtual desktop (the union
-        # of all attached screens) -- never moved. The buddy moves
-        # *inside* the window via QQuickItem position; if the window
-        # only spanned one screen the buddy would hit an invisible
-        # wall when dragged across a screen edge.
-        #
-        # virtualGeometry() returns the union rect including any
-        # secondary screens to the left of / above the primary, which
-        # can put origin at negative coordinates. The QQuickItem
-        # position math operates in window-local coords (== screen
-        # coords minus virtualGeometry().topLeft()), so we keep an
-        # offset and apply it when syncing the pivot to lerped
-        # screen-space state.
+        # Fixed window covering the primary screen -- never moved.
+        # Spanning the full virtualGeometry across all attached
+        # screens *almost* works: the buddy can slide across the
+        # screen edge -- but if the secondary monitor has a different
+        # DPR than the primary, Qt's per-monitor DPI handling against
+        # a single DirectComposition surface produces a disjointed /
+        # double-composite render on the secondary screen. The right
+        # fix is one QQuickWindow per screen with reparenting on edge
+        # cross (parking-lot item in plans/qt-it-quick-migration.md).
         primary = QGuiApplication.primaryScreen()
         if primary is not None:
-            virt = primary.virtualGeometry()
-            self.setPosition(virt.x(), virt.y())
-            self.resize(virt.width(), virt.height())
-            self._virtual_origin = (virt.x(), virt.y())
+            geo = primary.geometry()
+            self.setPosition(geo.x(), geo.y())
+            self.resize(geo.width(), geo.height())
+            self._virtual_origin = (geo.x(), geo.y())
         else:
             self._virtual_origin = (0, 0)
 
