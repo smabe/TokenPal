@@ -94,6 +94,16 @@ class DockMock(QWidget):
                 pos=(float(pos.x() + ax), float(pos.y() + ay)),
             )
         painter = QPainter(self)
+        # Fixed-size square; rotated content fills only a sub-rect so
+        # previous-frame pixels persist without an explicit clear.
+        # See SpeechBubble.paintEvent for the full reasoning.
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Clear,
+        )
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver,
+        )
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 

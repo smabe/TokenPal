@@ -329,6 +329,21 @@ class SpeechBubble(QWidget):
                 pos=(float(pos.x() + tx), float(pos.y() + ty)),
             )
         painter = QPainter(self)
+        # The bubble window is a fixed-size square sized for the
+        # rotation envelope, but each frame paints the rounded-rect
+        # content as a smaller rotated rect within it. Qt does not
+        # reliably clear translucent widgets between frames on Windows
+        # (qt-it research, QWidgetBackingStore::beginPaint), so the
+        # previous frame's rotated content persists in regions the new
+        # frame doesn't overlap — visible as a second bubble at the
+        # prior angle, the rotating ghost.
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Clear,
+        )
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver,
+        )
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 

@@ -206,6 +206,16 @@ class BuddyResizeGrip(QWidget):
                 pos=(float(pos_t.x() + ax_t), float(pos_t.y() + ay_t)),
             )
         painter = QPainter(self)
+        # Fixed-size square; rotated dots fill only a sub-rect so
+        # previous-frame pixels persist without an explicit clear.
+        # See SpeechBubble.paintEvent for the full reasoning.
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Clear,
+        )
+        painter.fillRect(self.rect(), Qt.GlobalColor.transparent)
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver,
+        )
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         ax, ay = self._anchor_widget
         side = BUDDY_GRIP_HIT_SIDE
