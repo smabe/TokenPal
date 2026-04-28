@@ -28,7 +28,7 @@ The QQuickItem hierarchy on the active window is::
 
 Composition is necessary because ``QQuickItem.TransformOrigin`` exposes
 only nine discrete pivot points; the COM is head-heavy
-(``_COM_Y_FRACTION = 0.30``) and does not coincide with any of them.
+(``COM_Y_FRACTION = 0.30``) and does not coincide with any of them.
 """
 from __future__ import annotations
 
@@ -42,11 +42,8 @@ from PySide6.QtCore import QObject, QPoint, QPointF, QSizeF, Qt, QTimer
 from PySide6.QtGui import QColor, QGuiApplication, QScreen
 from PySide6.QtQuick import QQuickItem, QQuickWindow
 
-from tokenpal.ui.qt.buddy_window import (
-    BUBBLE_HOVER_OFFSET_Y,
-    DOCK_OFFSET_Y,
-    BuddyWindow,
-)
+from tokenpal.ui.buddy_core import BuddyCore
+from tokenpal.ui.qt.buddy_window import BUBBLE_HOVER_OFFSET_Y, DOCK_OFFSET_Y
 from tokenpal.ui.quick._clickthrough import ClickThroughToggle
 from tokenpal.ui.quick.bubble_item import BubbleQuickItem
 from tokenpal.ui.quick.buddy_item import BuddyQuickItem
@@ -92,29 +89,22 @@ class BuddyQuickWindow(QObject):
     ) -> None:
         super().__init__()
 
-        self._model = BuddyWindow(
+        self._core = BuddyCore(
             frame_lines=frame_lines,
             initial_anchor=initial_anchor,
             font_family=font_family,
             font_size=font_size,
+            parent=self,
         )
-        self._model.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-        self._model.paintEvent = lambda _event: None  # type: ignore[method-assign]
-        # WA_DontShowOnScreen makes show() logical-only; required so the
-        # offscreen-rescue tick doesn't bail on !isVisible().
-        self._model.show()
-        # Physics drives off frameSwapped (one tick per vsync, alpha pinned
-        # near 1) -- the model's own QTimer beats against FIXED_DT and
-        # produces visible skips at 240 Hz.
-        self._model._timer.stop()
-        self._model._wake_timer = lambda: None  # type: ignore[method-assign]
-        self._model._sleep_timer = lambda: None  # type: ignore[method-assign]
+        # Physics drives off frameSwapped (one tick per vsync, alpha
+        # pinned near 1) — the core's own QTimer beats against FIXED_DT
+        # and produces visible skips at 240 Hz. We never start it.
 
         self._pivot = QQuickItem()
         self._pivot.setSize(QSizeF(0.0, 0.0))
         self._pivot.setTransformOrigin(QQuickItem.TransformOrigin.TopLeft)
 
-        self._buddy_item = BuddyQuickItem(self._model)
+        self._buddy_item = BuddyQuickItem(self._core)
         self._buddy_item.setParentItem(self._pivot)
 
         self._bubble_item = BubbleQuickItem(
@@ -143,7 +133,7 @@ class BuddyQuickWindow(QObject):
         # dirties transform nodes and emits geometry-change signals.
         self._last_art_geom: tuple[int, int, float, float] | None = None
 
-        ax, ay = self._model._sim.position
+        ax, ay = self._core.sim.position
         self._active: _ScreenWindow = (
             self._pick_screen(ax, ay) or self._windows[0]
         )
@@ -171,8 +161,8 @@ class BuddyQuickWindow(QObject):
     # --- public API consumed by QtOverlay -----------------------------
 
     @property
-    def model(self) -> BuddyWindow:
-        return self._model
+    def core(self) -> BuddyCore:
+        return self._core
 
     @property
     def buddy_item(self) -> BuddyQuickItem:
@@ -278,32 +268,9 @@ class BuddyQuickWindow(QObject):
         if self._trace_fp is not None:
             self._trace_fp.write(f"FS  t={t:8.3f}ms\n")
 
-    def _clamped_lerp(self) -> tuple[float, float, float]:
-        """Like ``BuddyWindow._lerped_state`` but clamps theta alpha to
-        [0, 1]. Quick-path vsync paints can land at alpha up to ~2, where
-        the model's unclamped theta extrapolation visibly back-steps."""
-        from tokenpal.ui.qt.buddy_window import _FIXED_DT_S
-        m = self._model
-        sample_ts = (
-            m._paint_target_ts
-            if m._paint_target_ts is not None
-            else time.monotonic()
-        )
-        delta_s = max(0.0, sample_ts - m._last_step_ts)
-        alpha = max(0.0, min(1.0, delta_s / _FIXED_DT_S))
-        delta_theta = m._sim.theta - m._theta_prev
-        if delta_theta > math.pi:
-            delta_theta -= 2.0 * math.pi
-        elif delta_theta < -math.pi:
-            delta_theta += 2.0 * math.pi
-        theta = m._theta_prev + delta_theta * alpha
-        px, py = m._sim.position
-        ppx, ppy = m._pos_prev
-        return (theta, ppx + (px - ppx) * alpha, ppy + (py - ppy) * alpha)
-
     def _on_sync_tick(self) -> None:
-        self._model._on_tick()
-        cx, cy = self._model._sim.position
+        self._core._on_tick()
+        cx, cy = self._core.sim.position
         target = self._pick_screen(cx, cy)
         if target is not None and target is not self._active:
             self._switch_active(target)
@@ -314,22 +281,22 @@ class BuddyQuickWindow(QObject):
                 self._dump_trace()
 
     def _dump_trace(self) -> None:
-        m = self._model
+        from tokenpal.ui.buddy_core import FIXED_DT_S
+        c = self._core
         t = (time.perf_counter() - self._trace_t0) * 1000.0
-        sx, sy = m._sim.position
-        ppx, ppy = m._pos_prev
-        last_ts_ms = (m._last_step_ts - self._trace_t0_mono()) * 1000.0
+        sx, sy = c.sim.position
+        ppx, ppy = c.pos_prev
+        last_ts_ms = (c.last_step_ts - self._trace_t0_mono()) * 1000.0
         paint_ts_ms = (
-            (m._paint_target_ts - self._trace_t0_mono()) * 1000.0
-            if m._paint_target_ts is not None else float("nan")
+            (c.paint_target_ts - self._trace_t0_mono()) * 1000.0
+            if c.paint_target_ts is not None else float("nan")
         )
-        theta_l, cx_l, cy_l = self._clamped_lerp()
-        from tokenpal.ui.qt.buddy_window import _FIXED_DT_S
-        sample_ts = m._paint_target_ts or time.monotonic()
-        alpha_raw = (sample_ts - m._last_step_ts) / _FIXED_DT_S
+        theta_l, cx_l, cy_l = c.lerped_state_clamped()
+        sample_ts = c.paint_target_ts or time.monotonic()
+        alpha_raw = (sample_ts - c.last_step_ts) / FIXED_DT_S
         line = (
             f"ST  t={t:8.3f}ms "
-            f"sim θ={m._sim.theta:+.4f} prev={m._theta_prev:+.4f} "
+            f"sim θ={c.sim.theta:+.4f} prev={c.theta_prev:+.4f} "
             f"sim pos=({sx:7.2f},{sy:7.2f}) prev=({ppx:7.2f},{ppy:7.2f}) "
             f"last_step={last_ts_ms:8.3f} paint={paint_ts_ms:8.3f} "
             f"α={alpha_raw:+.3f} "
@@ -346,8 +313,8 @@ class BuddyQuickWindow(QObject):
         return self._t0_mono
 
     def _sync_geometry(self) -> None:
-        m = self._model
-        theta, cx_lerp, cy_lerp = self._clamped_lerp()
+        c = self._core
+        theta, cx_lerp, cy_lerp = c.lerped_state_clamped()
 
         vox, voy = self._active.virtual_origin
         self._pivot.setX(cx_lerp - float(vox))
@@ -355,24 +322,24 @@ class BuddyQuickWindow(QObject):
         self._pivot.setRotation(math.degrees(theta))
         self._buddy_item.update()
 
-        com_x_art, com_y_art = m._com_art()
-        geom = (m._art_w, m._art_h, com_x_art, com_y_art)
+        com_x_art, com_y_art = c.com_art()
+        geom = (c.art_w, c.art_h, com_x_art, com_y_art)
         if geom == self._last_art_geom:
             return
         self._last_art_geom = geom
 
         self._buddy_item.setX(-com_x_art)
         self._buddy_item.setY(-com_y_art)
-        self._buddy_item.setWidth(m._art_w)
-        self._buddy_item.setHeight(m._art_h)
+        self._buddy_item.setWidth(c.art_w)
+        self._buddy_item.setHeight(c.art_h)
 
-        head_x = m._art_w / 2.0 - com_x_art
+        head_x = c.art_w / 2.0 - com_x_art
         self._bubble_item.set_anchor_in_parent(
             head_x, -com_y_art - float(BUBBLE_HOVER_OFFSET_Y),
         )
         self._dock_mock_item.set_anchor_in_parent(
-            head_x, float(m._art_h) - com_y_art + float(DOCK_OFFSET_Y),
+            head_x, float(c.art_h) - com_y_art + float(DOCK_OFFSET_Y),
         )
         self._grip_item.set_anchor_in_parent(
-            float(m._art_w) - com_x_art, float(m._art_h) - com_y_art,
+            float(c.art_w) - com_x_art, float(c.art_h) - com_y_art,
         )

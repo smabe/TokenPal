@@ -41,6 +41,7 @@ from tokenpal.ui.qt.buddy_window import (
 from tokenpal.ui.qt.buddy_window import (
     DOCK_OFFSET_Y as _DOCK_OFFSET_Y,
 )
+from tokenpal.ui.buddy_core import BuddyCore
 from tokenpal.ui.qt.buddy_window import (
     BuddyWindow,
 )
@@ -191,11 +192,16 @@ class QtOverlay(AbstractOverlay):
 
         self._app: QApplication | None = None
         self._bridge: _UIBridge | None = None
-        self._buddy: BuddyWindow | None = None
-        # Visible host for the buddy. On the QWidget backend this is
-        # the BuddyWindow itself (a QWidget that shows on screen). On
-        # the Quick backend it is the BuddyQuickWindow (QQuickWindow)
-        # whose hidden BuddyWindow model lives in ``self._buddy``.
+        # On the QWidget backend ``_buddy`` is a BuddyWindow (the
+        # native window itself). On the Quick backend it's the
+        # BuddyCore that the QQuickWindow host renders. Both expose
+        # the same public surface (set_zoom, set_frame,
+        # head_world_position, body_angle, position_changed signal,
+        # …); the union is intentional so overlay code stays
+        # backend-agnostic.
+        self._buddy: BuddyWindow | BuddyCore | None = None
+        # Visible host. On the QWidget backend this is the BuddyWindow
+        # itself; on the Quick backend it is the BuddyQuickWindow.
         self._buddy_host: object | None = None
         self._bubble: BubbleWidget | None = None
         self._dock: ChatDock | None = None
@@ -307,7 +313,7 @@ class QtOverlay(AbstractOverlay):
                 font_size=max(self._font_size - 1, 10),
             )
             self._buddy_host = bqw
-            self._buddy = bqw.model
+            self._buddy = bqw.core
             self._bubble = bqw.bubble_item  # type: ignore[assignment]
         else:
             self._buddy = BuddyWindow(
@@ -608,15 +614,13 @@ class QtOverlay(AbstractOverlay):
         if self._resize_grip is not None:
             self._resize_grip.close()
             self._resize_grip.deleteLater()
-        if self._buddy is not None:
-            self._buddy.close()
-            self._buddy.deleteLater()
-        if (
-            self._use_quick_backend
-            and self._buddy_host is not None
-            and self._buddy_host is not self._buddy
-        ):
+        # On the Quick path _buddy is a BuddyCore (QObject, no window);
+        # the QQuickWindow host owns the close. On the QWidget path
+        # _buddy IS the host. In both cases closing the host is enough,
+        # and the core gets cleaned up via QObject parent ownership.
+        if self._buddy_host is not None:
             self._buddy_host.close()  # type: ignore[attr-defined]
+            self._buddy_host.deleteLater()  # type: ignore[attr-defined]
         if self._tray is not None:
             self._tray.hide()
         if self._app is not None:
@@ -1341,14 +1345,13 @@ class QtOverlay(AbstractOverlay):
         """Keep an (x, y, w, h) rect inside the buddy's current screen."""
         if self._buddy is None:
             return max(0, x), max(0, y)
-        # On the Quick backend the model widget is WA_DontShowOnScreen, so
-        # ``self._buddy.screen()`` reports the primary screen regardless of
-        # where the buddy item is rendered. Resolve from world coords.
+        # Resolve from world coords; ``self._buddy`` may be a BuddyCore
+        # (Quick path) with no widget-screen() to fall back to.
         screen = QGuiApplication.screenAt(
             self._buddy.head_world_position().toPoint(),
         )
         if screen is None:
-            screen = self._buddy.screen()
+            screen = QGuiApplication.primaryScreen()
         if screen is None:
             return max(0, x), max(0, y)
         avail = screen.availableGeometry()
