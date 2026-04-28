@@ -20,6 +20,14 @@ Land the remaining follow-ups so the QtQuick buddy is a solid daily-driver acros
 - **`docs/claude/ui.md`** doc note for the Quick path. Defer with retirement.
 - **New buddy features** unrelated to Quick rendering.
 
+## Status
+
+- **Phase 1** — shipped in `aaff25f` (2026-04, "Phase 1 + 2 + dock-follow fix").
+- **Phase 2** — shipped in `aaff25f`.
+- **Phase 3** — shipped in `6739b54` ("Phase 3 multi-monitor mixed DPRs"). Per-screen `_ScreenWindow` + reparenting on edge cross is live in `tokenpal/ui/quick/buddy_window.py`.
+- **Phase 4** — **deferred**. Cursor-poll click-through is good enough on the dev box; global low-level mouse hook risks AV friction without a clear payoff. Reopen if 240 fps idle drain becomes a real complaint.
+- **Phase 5** — *in progress* (this session).
+
 ## Files to touch
 
 ### Phase 4 — off-buddy 240 fps throttle
