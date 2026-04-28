@@ -488,10 +488,15 @@ class BuddyWindow(QWidget):
         return self._art_point_world(self._art_w / 2.0, float(self._art_h))
 
     def body_angle(self) -> float:
-        """Total rotation of the body in the world frame, in radians.
-        Followers use this to rotate with the buddy so they stay
-        rigidly attached during a swing."""
-        return self._sim.theta
+        """Lerped rotation of the body in the world frame, in radians.
+        Followers (bubble, dock_mock, grip) use this to rotate with the
+        buddy so they stay rigidly attached during a swing. Must match
+        what ``_build_transform`` paints — returning the raw simulator
+        ``theta`` here means followers paint at the post-step value
+        while the buddy paints at the lerped/extrapolated value, leaving
+        the follower one step behind. At 240 Hz that ~0.005 rad gap
+        reads as a ghost rotating with the buddy."""
+        return self._lerped_state()[0]
 
     def art_frame_point_world(self, ax: float, ay: float) -> QPointF:
         """Map an art-frame coord (may be outside the art bounds) to
