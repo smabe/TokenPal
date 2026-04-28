@@ -1041,12 +1041,21 @@ class QtOverlay(AbstractOverlay):
         """Slot for ``BuddyWindow.position_changed``. Re-anchor is O(1)
         and idempotent (see each widget's ``reanchor``), safe to call
         from a 60 Hz signal. Also drop accumulated shoulder-snow if the
-        buddy is being dragged so the dust doesn't float mid-air."""
+        buddy is being dragged so the dust doesn't float mid-air.
+
+        The rain overlay's paint is coupled to motion here (not just to
+        the 30 Hz sky tick). Without this, ``self.move()`` runs every
+        tick but ``paintEvent`` only runs at 30 Hz — between paints the
+        existing backbuffer slides under the buddy at the new window
+        position, producing the rotating-shadow artefact. Sky tick still
+        triggers ``update()`` so particles keep animating while the
+        buddy is asleep."""
         if self._sky_window is not None:
             self._sky_window.reanchor()
         if self._buddy_rain_overlay is None:
             return
         self._buddy_rain_overlay.reanchor()
+        self._buddy_rain_overlay.update()
         if (
             self._buddy is not None
             and self._weather_sim is not None
