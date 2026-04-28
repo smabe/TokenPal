@@ -33,7 +33,16 @@ from PySide6.QtQuick import QQuickItem, QQuickWindow
 
 from tokenpal.ui.qt.buddy_window import BuddyWindow
 from tokenpal.ui.quick._clickthrough import ClickThroughToggle
+from tokenpal.ui.quick.bubble_item import BubbleQuickItem
 from tokenpal.ui.quick.buddy_item import BuddyQuickItem
+from tokenpal.ui.quick.dock_mock_item import DockMockQuickItem
+from tokenpal.ui.quick.grip_item import GripQuickItem
+
+# Mirror tokenpal/ui/qt/overlay.py constants. Pivot-local offsets
+# embed these directly so the body-aligned offset falls out of the
+# pivot's rotation -- no per-frame `_body_aligned_offset` math.
+_BUBBLE_HOVER_OFFSET_Y = 16
+_DOCK_OFFSET_Y = 4
 
 _TRACE = bool(os.environ.get("TOKENPAL_QUICK_TRACE"))
 _TRACE_EVERY = int(os.environ.get("TOKENPAL_QUICK_TRACE_EVERY", "1"))
@@ -105,6 +114,17 @@ class BuddyQuickWindow(QQuickWindow):
         self._buddy_item = BuddyQuickItem(self._model)
         self._buddy_item.setParentItem(self._pivot)
 
+        self._bubble_item = BubbleQuickItem(
+            font_family=font_family, font_size=font_size,
+        )
+        self._bubble_item.setParentItem(self._pivot)
+
+        self._dock_mock_item = DockMockQuickItem()
+        self._dock_mock_item.setParentItem(self._pivot)
+
+        self._grip_item = GripQuickItem()
+        self._grip_item.setParentItem(self._pivot)
+
         self._click_through = ClickThroughToggle(
             self, self._opaque_probe, parent=self,
         )
@@ -138,9 +158,32 @@ class BuddyQuickWindow(QQuickWindow):
     def buddy_item(self) -> BuddyQuickItem:
         return self._buddy_item
 
+    @property
+    def bubble_item(self) -> BubbleQuickItem:
+        return self._bubble_item
+
+    @property
+    def dock_mock_item(self) -> DockMockQuickItem:
+        return self._dock_mock_item
+
+    @property
+    def grip_item(self) -> GripQuickItem:
+        return self._grip_item
+
     def _opaque_probe(self, client_point: QPointF) -> bool:
-        local = self._buddy_item.mapFromScene(client_point)
-        return self._buddy_item.contains(local)
+        if self._buddy_item.contains(
+            self._buddy_item.mapFromScene(client_point),
+        ):
+            return True
+        if self._bubble_item.isVisible() and self._bubble_item.contains(
+            self._bubble_item.mapFromScene(client_point),
+        ):
+            return True
+        if self._grip_item.isVisible() and self._grip_item.contains(
+            self._grip_item.mapFromScene(client_point),
+        ):
+            return True
+        return False
 
     def _clamped_lerp(self) -> tuple[float, float, float]:
         """Like ``BuddyWindow._lerped_state`` but clamps theta alpha to
@@ -230,3 +273,20 @@ class BuddyQuickWindow(QQuickWindow):
         self._buddy_item.setWidth(m._art_w)
         self._buddy_item.setHeight(m._art_h)
         self._buddy_item.update()
+
+        # Followers anchor in pivot-local space; pivot rotation gives
+        # them the body-aligned offset for free. Positions only depend
+        # on art geometry so this is a no-op when nothing changed.
+        head_px = m._art_w / 2.0 - com_x_art
+        head_py = -com_y_art
+        self._bubble_item.set_anchor_in_parent(
+            head_px, head_py - float(_BUBBLE_HOVER_OFFSET_Y),
+        )
+        foot_px = m._art_w / 2.0 - com_x_art
+        foot_py = float(m._art_h) - com_y_art
+        self._dock_mock_item.set_anchor_in_parent(
+            foot_px, foot_py + float(_DOCK_OFFSET_Y),
+        )
+        self._grip_item.set_anchor_in_parent(
+            float(m._art_w) - com_x_art, float(m._art_h) - com_y_art,
+        )

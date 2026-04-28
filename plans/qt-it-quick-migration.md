@@ -122,7 +122,33 @@ Port `BuddyWindow` to a `QQuickItem`:
 
 Profile against Phase A on the same scene. Validate: body p50 ≤ 4 ms in motion, 240 fps sustained. If not, debug in this phase before adding followers.
 
-### Phase 3 — Followers
+### Phase 3 — Followers — ✅ DONE 2026-04-28
+
+`tokenpal/ui/quick/{bubble_item,dock_mock_item,grip_item}.py` ship the three followers as `QQuickItem` children of the buddy pivot. Validated via `tests/manual/quick_followers.py` on the Windows dev box (RTX 4070, 4K @ 240 Hz): scene-graph composite at 240 Hz with all four items, `buddy.paint` p50 still ~0.015 ms (no regression vs. Phase 2's solo-buddy baseline of 0.1 ms).
+
+**Final architecture (departures from the original sketch):**
+
+1. **Followers are siblings of `buddy_item`, all parented to the pivot.** The original sketch said "child `QQuickItem`s of the same `QQuickWindow`" — but parenting them to the pivot directly (which is itself a child of `contentItem`) means the pivot's `setRotation(degrees(theta))` propagates to all followers automatically. No per-frame `set_pose(anchor_world, angle_rad)` round-trip per follower; the body-aligned offset (`_body_aligned_offset` in the QWidget overlay) falls out of the pivot transform for free.
+
+2. **Anchors are pivot-local constants, not world coords.** Each follower's anchor in pivot-local space depends only on art geometry:
+   - bubble tail at `(art_w/2 - com_x_art, -com_y_art - 16)` — top-center of art, plus hover offset
+   - dock_mock top-center at `(art_w/2 - com_x_art, art_h - com_y_art + 4)` — under the feet
+   - grip bottom-right at `(art_w - com_x_art, art_h - com_y_art)` — corner of art frame
+   `_sync_geometry` calls `set_anchor_in_parent(...)` once per frame; positions only change when art geometry changes, so it's a no-op the rest of the time.
+
+3. **Render path: QImage cache → QSGTexture → QSGSimpleTextureNode.** Each item renders its content (rounded rect + text for bubble, snapshot pixmap for dock_mock, alpha-1 hit rect + dot pattern for grip) into a `QImage` on the GUI thread, then `updatePaintNode` uploads it to a `QSGTexture` on the render thread the first frame after invalidation. Cache invalidates only on content change (typing reveal, font/color change, dock snapshot replacement) — not on rotation, position, or vsync. `QQuickPaintedItem` was disqualified by the plan and not used.
+
+4. **Click-through probe extends to bubble + grip.** `BuddyQuickWindow._opaque_probe` now tests the buddy item, then the bubble (if visible), then the grip (if visible). Each item's `contains()` is item-local AABB — sufficient because the bubble's rounded corners are tiny and the grip's hit area is the full square (alpha=1 trick from QWidget `_chrome.py` carried over). The dock mock never accepts mouse events (`AcceptedMouseButtons.NoButton`), matching the QWidget mock's `WA_TransparentForMouseEvents`.
+
+5. **No per-frame paint cost from idle followers.** With the bubble hidden and the dock mock visible but its texture cached, sustained-motion `buddy.paint` p50 is unchanged from Phase 2. The scene-graph composite handles the static texture quads cheaply.
+
+**Open follow-ups for Phase 4+:**
+
+- Backend dispatch (`[ui] backend = "qt" | "quick"` config) — Phase 4.
+- Cross-platform validation of the Quick stack on macOS M-series + Linux KDE/X11.
+- BuddyCore extraction (Phase 5) — strip the hidden `WA_DontShowOnScreen` BuddyWindow once parity is proven and the QWidget path can be retired.
+
+### Phase 3 — Followers (original plan, reference)
 
 Port speech bubble, dock_mock, grip as child `QQuickItem`s of the same `QQuickWindow`:
 - Each item lives in the same scene graph → one paint per frame for all four → no inter-window present desync (the problem A1, A4, and the explicit-clear fix all addressed at the QWidget layer disappears structurally here)
