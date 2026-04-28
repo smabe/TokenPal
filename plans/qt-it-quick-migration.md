@@ -73,7 +73,43 @@ Migrate the buddy + rotating followers (bubble, dock_mock, grip) into one `QQuic
 
 Cross-platform validation (macOS M-series, Linux Wayland-KDE, Linux X11) deferred to Phase 4 backend-dispatch testing — Windows being the primary target and the box where Phase A jitter was measured.
 
-### Phase 2 — Buddy port
+### Phase 2 — Buddy port — ✅ DONE 2026-04-28
+
+`tokenpal/ui/quick/buddy_window.py` + `buddy_item.py` + `_clickthrough.py` ship a working buddy on the QtQuick path with the actual `BUDDY_IDLE` ASCII art, real physics, drag input, and click-through. Validated via `tests/manual/quick_buddy.py`.
+
+**Final architecture (departures from the original plan):**
+
+1. **Fixed window covering the primary screen; buddy moves *inside* via QQuickItem position.** The original plan implied the QQuickWindow would size + move to the rotated-art AABB like the QWidget path. That was wrong: `setPosition()` per frame stalls the Windows compositor (visible as 7-15 ms vsync gaps + microsecond catch-up bursts in the trace, then a 2-frame θ jump in one paint = "skipping a beat"). The standard game-engine pattern — *fixed window, content moves inside* — eliminates the stall. **All Phase 3 followers will live as sibling `QQuickItem`s in this single fixed window.** No inter-window coordination, automatic frame coherence.
+
+2. **Hidden `BuddyWindow(QWidget)` as the logic model.** Avoided refactoring the 1100-line QWidget; instead instantiate it with `WA_DontShowOnScreen` and override `paintEvent` to a no-op. The Quick path reads `_render_art_pixmap()`, `_lerped_state()`, `_com_art()`, `_com_widget`, `_sim`, etc. directly. Phase 5 will extract a real `BuddyCore` (no QWidget) when retiring the QWidget path.
+
+3. **Phase-locked physics to vsync via `frameSwapped`.** A separate QTimer beat against `FIXED_DT_S = 4.166 ms` (Win11 PreciseTimer fires at 3-7 ms, FIXED_DT is 4.166 — about 1 in 30 frames no step drained, same θ painted twice). Driving `model._on_tick()` from `frameSwapped` gives exactly one physics step per vsync, alpha pinned at 1.0, no duplicate frames. A 16 ms QTimer kicks `buddy_item.update()` as a fallback heartbeat for when the buddy is settled and no `frameSwapped` would otherwise fire.
+
+4. **θ alpha clamped to [0, 1] in the Quick path's lerp.** The model's `_lerped_state` extrapolates θ past α=1 ("graceful pump-stall recovery"). With vsync paints landing between model ticks, extrapolation oscillates against the next pump's actual physics state and back-steps. Clamping fixes this; we provide our own `_clamped_lerp` instead of using `model._lerped_state` directly.
+
+5. **Click-through via `WS_EX_TRANSPARENT` toggle + `SWP_FRAMECHANGED`.** Phase 1 finding carried in.
+
+**Profile vs Phase A baseline (in motion, drag-and-fling):**
+
+| metric | QWidget path (Phase A) | Quick path (Phase 2) |
+|---|---|---|
+| body p50 | 10-11 ms | **0.1 ms** |
+| body p99 | 13-35 ms | 0.3 ms |
+| FPS (cursor over buddy) | 70-80 | **240** |
+| FPS (cursor over transparent area) | 70-80 | ~140 (Win throttles `WS_EX_TRANSPARENT` windows) |
+
+All Phase 2 targets met. Phase A invariants preserved: no ghost, drag/fling works, hit-test honors per-pixel alpha.
+
+**Open follow-ups for Phase 3+:**
+
+- Multi-monitor: window currently spans only the primary screen. Phase 4 needs virtual-desktop bounds (sum of all `QScreen.geometry()`) or per-screen reparenting when buddy crosses a screen edge.
+- `WS_EX_TRANSPARENT` throttle (~140 fps when cursor is off-buddy): consider a global mouse hook + always-`TRANSPARENT` window so we can keep 240 fps everywhere.
+- Followers (Phase 3) become much simpler in this architecture — they're sibling `QQuickItem`s of `buddy_item` inside the same pivot/scene graph.
+- BuddyCore extraction (Phase 5).
+
+---
+
+### Phase 2 — Buddy port (original plan, reference)
 
 Port `BuddyWindow` to a `QQuickItem`:
 - Master sprite → `QSGSimpleTextureNode` populated from the existing `_render_art_pixmap()` cache
