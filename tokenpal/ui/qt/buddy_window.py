@@ -662,11 +662,19 @@ class BuddyWindow(QWidget):
 
     def _refresh_view(self) -> None:
         """Resize the widget to the rotated-art AABB, position it on
-        the COM, refresh the click-through mask, and request a repaint."""
+        the COM, refresh the click-through mask, and force a paint.
+
+        ``repaint()`` (synchronous) instead of ``update()`` so every
+        pump's paint lands in the same Qt event-loop iteration as the
+        followers' synchronous paints (their set_pose slots ran via the
+        ``position_changed`` emit inside ``_move_to_com`` above). All
+        windows then reach DWM with state from the same pump and share
+        a composite frame, killing the inter-window 1-pump offset that
+        Qt's ``update()`` coalescing was producing for the followers."""
         self._recompute_geometry()
         self._move_to_com()
         self._update_click_mask()
-        self.update()
+        self.repaint()
 
     # --- Tick / timer ---------------------------------------------------
 

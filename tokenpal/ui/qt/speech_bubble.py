@@ -258,6 +258,15 @@ class SpeechBubble(QWidget):
         Called by the overlay whenever the buddy's head moves or
         rotates. Rotation is around the tail — the bubble swings like
         it's on a string attached to the buddy's head.
+
+        ``repaint()`` (synchronous) instead of ``update()`` so the
+        bubble's paint lands in the same DWM composite frame as the
+        buddy's paint. Without this, ``move()`` + ``setMask()`` WM
+        round-trips delay the bubble's paint by ~1 ms, and update()
+        coalescing causes the bubble to paint every other pump while
+        the buddy paints every pump — so the bubble shows pump N+1's
+        state in DWM frame N's composite. That 1-pump angular offset
+        between bubble and buddy is the visible rotating ghost.
         """
         prev_angle = self._body_angle_rad
         self._body_angle_rad = angle_rad
@@ -269,7 +278,7 @@ class SpeechBubble(QWidget):
             self.move(new_x, new_y)
         if prev_angle != angle_rad:
             self._update_click_mask()
-        self.update()
+        self.repaint()
 
     def showEvent(self, event: QShowEvent) -> None:
         """Apply the click-through mask once the native window is

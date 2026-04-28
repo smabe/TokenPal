@@ -151,7 +151,11 @@ class BuddyResizeGrip(QWidget):
         ``anchor_world`` and paint the dots rotated by ``angle_rad``.
         Called by the overlay on every ``position_changed`` so the
         grip stays glued to the buddy's body-frame bottom-right
-        regardless of swing."""
+        regardless of swing.
+
+        Synchronous ``repaint()`` so the grip paint lands in the same
+        DWM composite frame as the buddy paint — see SpeechBubble.set_pose
+        for the full reasoning."""
         prev_angle = self._angle_rad
         self._angle_rad = angle_rad
         ax, ay = self._anchor_widget
@@ -162,7 +166,7 @@ class BuddyResizeGrip(QWidget):
             self.move(new_x, new_y)
         if prev_angle != angle_rad:
             self._update_click_mask()
-        self.update()
+        self.repaint()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)

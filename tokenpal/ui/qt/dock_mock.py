@@ -68,7 +68,11 @@ class DockMock(QWidget):
 
     def set_pose(self, anchor_world: QPointF, angle_rad: float) -> None:
         """Move the window so the pixmap's top-center lands at
-        ``anchor_world`` and paint the snapshot rotated by ``angle_rad``."""
+        ``anchor_world`` and paint the snapshot rotated by ``angle_rad``.
+
+        Synchronous ``repaint()`` so the dock paint lands in the same
+        DWM composite frame as the buddy paint — see SpeechBubble.set_pose
+        for the full reasoning."""
         self._angle_rad = angle_rad
         ax, ay = self._anchor_widget
         new_x = int(anchor_world.x()) - ax
@@ -76,7 +80,7 @@ class DockMock(QWidget):
         pos = self.pos()
         if pos.x() != new_x or pos.y() != new_y:
             self.move(new_x, new_y)
-        self.update()
+        self.repaint()
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         if self._pixmap is None or self._pixmap.isNull():
