@@ -61,17 +61,17 @@ Migrate the buddy + rotating followers (bubble, dock_mock, grip) into one `QQuic
 
 ## Approach (staged)
 
-### Phase 1 — Spike (validate the path)
+### Phase 1 — Spike (validate the path) — ✅ DONE 2026-04-28
 
-Bare-minimum `QQuickWindow + QQuickItem` rendering the master pixmap as a textured quad. Verify on the dev box (Windows / 4K / 240 Hz):
+`tests/manual/quick_spike.py` validated all five go/no-go signals on the Windows dev box (RTX 4070, 4K @ 240 Hz):
 
-1. Frameless transparent QQuickWindow shows the master pixmap with full alpha
-2. Rotation animates without tearing
-3. `frameSwapped` fires at 240 Hz (or whatever `QScreen.refreshRate()` reports)
-4. Click-through-on-transparent-pixels works (per-item alpha hit-test)
-5. Tick profile: body p50 < 4 ms during forced rotation
+1. ✅ Frameless transparent QQuickWindow shows pixmap with full alpha
+2. ✅ Rotation tear-free
+3. ✅ `frameSwapped` sustained at 240.1 Hz (== `QScreen.refreshRate()`)
+4. ✅ Click-through-on-transparent — but **NOT via `WM_NCHITTEST` → `HTTRANSPARENT`**. QQuickWindow's DirectComposition path ignores HTTRANSPARENT for cross-process forwarding. The working recipe is **toggle `WS_EX_TRANSPARENT` on the HWND dynamically** based on cursor-vs-alpha sampling at ~60 Hz, plus `SetWindowPos(SWP_FRAMECHANGED)` to force Windows to re-read the ext style. When set, all input passes through; when cleared, the window receives input. Production code in Phase 2 must adopt this; the QWidget path's "free" layered-window per-pixel hit-test does not carry over. **Side effect:** while `WS_EX_TRANSPARENT` is set, Windows throttles the window's present rate to ~140 Hz (cursor over transparent area). When the cursor is over the buddy, full 240 Hz returns. Still a clean win over Phase A's 70–80 fps in motion, but Phase 2 should consider hysteresis or a coarser hit-region to keep the buddy at full refresh more of the time.
+5. ✅ `updatePaintNode` p50 = 0.01 ms during forced rotation (target was <4 ms — three orders of magnitude under budget)
 
-If any of these fail, stop and decide before continuing — research called out these specific risks (translucent QQuickWindow on Wayland, GNOME-Mutter, Linux EGL/Vulkan compatibility, MoltenVK on macOS). One day, one file.
+Cross-platform validation (macOS M-series, Linux Wayland-KDE, Linux X11) deferred to Phase 4 backend-dispatch testing — Windows being the primary target and the box where Phase A jitter was measured.
 
 ### Phase 2 — Buddy port
 
