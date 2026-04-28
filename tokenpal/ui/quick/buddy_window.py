@@ -71,12 +71,27 @@ class BuddyQuickWindow(QQuickWindow):
             flags |= Qt.WindowType.Tool
         self.setFlags(flags)
 
-        # Fixed window covering the primary screen -- never moved.
+        # Fixed window covering the entire virtual desktop (the union
+        # of all attached screens) -- never moved. The buddy moves
+        # *inside* the window via QQuickItem position; if the window
+        # only spanned one screen the buddy would hit an invisible
+        # wall when dragged across a screen edge.
+        #
+        # virtualGeometry() returns the union rect including any
+        # secondary screens to the left of / above the primary, which
+        # can put origin at negative coordinates. The QQuickItem
+        # position math operates in window-local coords (== screen
+        # coords minus virtualGeometry().topLeft()), so we keep an
+        # offset and apply it when syncing the pivot to lerped
+        # screen-space state.
         primary = QGuiApplication.primaryScreen()
         if primary is not None:
-            geo = primary.geometry()
-            self.setPosition(geo.x(), geo.y())
-            self.resize(geo.width(), geo.height())
+            virt = primary.virtualGeometry()
+            self.setPosition(virt.x(), virt.y())
+            self.resize(virt.width(), virt.height())
+            self._virtual_origin = (virt.x(), virt.y())
+        else:
+            self._virtual_origin = (0, 0)
 
         self._model = BuddyWindow(
             frame_lines=frame_lines,
@@ -262,10 +277,14 @@ class BuddyQuickWindow(QQuickWindow):
         com_x_art, com_y_art = m._com_art()
         theta, cx_lerp, cy_lerp = self._clamped_lerp()
 
-        # Pivot lives in window coords -- which equal screen coords
-        # since the window is fixed at (0, 0) and spans the screen.
-        self._pivot.setX(cx_lerp)
-        self._pivot.setY(cy_lerp)
+        # Pivot lives in window-local coords. The window spans the
+        # virtual desktop, so window-local = screen - virtualGeometry
+        # topLeft (which can be negative when secondary screens sit
+        # left of / above the primary). The simulator's lerp output
+        # is in screen coords, so subtract the offset.
+        vox, voy = self._virtual_origin
+        self._pivot.setX(cx_lerp - float(vox))
+        self._pivot.setY(cy_lerp - float(voy))
         self._pivot.setRotation(math.degrees(theta))
 
         self._buddy_item.setX(-com_x_art)

@@ -231,4 +231,6 @@ If a platform regression surfaces in step 1, the QWidget backend remains selecta
 
 ## Parking lot
 
-(empty at start)
+- **Speech bubble z-order vs. weather (Quick path)** — bubble is a `QQuickItem` inside the buddy `QQuickWindow`; weather (`SkyWindow` + `BuddyRainOverlay`) is a separate translucent `QWidget`. Both are `WindowStaysOnTopHint`, so when weather is enabled it can land on top of the bubble. Cosmetic, not a daily-driver blocker. Fix: either bring `_buddy_host` to top after weather shows, or reparent weather under the QQuickWindow as additional `QQuickItem`s when on the Quick backend.
+- **Off-buddy 240 fps throttle** — Windows throttles `WS_EX_TRANSPARENT` windows to ~140 fps when the cursor isn't over an opaque pixel. Global mouse hook + always-transparent window + manual input injection on hit could keep 240 fps everywhere. Polish.
+- **BuddyCore extraction** — strip the hidden `WA_DontShowOnScreen` `BuddyWindow` into a non-`QWidget` core so Phase 5 can delete the QWidget code paths without breaking the model.
