@@ -108,15 +108,6 @@ _PHYSICS_DEBUG_LOG_PATH = "/tmp/tokenpal-physics.log"
 # for the GIL.
 _TICK_PROFILE = bool(os.environ.get("TOKENPAL_TICK_PROFILE"))
 
-# TOKENPAL_FAST_PIXMAP=1 drops SmoothPixmapTransform from the buddy paint.
-# Bilinear sampling of the rotated 4× oversampled master is fillrate-bound
-# on 4K — measured p50 tick body ~10 ms in motion, twice the 6 ms pump
-# period, so the buddy was updating at 70–80 Hz on a 240 Hz panel. The
-# master has 4× supersampling baked in (MASTER_ZOOM × MASTER_SUPERSAMPLE),
-# so nearest-neighbour sampling still gets a supersampled result. Trade
-# is some shimmer at certain rotation angles; smoothness wins in motion.
-_FAST_PIXMAP = bool(os.environ.get("TOKENPAL_FAST_PIXMAP"))
-
 _FG_COLOR = QColor(BUDDY_GREEN)
 
 
@@ -957,8 +948,7 @@ class BuddyWindow(QWidget):
         # Master is rasterized at _MASTER_ZOOM × _MASTER_SUPERSAMPLE so
         # zoom + rotation share one resampling pass with plenty of
         # source resolution.
-        if not _FAST_PIXMAP:
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         painter.setWorldTransform(self._build_transform())
         painter.drawPixmap(
             QRect(0, 0, self._art_w, self._art_h),
