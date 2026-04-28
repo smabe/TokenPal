@@ -1,7 +1,7 @@
 # fix-it-felix
 
 ## Goal
-Fix two Windows display bugs: (1) buddy ASCII art renders as a dotted/textured pattern instead of solid blocks (ClearType subpixel AA misapplied to a `WA_TranslucentBackground` surface — independent of the fusion-style switch in `14eddd9`), and (2) chat-history and news-history frameless windows have no resize affordance. Add a styled `GlassSizeGrip` to the shared `TranslucentLogWindow` base.
+Fix two Windows display bugs: (1) buddy ASCII art renders with a visible dot pattern on his body. ROOT CAUSE: the buddy art uses U+2593 DARK SHADE (`▓`) characters — by Unicode definition a 75%-shaded block, which Consolas on Windows rasterizes as a sparse dot grid. macOS Menlo renders it more densely so it reads as a smooth shade. Fix: paint Unicode block-drawing chars (U+2588, U+2593, U+2580, U+2584) as `fillRect` shapes with appropriate alpha, bypassing the font for these specific characters. Phase-1 changes (`NoSubpixelAntialias` + `TextAntialiasing`) still ship — they cleaned up an actual ClearType color-fringe artifact on the non-block characters. (2) Chat-history and news-history frameless windows have no resize affordance. Add a styled `GlassSizeGrip` to the shared `TranslucentLogWindow` base.
 
 ## Non-goals
 - Reworking the buddy paint pipeline or rigid-body physics.
@@ -13,7 +13,9 @@ Fix two Windows display bugs: (1) buddy ASCII art renders as a dotted/textured p
 - Custom edge hit-testing — `QSizeGrip` (wrapped) is sufficient and avoids `DragHandle` collisions.
 
 ## Files to touch
-- `tokenpal/ui/qt/buddy_window.py` — fix glyph rendering on `WA_TranslucentBackground`. Set `QFont.StyleStrategy.PreferAntialias | NoSubpixelAntialias` on `BuddyWindow._font` AND on the local `QFont` inside `_measure_block_paint_width` (must match or cell width drifts). Add `QPainter.RenderHint.TextAntialiasing` next to the existing `Antialiasing` hint in both `paintEvent` and `_measure_block_paint_width`'s painter.
+- `tokenpal/ui/qt/buddy_window.py` —
+  (a) Set `QFont.StyleStrategy.PreferAntialias | NoSubpixelAntialias` on the buddy font and add `TextAntialiasing` render hint. Cleans up ClearType color-fringe on non-block characters.
+  (b) Add `_paint_block_char(painter, ch, rect, color) -> bool` helper. Renders U+2588 as full fill, U+2593 as 75%-alpha fill, U+2580 as upper-half fill, U+2584 as lower-half fill. Falls back to `drawText` for anything else. Helper is reuse-friendly (no buddy-specific dependencies) — ready to move to `_text_fx.py` if a second consumer surfaces. (Diagnostic dead ends ruled out along the way: fillRect-only-for-U+2588 failed because U+2593 was the dotty char, not U+2588; Win32 `DwmSetWindowAttribute` failed because it's not Acrylic; `QT_OPENGL=software` failed because it's not the GPU compositor either — none of those touched the actual font glyph.)
 - `tokenpal/ui/qt/_chrome.py` — add `GlassSizeGrip(QSizeGrip)` next to `DragHandle`. Override `paintEvent` to draw three soft-white dots at ~40% alpha in the bottom-right diagonal, matching the glass aesthetic.
 - `tokenpal/ui/qt/_log_window.py` — mount a `GlassSizeGrip` in the bottom row alongside the Hide button (right-aligned, after the existing `addStretch(1)`). Resize behavior comes for free from `QSizeGrip`'s built-in `startSystemResize` handling.
 - `tests/test_qt_overlay.py` — add: (a) assert `TranslucentLogWindow` has a `GlassSizeGrip` child and that calling `resize()` on the window with new dimensions works (programmatic, no `mouseMove` simulation per scope decision); (b) assert `BuddyWindow._font` has `NoSubpixelAntialias` set in its style strategy.
