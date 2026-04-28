@@ -97,6 +97,9 @@ class BuddyQuickWindow(QQuickWindow):
         # Suppress the QWidget paint path -- nothing visible to render
         # there, and we don't want to spend cycles on it.
         self._model.paintEvent = lambda _event: None  # type: ignore[method-assign]
+        # Offscreen-rescue tick bails on !isVisible(); WA_DontShowOnScreen
+        # keeps this off the native window list.
+        self._model.show()
         # Phase-lock physics to vsync. A QTimer at 4 ms beats against
         # FIXED_DT=4.166 ms; about every 30 frames no physics step
         # drains between two vsyncs and the SAME theta is painted twice,

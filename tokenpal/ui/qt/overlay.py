@@ -21,6 +21,7 @@ from dataclasses import fields as dataclass_fields
 from typing import Any, ClassVar
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import QApplication, QDialog
 
 from tokenpal.brain.news_buffer import NewsItem
@@ -36,7 +37,11 @@ from tokenpal.ui.qt._log_window import TranslucentLogWindow
 from tokenpal.ui.qt._text_fx import qt_font_from_config
 from tokenpal.ui.qt.buddy_window import (
     BUBBLE_HOVER_OFFSET_Y as _BUBBLE_HOVER_OFFSET_Y,
+)
+from tokenpal.ui.qt.buddy_window import (
     DOCK_OFFSET_Y as _DOCK_OFFSET_Y,
+)
+from tokenpal.ui.qt.buddy_window import (
     BuddyWindow,
 )
 from tokenpal.ui.qt.chat_window import ChatDock, ChatHistoryWindow
@@ -430,6 +435,8 @@ class QtOverlay(AbstractOverlay):
                     self._buddy_rain_overlay.show()
                     apply_macos_click_through(self._buddy_rain_overlay)
                     self._buddy_rain_overlay.reanchor()
+                if self._use_quick_backend and self._buddy_host is not None:
+                    self._buddy_host.raise_()  # type: ignore[union-attr]
             else:
                 self._buddy_host.hide()  # type: ignore[union-attr]
                 if self._resize_grip is not None:
@@ -513,7 +520,8 @@ class QtOverlay(AbstractOverlay):
             self._buddy_host.show()  # type: ignore[union-attr]
             # NSWindow collectionBehavior can only be set once the
             # native window actually exists: after show().
-            apply_macos_stay_visible(self._buddy_host)
+            if not self._use_quick_backend:
+                apply_macos_stay_visible(self._buddy_host)
             if self._resize_grip is not None:
                 self._resize_grip.show()
                 if not self._use_quick_backend:
@@ -540,6 +548,8 @@ class QtOverlay(AbstractOverlay):
                 self._buddy_rain_overlay.show()
                 apply_macos_click_through(self._buddy_rain_overlay)
                 self._buddy_rain_overlay.reanchor()
+            if self._use_quick_backend and self._buddy_host is not None:
+                self._buddy_host.raise_()  # type: ignore[union-attr]
             QTimer.singleShot(150, self._reanchor_weather)
         for name, window in self._log_windows.items():
             if self._user_visible.get(name, False):
@@ -1331,7 +1341,14 @@ class QtOverlay(AbstractOverlay):
         """Keep an (x, y, w, h) rect inside the buddy's current screen."""
         if self._buddy is None:
             return max(0, x), max(0, y)
-        screen = self._buddy.screen()
+        # On the Quick backend the model widget is WA_DontShowOnScreen, so
+        # ``self._buddy.screen()`` reports the primary screen regardless of
+        # where the buddy item is rendered. Resolve from world coords.
+        screen = QGuiApplication.screenAt(
+            self._buddy.head_world_position().toPoint(),
+        )
+        if screen is None:
+            screen = self._buddy.screen()
         if screen is None:
             return max(0, x), max(0, y)
         avail = screen.availableGeometry()
