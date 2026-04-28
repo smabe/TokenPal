@@ -95,3 +95,17 @@ Examples killed by the say-what phase 3 simplify pass (commit `909a4e9`): `last_
 - Dev setup guides in `docs/dev-setup-*.md`
 - Plan files in `plans/` — active plans track current work, shipped plans in `plans/shipped/`
 - Open issues: `gh issue list`
+
+## Agent skills
+
+### Backlog
+
+GitHub issues at `smabe/TokenPal`, via `gh` CLI. See `docs/agents/backlog.md`.
+
+### Triage labels
+
+Five canonical roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`) using default names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
