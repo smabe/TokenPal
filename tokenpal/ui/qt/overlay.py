@@ -159,6 +159,12 @@ class QtOverlay(AbstractOverlay):
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         self._buddy_name: str = config.get("buddy_name", "TokenPal")
+        # Rendering surface: "qt" = layered-window QWidget per-pixel
+        # translucency (the original path); "quick" = single
+        # QQuickWindow + QQuickItem children (lifts the ~70 fps
+        # rotation cap on high-refresh panels). See
+        # plans/qt-it-quick-migration.md.
+        self._use_quick_backend: bool = config.get("backend", "qt") == "quick"
         # Empty string or missing key → platform default. Config schema
         # ships an empty default so we don't force "Courier" on macOS
         # (which Qt substitutes noisily — "Populating font family
@@ -179,6 +185,11 @@ class QtOverlay(AbstractOverlay):
         self._app: QApplication | None = None
         self._bridge: _UIBridge | None = None
         self._buddy: BuddyWindow | None = None
+        # Visible host for the buddy. On the QWidget backend this is
+        # the BuddyWindow itself (a QWidget that shows on screen). On
+        # the Quick backend it is the BuddyQuickWindow (QQuickWindow)
+        # whose hidden BuddyWindow model lives in ``self._buddy``.
+        self._buddy_host: object | None = None
         self._bubble: BubbleWidget | None = None
         self._dock: ChatDock | None = None
         # Registry of toggleable log windows. Source of truth for
@@ -276,28 +287,55 @@ class QtOverlay(AbstractOverlay):
 
         self._bridge = _UIBridge()
 
-        self._buddy = BuddyWindow(
-            frame_lines=BUDDY_IDLE,
-            initial_anchor=(400.0, 200.0),
-            font_family=self._font_family,
-            font_size=self._font_size,
-        )
+        if self._use_quick_backend:
+            # Imports lazy so the QtQuick dep isn't paid by users on
+            # the QWidget backend.
+            from tokenpal.ui.quick.buddy_window import (  # noqa: PLC0415
+                BuddyQuickWindow,
+            )
+            bqw = BuddyQuickWindow(
+                frame_lines=BUDDY_IDLE,
+                initial_anchor=(400.0, 200.0),
+                font_family=self._font_family,
+                font_size=max(self._font_size - 1, 10),
+            )
+            self._buddy_host = bqw
+            self._buddy = bqw.model
+            self._bubble = bqw.bubble_item  # type: ignore[assignment]
+        else:
+            self._buddy = BuddyWindow(
+                frame_lines=BUDDY_IDLE,
+                initial_anchor=(400.0, 200.0),
+                font_family=self._font_family,
+                font_size=self._font_size,
+            )
+            self._buddy_host = self._buddy
+            self._bubble = BubbleWidget(
+                font_family=self._font_family,
+                font_size=max(self._font_size - 1, 10),
+            )
         # Keep the speech bubble + dock glued to the buddy as he swings
         # — the physics tick emits `position_changed` after every move.
+        # On the Quick backend the bubble + grip + dock_mock track via
+        # the pivot's transform, so set_pose calls inside these slots
+        # are no-ops; the dock-mock swap and weather re-anchor still
+        # need them to fire.
         self._buddy.position_changed.connect(self._reposition_bubble)
         self._buddy.position_changed.connect(self._reposition_dock)
-        self._bubble = BubbleWidget(
-            font_family=self._font_family,
-            font_size=max(self._font_size - 1, 10),
-        )
         self._dock = ChatDock(
             on_submit=self._on_user_submit,
             on_zoom=self._handle_chat_zoom,
         )
         # Painted stand-in used while the buddy is mid-swing. The real
         # dock is hidden and this mock shows a rotated snapshot. See
-        # ``_reposition_dock`` for the swap logic.
-        self._dock_mock = DockMock()
+        # ``_reposition_dock`` for the swap logic. On the Quick
+        # backend the mock is a sibling QQuickItem of the buddy item
+        # under the pivot, so its set_pose is a no-op (the pivot
+        # rotates it for free).
+        if self._use_quick_backend:
+            self._dock_mock = self._buddy_host.dock_mock_item  # type: ignore[union-attr,assignment]
+        else:
+            self._dock_mock = DockMock()
         self._dock_mock_active = False
         self._dock_docked: bool = False
         # User-intent visibility tracked separately from Qt's isVisible()
@@ -352,8 +390,12 @@ class QtOverlay(AbstractOverlay):
 
         # Top-level resize grip — pure paint, rotates via paintEvent
         # like the speech bubble. Anchored to the buddy's body-frame
-        # bottom-right via _reposition_grip.
-        self._resize_grip = BuddyResizeGrip()
+        # bottom-right via _reposition_grip. On the Quick backend the
+        # grip is a sibling QQuickItem under the pivot.
+        if self._use_quick_backend:
+            self._resize_grip = self._buddy_host.grip_item  # type: ignore[union-attr,assignment]
+        else:
+            self._resize_grip = BuddyResizeGrip()
         self._resize_grip.zoom_drag_delta.connect(self._on_zoom_drag_delta)
         self._buddy.position_changed.connect(self._reposition_grip)
 
@@ -369,10 +411,13 @@ class QtOverlay(AbstractOverlay):
             new_visible = not self._buddy_user_visible
             self._buddy_user_visible = new_visible
             if new_visible:
-                self._buddy.show()
+                self._buddy_host.show()  # type: ignore[union-attr]
                 if self._resize_grip is not None:
                     self._resize_grip.show()
-                    lock_macos_child_above(self._buddy, self._resize_grip)
+                    if not self._use_quick_backend:
+                        lock_macos_child_above(
+                            self._buddy, self._resize_grip,
+                        )
                     self._reposition_grip()
                 if self._sky_window is not None:
                     self._sky_window.show()
@@ -384,7 +429,7 @@ class QtOverlay(AbstractOverlay):
                     apply_macos_click_through(self._buddy_rain_overlay)
                     self._buddy_rain_overlay.reanchor()
             else:
-                self._buddy.hide()
+                self._buddy_host.hide()  # type: ignore[union-attr]
                 if self._resize_grip is not None:
                     self._resize_grip.hide()
                 # A bubble already painted on screen would linger as a
@@ -463,14 +508,17 @@ class QtOverlay(AbstractOverlay):
         if self._app is None:
             raise RuntimeError("QtOverlay.setup() must run before run_loop()")
         if self._buddy is not None and self._buddy_user_visible:
-            self._buddy.show()
+            self._buddy_host.show()  # type: ignore[union-attr]
             # NSWindow collectionBehavior can only be set once the
             # native window actually exists: after show().
-            apply_macos_stay_visible(self._buddy)
+            apply_macos_stay_visible(self._buddy_host)
             if self._resize_grip is not None:
                 self._resize_grip.show()
-                apply_macos_stay_visible(self._resize_grip)
-                lock_macos_child_above(self._buddy, self._resize_grip)
+                if not self._use_quick_backend:
+                    apply_macos_stay_visible(self._resize_grip)
+                    lock_macos_child_above(
+                        self._buddy, self._resize_grip,
+                    )
                 self._reposition_grip()
         if self._sky_window is not None and self._buddy_user_visible:
             self._sky_window.show()
@@ -551,6 +599,12 @@ class QtOverlay(AbstractOverlay):
         if self._buddy is not None:
             self._buddy.close()
             self._buddy.deleteLater()
+        if (
+            self._use_quick_backend
+            and self._buddy_host is not None
+            and self._buddy_host is not self._buddy
+        ):
+            self._buddy_host.close()  # type: ignore[union-attr]
         if self._tray is not None:
             self._tray.hide()
         if self._app is not None:

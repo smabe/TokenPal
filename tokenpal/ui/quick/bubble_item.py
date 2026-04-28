@@ -269,3 +269,20 @@ class BubbleQuickItem(QQuickItem):
             0.0 <= point.x() <= self._content_w
             and 0.0 <= point.y() <= self._content_h
         )
+
+    # Duck-type shims so QtOverlay can hold a Quick item in the same
+    # ``self._bubble`` slot as the QWidget ``SpeechBubble``. The pivot
+    # parent already supplies position + rotation, so ``set_pose`` is
+    # a no-op; show/hide map to scene-graph visibility.
+    def show(self) -> None:
+        self.setVisible(True)
+        self.update()
+
+    def hide(self) -> None:
+        self.setVisible(False)
+
+    def set_pose(self, _tail_world, _angle_rad) -> None:
+        return
+
+    def close(self) -> None:
+        self.setVisible(False)

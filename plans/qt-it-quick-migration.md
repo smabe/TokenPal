@@ -156,7 +156,27 @@ Port speech bubble, dock_mock, grip as child `QQuickItem`s of the same `QQuickWi
 - Hit testing per-item via per-pixel alpha
 - The buddy's `position_changed` signal becomes a `Q_PROPERTY` on the buddy item that follower items bind to via QML (or signal/slot if all-Python)
 
-### Phase 4 — Backend dispatch
+### Phase 4 — Backend dispatch — ✅ DONE 2026-04-28 (Windows; cross-platform smoke deferred)
+
+`[ui] backend = "qt" | "quick"` config (default `"qt"`). `tokenpal/ui/qt/overlay.py` branches construction in `setup()` — when `quick`, instantiates `BuddyQuickWindow` and uses `bqw.model` / `bqw.bubble_item` / `bqw.dock_mock_item` / `bqw.grip_item` in the same `self._buddy` / `_bubble` / `_dock_mock` / `_resize_grip` slots the QWidget path used. Both backends launch + run + tear down cleanly via `tests/manual/quick_backend_smoke.py`.
+
+**Final architecture (departures from the original sketch):**
+
+1. **Single QtOverlay class with branched construction, not separate overlay classes.** A `QuickOverlay(QtOverlay)` subclass would have re-implemented ~45 call sites for follower interactions; instead the Quick items duck-type to the QWidget follower API (added `show()` / `hide()` / `set_pose(...)` no-op / `close()` shims on `BubbleQuickItem`, `DockMockQuickItem`, `GripQuickItem`). Every `self._bubble.*`, `self._dock_mock.*`, `self._resize_grip.*` call site stays untouched. Diff against `overlay.py` is constructor-only plus three guards on macOS chrome helpers.
+
+2. **`self._buddy_host` separates "the model" from "the visible host."** On the QWidget backend `_buddy_host is _buddy` (same QWidget). On the Quick backend `_buddy_host` is the `BuddyQuickWindow` (QQuickWindow) and `_buddy` is its hidden model (a `BuddyWindow` with `WA_DontShowOnScreen`). Show/hide is routed through `_buddy_host`; everything else (`position_changed`, `head_world_position`, `body_angle`, `set_right_click_handler`, …) goes through `_buddy` and works identically on both paths.
+
+3. **macOS chrome helpers guarded on `_use_quick_backend`.** `lock_macos_child_above(buddy, grip)` and `apply_macos_stay_visible(grip)` are skipped on the Quick backend because the grip is now a `QQuickItem` inside the buddy's NSWindow rather than a separate top-level NSWindow — z-order and stay-visible inherit. `apply_macos_stay_visible(self._buddy_host)` works unchanged because `QQuickWindow` has `winId()`.
+
+4. **Lazy import of `tokenpal.ui.quick`.** The `BuddyQuickWindow` import lives inside the `if self._use_quick_backend` branch, so QtQuick stays unloaded for users on the QWidget backend.
+
+**Open follow-ups for Phase 5+:**
+
+- Cross-platform validation (macOS M-series, Linux KDE/Wayland, Linux X11). Phase 5 retirement is gated on this; until then the QWidget backend remains the safe default.
+- BuddyCore extraction — strip the hidden `WA_DontShowOnScreen` BuddyWindow once parity is proven.
+- Doc note in `docs/claude/ui.md` describing the Quick path + `frameSwapped` clock + how to add new follower items.
+
+### Phase 4 — Backend dispatch (original plan, reference)
 
 `[ui] backend` config option. `tokenpal/ui/qt/overlay.py` instantiates the Quick stack when set, falls back to QWidget otherwise. Cross-platform smoke on:
 - Windows 11 (dev box) — primary target

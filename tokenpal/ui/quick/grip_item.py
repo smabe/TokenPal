@@ -127,3 +127,18 @@ class GripQuickItem(QQuickItem):
             return
         self._last_y = None
         event.accept()
+
+    # Duck-type shims so QtOverlay can hold a Quick item in the same
+    # ``self._resize_grip`` slot as the QWidget ``BuddyResizeGrip``.
+    def show(self) -> None:
+        self.setVisible(True)
+        self.update()
+
+    def hide(self) -> None:
+        self.setVisible(False)
+
+    def set_pose(self, _anchor_world, _angle_rad) -> None:
+        return
+
+    def close(self) -> None:
+        self.setVisible(False)

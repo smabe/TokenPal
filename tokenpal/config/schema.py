@@ -152,6 +152,16 @@ class UIConfig:
     # in tokenpal.ui.registry falls back to ``textual`` silently. See
     # docs/qt-frontend.md and plans/shipped/new-ui-new-me.md.
     overlay: str = "qt"
+    # Buddy rendering surface within the Qt overlay. ``qt`` =
+    # frameless QWidget per-pixel-translucent windows (the original
+    # path; layered-window CPU composite). ``quick`` = single
+    # QQuickWindow + QQuickItem children for the buddy + followers
+    # (DirectComposition + flip-model swapchain on Windows; threaded
+    # scene graph). The Quick path was added to lift the ~70 fps cap
+    # the QWidget path hits during rotation on a 4K @ 240 Hz panel;
+    # see plans/qt-it-quick-migration.md. Default ``qt`` until parity
+    # is proven across all four target machines.
+    backend: Literal["qt", "quick"] = "qt"
     buddy_name: str = "TokenPal"
     # Empty string = overlays pick a platform-appropriate monospace
     # (Menlo on macOS, Consolas on Windows, DejaVu Sans Mono on Linux).

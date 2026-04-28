@@ -60,6 +60,20 @@ class DockMockQuickItem(QQuickItem):
         if visible:
             self.update()
 
+    # Duck-type shims so QtOverlay can hold a Quick item in the same
+    # ``self._dock_mock`` slot as the QWidget ``DockMock``.
+    def show(self) -> None:
+        self.set_visible(True)
+
+    def hide(self) -> None:
+        self.set_visible(False)
+
+    def set_pose(self, _anchor_world, _angle_rad) -> None:
+        return
+
+    def close(self) -> None:
+        self.set_visible(False)
+
     def _reposition(self) -> None:
         # Top-center sits at (width/2, 0) in item-local coords.
         self.setX(self._anchor_parent.x() - self._content_w / 2.0)

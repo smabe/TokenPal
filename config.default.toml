@@ -108,6 +108,13 @@ temperature = 1.0
 # if you prefer the terminal frontend on a desktop host.
 # "console": minimal ANSI printer; fallback for tiny / remote shells.
 overlay = "qt"
+# Rendering surface within the Qt overlay. "qt" = layered-window
+# QWidget translucent windows (the original path). "quick" = single
+# QQuickWindow + QQuickItem scene graph (DirectComposition on
+# Windows; uncaps the ~70 fps ceiling the QWidget path hits during
+# rotation on high-refresh panels). See
+# plans/qt-it-quick-migration.md.
+backend = "qt"
 buddy_name = "TokenPal"
 font_size = 14
 position = "bottom_right"
