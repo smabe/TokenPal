@@ -292,6 +292,20 @@ class BuddyWindow(QWidget):
         self._tick_profile_last_log = 0.0
         self._tick_profile_last_perf = 0.0
 
+        # Shared paint clock. Frozen at the start of each pump and read
+        # by every accessor that lerps (body_angle, head_world_position,
+        # _build_transform via _lerped_state). Without this, the buddy's
+        # paintEvent calls time.monotonic() at one microsecond and each
+        # signal-slot follower (bubble, dock_mock, grip) calls it at
+        # progressively later microseconds, so they all end up painting
+        # different lerped angles within the same pump — the visible
+        # ghost rotating with the buddy. Freezing target = now + 1
+        # refresh period predicts where the body will be at the next
+        # DWM composite; aiming the lerp at the screen's photon time
+        # rather than the paint sample time is the standard frame-pacing
+        # contract (Apple WWDC23 §10075, NVIDIA Reflex, Handmade Hero).
+        self._paint_target_ts: float | None = None
+
     def set_right_click_handler(
         self, handler: Callable[[QPoint], None] | None,
     ) -> None:
@@ -577,13 +591,22 @@ class BuddyWindow(QWidget):
 
     def _lerped_state(self) -> tuple[float, float, float]:
         """Lerped ``(theta, com_x, com_y)`` between the two most recent
-        physics snapshots. Alpha is wall-clock progress past the latest
-        step in units of ``FIXED_DT``. Theta extrapolates past α=1 at
-        constant slope (graceful pump-stall recovery); position alpha is
-        clamped to [0, 1] so the residual stays bounded by AABB slack
-        (see ``_recompute_geometry``). Shortest-arc delta avoids a
-        one-frame ghost flash through upright when θ crosses ±π."""
-        delta_s = max(0.0, time.monotonic() - self._last_step_ts)
+        physics snapshots. Alpha is progress past the latest step in
+        units of ``FIXED_DT``, measured against the per-pump paint
+        clock (``_paint_target_ts``) when active so every accessor
+        within one pump returns the same value, falling back to live
+        ``time.monotonic()`` between pumps. Theta extrapolates past
+        α=1 at constant slope (graceful pump-stall recovery); position
+        alpha is clamped to [0, 1] so the residual stays bounded by
+        AABB slack (see ``_recompute_geometry``). Shortest-arc delta
+        avoids a one-frame ghost flash through upright when θ crosses
+        ±π."""
+        sample_ts = (
+            self._paint_target_ts
+            if self._paint_target_ts is not None
+            else time.monotonic()
+        )
+        delta_s = max(0.0, sample_ts - self._last_step_ts)
         alpha = delta_s / _FIXED_DT_S
         delta_theta = self._sim.theta - self._theta_prev
         if delta_theta > math.pi:
@@ -664,6 +687,9 @@ class BuddyWindow(QWidget):
             self._sim.tick(_FIXED_DT_S)
             self._accumulator -= _FIXED_DT_S
             self._last_step_ts = now
+        screen = self.screen() or QGuiApplication.primaryScreen()
+        refresh_hz = float(screen.refreshRate()) if screen else 60.0
+        self._paint_target_ts = now + 1.0 / max(refresh_hz, 1.0)
         self._tick_offscreen_rescue(now)
         self._refresh_view()
         if _PHYSICS_DEBUG:
