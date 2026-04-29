@@ -149,9 +149,24 @@ each phase, not at the end.
 - **Phase 3: git_nudge.** Same pattern as rage. `has_urgent` stays in
   the cascade as a cap-bypass flag for now; it is not a wedge of its own
   (it has no dedicated riff).
-- **Phase 4: drift, comment, freeform.** Move `IntentEngine.check_drift`
-  behind a `DriftWedge`. Split today's `_generate_comment` and
-  `_generate_freeform_comment` into `CommentWedge` and `FreeformWedge`.
+- **Phase 4a: drift.** `DriftWedge` wraps `IntentStore.check_drift` +
+  `mark_drift_emitted`. Adds `success: bool` to `Wedge.on_emitted` so
+  drift's "only cooldown on actual emit" semantic differs from rage's
+  "cooldown on any post-LLM path." `_select_candidate` learns to treat
+  `has_urgent` as a NEEDS_CAP_OPEN bypass (replaces the cascade's
+  `can_comment` plumbing for drift). IntentStore stays on Brain — it has
+  CRUD callers outside the drift path.
+- **Phase 4b: freeform.** `FreeformWedge` wraps `_generate_freeform_comment`.
+  Reintroduces `acknowledge_emit: ClassVar[bool]` on the ABC; freeform
+  sets it False. Gate is IDLE_FILL (only fires when no other wedge
+  proposed and the regular cap is closed) — so `_select_candidate` gains
+  IDLE_FILL handling.
+- **Phase 4c: comment.** The complex one. `CommentWedge` covers
+  `_generate_comment`'s easter-egg shortcut, snapshot enrichment, topic
+  roulette, memory lines, tool-calling vs plain LLM, and the
+  consecutive-failures / confused-quip logic. The riff pipeline gains a
+  `pre_riff` hook (canned-emit shortcut for easter eggs) and a
+  `wants_tools` ClassVar (CommentWedge dispatches via `_generate_with_tools`).
   Cascade now has only `idle_tools` left.
 - **Phase 5: idle_tool + llm_initiated_tool.** Wrap `IdleToolRoller` and
   the M3 LLM-initiated roller as Wedges. The IdleToolContext lives inside

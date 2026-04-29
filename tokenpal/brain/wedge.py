@@ -60,8 +60,17 @@ class Wedge(ABC):
     def build_prompt(self, candidate: EmissionCandidate, ctx: PromptContext) -> str:
         ...
 
-    def on_emitted(self, candidate: EmissionCandidate) -> None:
-        pass
+    def on_emitted(self, candidate: EmissionCandidate, success: bool) -> None:
+        """Notify the Wedge after the riff pipeline runs.
+
+        Called on every post-LLM path (success, near-dup suppress, filter
+        empty, sensitive-app block) but NOT on backend exception, so the
+        wedge can retry next tick. `success` is True only when a bubble
+        actually rendered — wedges whose cooldown should start only on a
+        real emit gate on this; wedges that want to cool down on any
+        post-LLM attempt ignore it.
+        """
+
 
 
 class WedgeRegistry:

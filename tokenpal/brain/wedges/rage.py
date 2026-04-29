@@ -38,6 +38,6 @@ class RageWedge(Wedge):
         signal = cast(RageSignal, candidate.payload)
         return ctx.personality.build_rage_check_prompt(signal.app_name)
 
-    def on_emitted(self, candidate: EmissionCandidate) -> None:
+    def on_emitted(self, candidate: EmissionCandidate, success: bool) -> None:
         self._pending = None
         self._detector.mark_emitted()

@@ -33,7 +33,7 @@ from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.idle_tools_m3 import LLMInitiatedRoller
-from tokenpal.brain.intent import DriftSignal, IntentStore
+from tokenpal.brain.intent import IntentStore
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.news_buffer import (
     NEWS_SOURCES,
@@ -55,6 +55,7 @@ from tokenpal.brain.wedge import (
     Wedge,
     WedgeRegistry,
 )
+from tokenpal.brain.wedges.drift import DriftWedge
 from tokenpal.brain.wedges.git_nudge import GitNudgeWedge
 from tokenpal.brain.wedges.rage import RageWedge
 from tokenpal.config.consent import Category, has_consent
@@ -466,6 +467,8 @@ class Brain:
         self._wedges: WedgeRegistry = WedgeRegistry()
         self._wedges.register(RageWedge(config=rage_detect_config or RageDetectConfig()))
         self._wedges.register(self._git_nudge_wedge)
+        if self._intent is not None:
+            self._wedges.register(DriftWedge(intent=self._intent))
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -762,22 +765,18 @@ class Brain:
                 for w in self._wedges:
                     w.ingest(readings)
 
-                # Git transitions bypass the comment-rate cap.
+                # Git transitions bypass the comment-rate cap. Compute once
+                # per tick — _should_comment() jitters and has side effects.
                 has_urgent = any(
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
-                can_comment = has_urgent or self._should_comment()
-                drift = (
-                    self._intent.check_drift() if self._intent is not None else None
-                )
-                chosen = self._select_candidate()
+                cap_open = has_urgent or self._should_comment()
+                chosen = self._select_candidate(cap_open=cap_open)
                 emitted = False
                 if chosen is not None:
                     emitted = await self._riff(*chosen)
-                elif drift is not None and can_comment:
-                    emitted = await self._generate_drift_nudge(drift)
-                elif can_comment:
+                elif cap_open:
                     emitted = await self._generate_comment(snapshot)
                 elif self._should_freeform():
                     emitted = await self._generate_freeform_comment()
@@ -1218,59 +1217,6 @@ class Brain:
         """Public accessor for the `/intent` slash command wiring."""
         return self._intent
 
-    async def _generate_drift_nudge(self, drift: DriftSignal) -> bool:
-        """Emit a single in-character nudge about the drifted-from intent.
-
-        The drift detector has its own 10min cooldown (see IntentStore);
-        this path additionally rides the normal pacing gate in _run_loop.
-        """
-        assert self._intent is not None, "drift signal implies intent is on"
-        if self._personality.check_sensitive_app(
-            self._context.snapshot()
-        ):
-            # User drifted into a non-sensitive distraction app but may have
-            # a sensitive app in context too — stay silent to be safe.
-            return False
-        prompt = self._personality.build_drift_nudge_prompt(
-            intent_text=drift.intent_text,
-            app_name=drift.app_name,
-            dwell_s=drift.dwell_s,
-        )
-        try:
-            if self._status_callback:
-                self._status_callback("thinking...")
-            log.debug(
-                "Generating drift nudge: intent=%r, app=%r, dwell=%.0fs",
-                drift.intent_text,
-                drift.app_name,
-                drift.dwell_s,
-            )
-            response = await self._llm.generate(
-                prompt,
-                target_latency_s=self._budgets.observation,
-                min_tokens=self._min_tokens.observation,
-            )
-            self._push_status()
-            filtered = self._personality.filter_response(response.text)
-            if filtered and self._is_near_duplicate(filtered):
-                log.info("TokenPal (drift suppressed near-duplicate): %s", filtered)
-                self._handle_suppressed_output("drift near-duplicate")
-                return False
-            if filtered:
-                log.info(
-                    "TokenPal (drift): %s (%.0fms)", filtered, response.latency_ms
-                )
-                self._emit_comment(filtered, acknowledge=True)
-                self._recent_outputs.append(filtered)
-                self._intent.mark_drift_emitted()
-                return True
-            log.debug("Drift nudge filtered out: %r", response.text[:80])
-            return False
-        except Exception:
-            log.exception("Drift nudge generation failed")
-            self._push_status()
-            return False
-
     async def _generate_buddy_reaction(self, kind: str) -> bool:
         """Emit a canned reaction line for a click (``poke``) or shake.
         Bypasses the comment-rate gate and interestingness threshold (same
@@ -1292,8 +1238,15 @@ class Brain:
         self._recent_outputs.append(line)
         return True
 
-    def _select_candidate(self) -> tuple[Wedge, EmissionCandidate] | None:
-        """Pick at most one Wedge candidate to riff this tick (priority-ordered, gate-filtered)."""
+    def _select_candidate(
+        self, *, cap_open: bool,
+    ) -> tuple[Wedge, EmissionCandidate] | None:
+        """Pick at most one Wedge candidate to riff this tick (priority-ordered, gate-filtered).
+
+        cap_open is the comment-rate gate (computed once per tick by the
+        caller — _should_comment has jitter + side effects). Affects only
+        NEEDS_CAP_OPEN wedges; BYPASS_CAP wedges fire regardless.
+        """
         proposals: list[tuple[Wedge, EmissionCandidate]] = []
         for w in self._wedges:
             c = w.propose()
@@ -1303,7 +1256,7 @@ class Brain:
         for w, c in proposals:
             if w.gate is GatePolicy.BYPASS_CAP:
                 return (w, c)
-            if w.gate is GatePolicy.NEEDS_CAP_OPEN and self._should_comment():
+            if w.gate is GatePolicy.NEEDS_CAP_OPEN and cap_open:
                 return (w, c)
         return None
 
@@ -1318,7 +1271,7 @@ class Brain:
         """
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
-            wedge.on_emitted(candidate)
+            wedge.on_emitted(candidate, success=False)
             return False
         ctx = PromptContext(personality=self._personality, snapshot=snapshot)
         prompt = wedge.build_prompt(candidate, ctx)
@@ -1343,7 +1296,7 @@ class Brain:
                 wedge.name, filtered,
             )
             self._handle_suppressed_output(f"{wedge.name} near-duplicate")
-            wedge.on_emitted(candidate)
+            wedge.on_emitted(candidate, success=False)
             return False
         if filtered:
             log.info(
@@ -1352,10 +1305,10 @@ class Brain:
             )
             self._emit_comment(filtered, acknowledge=True)
             self._recent_outputs.append(filtered)
-            wedge.on_emitted(candidate)
+            wedge.on_emitted(candidate, success=True)
             return True
         log.debug("%s riff filtered out: %r", wedge.name, response.text[:80])
-        wedge.on_emitted(candidate)
+        wedge.on_emitted(candidate, success=False)
         return False
 
     async def _generate_freeform_comment(self) -> bool:

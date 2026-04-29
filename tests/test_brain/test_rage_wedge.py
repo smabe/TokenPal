@@ -82,7 +82,7 @@ def test_on_emitted_clears_pending_and_arms_cooldown(
     _trigger_pattern(w, monkeypatch)
     cand = w.propose()
     assert cand is not None
-    w.on_emitted(cand)
+    w.on_emitted(cand, success=True)
     assert w.propose() is None
 
 

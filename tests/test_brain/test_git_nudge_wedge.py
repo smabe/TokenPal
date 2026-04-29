@@ -74,7 +74,7 @@ def test_on_emitted_starts_cooldown(config: GitNudgeConfig) -> None:
     w.ingest([_git_reading(last_commit_ts=time.time() - 10_000)])
     cand = w.propose()
     assert cand is not None
-    w.on_emitted(cand)
+    w.on_emitted(cand, success=True)
     # Cooldown should suppress the next propose even with the same conditions.
     assert w.propose() is None
 

@@ -52,5 +52,5 @@ class GitNudgeWedge(Wedge):
             stale_hours=sig.stale_hours,
         )
 
-    def on_emitted(self, candidate: EmissionCandidate) -> None:
+    def on_emitted(self, candidate: EmissionCandidate, success: bool) -> None:
         self._detector.mark_emitted()
