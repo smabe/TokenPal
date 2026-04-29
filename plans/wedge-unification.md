@@ -161,21 +161,37 @@ each phase, not at the end.
   sets it False. Gate is IDLE_FILL (only fires when no other wedge
   proposed and the regular cap is closed) — so `_select_candidate` gains
   IDLE_FILL handling.
-- **Phase 4c: comment.** The complex one. `CommentWedge` covers
-  `_generate_comment`'s easter-egg shortcut, snapshot enrichment, topic
-  roulette, memory lines, tool-calling vs plain LLM, and the
-  consecutive-failures / confused-quip logic. The riff pipeline gains a
-  `pre_riff` hook (canned-emit shortcut for easter eggs) and a
-  `wants_tools` ClassVar (CommentWedge dispatches via `_generate_with_tools`).
-  Cascade now has only `idle_tools` left.
-- **Phase 5: idle_tool + llm_initiated_tool.** Wrap `IdleToolRoller` and
-  the M3 LLM-initiated roller as Wedges. The IdleToolContext lives inside
-  the Wedge now and is built lazily inside `propose`.
-- **Phase 6: delete the cascade.** Remove the if/elif body, all five
-  `_generate_*` methods, and `_inject_brain_deps`'s wedge-specific knobs.
-  Brain tick is `for w in registry: w.ingest(...); candidate = select(...);
-  await riff(candidate)`. Verify: full pytest, manual smoke (run.sh, watch
-  one of each wedge fire).
+- **Phase 4c: comment — DEFERRED.** `_generate_comment` doesn't fit the
+  shared riff pipeline cleanly. It needs an easter-egg shortcut (skip
+  LLM), snapshot enrichment + topic roulette + memory lines + callback
+  lines (in `build_prompt`), tool-calling vs plain LLM dispatch,
+  consecutive-failures + confused-quip on exception, tool-spec re-enable
+  on success, and topic / memory-milestone recording on emit. Fitting it
+  would require new extension points (`pre_riff`, `wants_tools`,
+  `on_failure`) each with one consumer — premature abstraction by the
+  two-consumer rule. Alternative shapes (`async run(brain, candidate)`
+  override; brain-ref injection) reduce CommentWedge to a thin relocation
+  of `_generate_comment` with no real depth gain. Deferred until either
+  a second consumer of one of those hooks emerges, or `_generate_comment`
+  itself shrinks. Cascade keeps `elif cap_open: _generate_comment(...)`
+  as the only remaining branch after Phase 5.
+- **Phase 5: idle-tool extraction (refactor, not unification).** Idle-tool's
+  gate is "fire when nothing else emitted" — independent of cap_open and
+  not a fit for BYPASS_CAP / NEEDS_CAP_OPEN / IDLE_FILL. Forcing it would
+  add a `LAST_RESORT` policy with one consumer plus a two-phase
+  `_select_candidate`. Instead, extract `_maybe_fire_idle_tool`,
+  `_maybe_fire_llm_initiated_tool`, `_generate_tool_riff`,
+  `_build_idle_context`, `_register_running_bit`, `_record_idle_fire`,
+  `_idle_tools_eligible` from Brain into a new `IdleToolRunner` class.
+  Brain calls `await self._idle_runner.maybe_run(snapshot, emitted)` at
+  the post-pass. ~250 lines move out of `orchestrator.py`. Same logic,
+  cleaner location; the runner stays outside the Wedge registry.
+- **Phase 6: ship and document.** Final state: the cascade has two
+  remaining branches — `elif cap_open: _generate_comment(snapshot)` and
+  the post-pass `if not emitted: await self._idle_runner.maybe_run(...)`.
+  Both are intentionally outside the Wedge registry (4c and 5 covered
+  why). Verify: full pytest, manual smoke (run.sh, watch one of each
+  wedge fire). Move `plans/wedge-unification.md` to `plans/shipped/`.
 
 ## Tests that survive
 
@@ -222,6 +238,9 @@ each phase, not at the end.
 
 ## Parking lot
 
+- **CommentWedge migration.** See Phase 4c above. Reopen when an
+  extension hook lands a second consumer, or `_generate_comment` shrinks
+  enough to fit the shared pipeline without bespoke hooks.
 - **Wedge plugin discovery.** Today the registry is hand-wired in Brain
   init. If we ever want third-party Wedges, hook into the same
   `pkgutil.walk_packages` machinery used by Senses and Actions. Defer

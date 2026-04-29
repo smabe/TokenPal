@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from typing import Any
 
+from tokenpal.brain.idle_runner import IdleToolRunner
 from tokenpal.brain.idle_tools import IdleFireResult
 from tokenpal.brain.orchestrator import Brain
 from tokenpal.config.schema import IdleToolsConfig
@@ -22,24 +23,25 @@ def _bare_brain() -> Brain:
     # _any_long_task inspects _mode; default idle state is fine.
     from tokenpal.brain.orchestrator import BrainMode
     obj._mode = BrainMode.IDLE
+    obj._idle_runner = IdleToolRunner(obj)
     return obj
 
 
 def test_idle_tools_eligible_when_config_on() -> None:
     brain = _bare_brain()
-    assert brain._idle_tools_eligible()
+    assert brain._idle_runner.is_eligible()
 
 
 def test_idle_tools_blocked_when_disabled() -> None:
     brain = _bare_brain()
     brain._idle_tools_config = IdleToolsConfig(enabled=False)
-    assert not brain._idle_tools_eligible()
+    assert not brain._idle_runner.is_eligible()
 
 
 def test_idle_tools_blocked_when_paused() -> None:
     brain = _bare_brain()
     brain._paused = True
-    assert not brain._idle_tools_eligible()
+    assert not brain._idle_runner.is_eligible()
 
 
 def test_idle_tools_ignore_forced_silence() -> None:
@@ -49,7 +51,7 @@ def test_idle_tools_ignore_forced_silence() -> None:
     """
     brain = _bare_brain()
     brain._forced_silence_until = time.monotonic() + 60.0
-    assert brain._idle_tools_eligible()
+    assert brain._idle_runner.is_eligible()
 
 
 def test_record_idle_fire_noop_without_memory() -> None:
@@ -59,7 +61,7 @@ def test_record_idle_fire_noop_without_memory() -> None:
         framing="f", latency_ms=1.0, success=True,
     )
     # No crash when memory is None.
-    brain._record_idle_fire(fire, emitted=True)
+    brain._idle_runner.record_fire(fire, emitted=True)
 
 
 class _RecordingMemory:
@@ -88,7 +90,7 @@ def test_record_idle_fire_writes_telemetry_row() -> None:
         framing="announce it",
         latency_ms=42.0, success=True,
     )
-    brain._record_idle_fire(fire, emitted=True)
+    brain._idle_runner.record_fire(fire, emitted=True)
     assert len(brain._memory.calls) == 1
     row = brain._memory.calls[0]
     assert row["sense_name"] == "idle_tools"
@@ -111,7 +113,7 @@ def test_record_idle_fire_marks_llm_initiated_source() -> None:
         framing="react to it",
         latency_ms=80.0, success=True,
     )
-    brain._record_idle_fire(fire, emitted=True)
+    brain._idle_runner.record_fire(fire, emitted=True)
     assert brain._memory.calls[0]["data"]["source"] == "llm_initiated"
 
 
@@ -149,15 +151,15 @@ def test_build_idle_context_wires_session_minutes(monkeypatch: Any) -> None:
     brain._first_session_of_day = True
     brain._last_comment_time = time.monotonic() - 30
     monkeypatch.setattr(
-        "tokenpal.brain.orchestrator.datetime",
+        "tokenpal.brain.idle_runner.datetime",
         type("D", (), {"now": staticmethod(
             lambda: datetime(2026, 4, 17, 9, 30)
         )})(),
     )
     monkeypatch.setattr(
-        "tokenpal.brain.orchestrator.has_consent", lambda _: False,
+        "tokenpal.brain.idle_runner.has_consent", lambda _: False,
     )
-    ctx = brain._build_idle_context()
+    ctx = brain._idle_runner.build_context()
     assert ctx.session_minutes >= 9
     assert ctx.first_session_of_day is True
     assert ctx.consent_web_fetches is False
