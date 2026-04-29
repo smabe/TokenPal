@@ -1,4 +1,18 @@
-# wedge-unification
+# wedge-unification (shipped 2026-04-29)
+
+## Outcome
+
+Four wedges migrated (rage, git_nudge, drift, freeform). Idle-tool extracted
+into IdleToolRunner outside the Wedge registry. CommentWedge deferred —
+`_generate_comment`'s easter-egg shortcut + tool-calling dispatch + post-emit
+hooks don't fit the shared riff pipeline without one-consumer extension
+points. orchestrator.py shrank from 3024 to 2673 lines (-351). The cascade
+went from 5 elif branches (rage / git_sig / drift / comment / freeform) to
+1 (`elif cap_open: _generate_comment`) plus the idle-runner post-pass.
+2062 tests pass.
+
+Commits: `1c5a759` (phase 1), `dbbe81e` (phase 2), `93823e4` (phase 3),
+`9239555` (phase 4a), `a8bf533` (phase 4b), `9cefbc3` (phase 5).
 
 ## Context
 
