@@ -17,13 +17,13 @@ with anyway mid-swing.
 from __future__ import annotations
 
 import math
-import sys
 
 from PySide6.QtCore import QPointF, Qt
 from PySide6.QtGui import QPainter, QPaintEvent, QPixmap, QTransform
 from PySide6.QtWidgets import QWidget
 
 from tokenpal.ui.qt import _paint_trace
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 _ROTATION_MARGIN = 4
 
@@ -34,16 +34,7 @@ class DockMock(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        # Mirror buddy_window: Qt.Tool on macOS auto-hides on app
-        # deactivate. Off-darwin it's the right "no taskbar" hint.
-        if sys.platform != "darwin":
-            flags |= Qt.WindowType.Tool
-        self.setWindowFlags(flags)
+        self.setWindowFlags(buddy_overlay_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)

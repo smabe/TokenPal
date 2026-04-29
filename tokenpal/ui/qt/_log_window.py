@@ -32,8 +32,8 @@ from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
     glass_button_stylesheet,
     glass_scrollbar_stylesheet,
-    transparent_window_flags,
 )
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 
 class TranslucentLogWindow(QWidget):
@@ -55,7 +55,7 @@ class TranslucentLogWindow(QWidget):
         self._on_hide = on_hide
         install_zoom_shortcuts(self, on_zoom)
 
-        self.setWindowFlags(transparent_window_flags())
+        self.setWindowFlags(buddy_overlay_flags(focusable=True))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         layout = QVBoxLayout(self)

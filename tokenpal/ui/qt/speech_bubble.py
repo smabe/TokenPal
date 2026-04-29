@@ -15,7 +15,6 @@ head in world coords and paints everything rotated by ``body_angle``.
 from __future__ import annotations
 
 import math
-import sys
 
 from PySide6.QtCore import QPointF, QRect, Qt, QTimer
 from PySide6.QtGui import (
@@ -29,15 +28,15 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from tokenpal.ui.qt import _paint_trace
-
 from tokenpal.config.chatlog_writer import (
     DEFAULT_BACKGROUND_COLOR,
     DEFAULT_FONT_COLOR,
     normalize_hex_color,
 )
 from tokenpal.config.schema import FontConfig
+from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt._text_fx import qt_font_from_config, scale_font
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 _TYPING_INTERVAL_MS = 30
 _BUBBLE_PADDING = 12
@@ -91,17 +90,7 @@ class SpeechBubble(QWidget):
         self._tail_widget: tuple[int, int] = (0, 0)
         self._body_angle_rad = 0.0
 
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        # Mirror buddy_window: Qt.Tool on macOS maps to an NSWindow
-        # utility-panel that auto-hides on app deactivate, so the bubble
-        # would vanish whenever the user clicked away. Off-darwin Tool is
-        # the right "no taskbar entry" hint.
-        if sys.platform != "darwin":
-            flags |= Qt.WindowType.Tool
-        self.setWindowFlags(flags)
+        self.setWindowFlags(buddy_overlay_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 

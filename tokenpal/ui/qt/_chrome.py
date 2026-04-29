@@ -8,7 +8,6 @@ standard Cmd/Ctrl +/-/0 font-zoom keybinds.
 from __future__ import annotations
 
 import math
-import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, Signal
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import QLabel, QSizeGrip, QWidget
 
 from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt._text_fx import apply_drop_shadow, glass_button_stylesheet
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 DRAG_HANDLE_HEIGHT = 22
 SIZE_GRIP_SIDE = 16
@@ -121,17 +121,7 @@ class BuddyResizeGrip(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        # Mirror buddy_window: Qt.Tool on macOS auto-hides the window
-        # whenever the app loses focus. Off-darwin it's the right
-        # "no taskbar entry" hint.
-        if sys.platform != "darwin":
-            flags |= Qt.WindowType.Tool
-        self.setWindowFlags(flags)
+        self.setWindowFlags(buddy_overlay_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setCursor(Qt.CursorShape.SizeFDiagCursor)

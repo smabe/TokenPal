@@ -26,8 +26,8 @@ from tokenpal.ui.qt._text_fx import (
     apply_drop_shadow,
     glass_pill_stylesheet,
     scale_font,
-    transparent_window_flags,
 )
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 _DOCK_DEFAULT_WIDTH = 360
 _DOCK_INPUT_HEIGHT = 32
@@ -55,7 +55,7 @@ class ChatDock(QWidget):
         self._base_font: QFont | None = None
         install_zoom_shortcuts(self, on_zoom)
 
-        self.setWindowFlags(transparent_window_flags())
+        self.setWindowFlags(buddy_overlay_flags(focusable=True))
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         # The container itself should not grab focus on click — only the

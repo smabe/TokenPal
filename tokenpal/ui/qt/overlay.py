@@ -55,6 +55,7 @@ from tokenpal.ui.qt.platform import (
     apply_macos_accessory_mode,
     apply_macos_click_through,
     apply_macos_stay_visible,
+    buddy_overlay_flags,
     lock_macos_child_above,
     warn_wayland_limitations,
 )
@@ -1322,9 +1323,8 @@ class QtOverlay(AbstractOverlay):
             return
 
         # floating
-        from tokenpal.ui.qt._text_fx import transparent_window_flags
         self._dock.setParent(None)
-        self._dock.setWindowFlags(transparent_window_flags())
+        self._dock.setWindowFlags(buddy_overlay_flags(focusable=True))
         self._dock.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground, True,
         )

@@ -11,7 +11,31 @@ import logging
 import os
 import sys
 
+from PySide6.QtCore import Qt
+
 log = logging.getLogger(__name__)
+
+
+def buddy_overlay_flags(*, focusable: bool = False) -> Qt.WindowType:
+    """Shared window-flag bundle for frameless translucent overlay surfaces.
+
+    Frameless + always-on-top, plus ``Qt.Tool`` off-darwin for taskbar
+    suppression (on macOS ``Qt.Tool`` maps to an NSWindow utility panel
+    that auto-hides on app deactivate; accessory mode + collection
+    behavior cover the same ground there).
+
+    ``focusable=False`` (default) blocks focus-stealing; pass ``True``
+    for interactive surfaces (chat input, dock buttons).
+    """
+    flags = (
+        Qt.WindowType.FramelessWindowHint
+        | Qt.WindowType.WindowStaysOnTopHint
+    )
+    if not focusable:
+        flags |= Qt.WindowType.WindowDoesNotAcceptFocus
+    if sys.platform != "darwin":
+        flags |= Qt.WindowType.Tool
+    return flags
 
 
 def apply_macos_accessory_mode() -> None:

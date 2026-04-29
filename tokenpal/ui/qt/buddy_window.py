@@ -12,7 +12,6 @@ them without dragging a hidden widget along.
 from __future__ import annotations
 
 import math
-import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import QPoint, QPointF, QRect, Qt, Signal
@@ -29,6 +28,7 @@ from PySide6.QtWidgets import QWidget
 from tokenpal.ui.buddy_core import _PHYSICS_DEBUG, FIXED_DT_S, BuddyCore
 from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt.physics import RigidBodyConfig
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 # Pixel offsets between the buddy and his attached followers. The
 # overlay applies these in screen-axis coords on the QWidget path
@@ -70,19 +70,7 @@ class BuddyWindow(QWidget):
             parent=self,
         )
 
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        # Qt.Tool on macOS maps to NSWindow utility-panel behavior that
-        # hides the window whenever the app loses focus. On Windows /
-        # Linux it's the right flag for "don't show in taskbar"; on
-        # macOS we rely on apply_macos_accessory_mode + the NSWindow
-        # collectionBehavior tweak applied after the window is native.
-        if sys.platform != "darwin":
-            flags |= Qt.WindowType.Tool
-        self.setWindowFlags(flags)
+        self.setWindowFlags(buddy_overlay_flags())
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
 

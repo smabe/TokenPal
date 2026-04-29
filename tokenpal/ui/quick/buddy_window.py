@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import math
 import os
-import sys
 import time
 from collections.abc import Callable
 
@@ -44,6 +43,7 @@ from PySide6.QtQuick import QQuickItem, QQuickWindow
 
 from tokenpal.ui.buddy_core import BuddyCore
 from tokenpal.ui.qt.buddy_window import BUBBLE_HOVER_OFFSET_Y, DOCK_OFFSET_Y
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 from tokenpal.ui.quick._clickthrough import ClickThroughToggle
 from tokenpal.ui.quick.bubble_item import BubbleQuickItem
 from tokenpal.ui.quick.buddy_item import BuddyQuickItem
@@ -65,14 +65,7 @@ class _ScreenWindow(QQuickWindow):
         super().__init__()
         self.screen_ref = screen
         self.setColor(QColor(Qt.GlobalColor.transparent))
-        flags = (
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-        if sys.platform != "darwin":
-            flags |= Qt.WindowType.Tool
-        self.setFlags(flags)
+        self.setFlags(buddy_overlay_flags())
         geo = screen.geometry()
         self.setPosition(geo.x(), geo.y())
         self.resize(geo.width(), geo.height())

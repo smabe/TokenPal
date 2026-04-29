@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import math
 import random
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -46,7 +45,6 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.ascii_props import (
     MOON_SPRITE,
     OVERCAST_CLOUD_A,
@@ -60,7 +58,9 @@ from tokenpal.ui.buddy_environment import (
     EnvState,
     Kind,
 )
+from tokenpal.ui.qt import _paint_trace
 from tokenpal.ui.qt._text_fx import render_sprite_pixmap
+from tokenpal.ui.qt.platform import buddy_overlay_flags
 
 # --- Timing ---------------------------------------------------------------
 
@@ -676,25 +676,6 @@ _SKY_BUDDY_GAP_PX = 6
 _SKY_RIGHT_BIAS_PX = 16
 
 
-def _apply_transparent_window_flags(w: QWidget) -> None:
-    """Mirrors the DockMock pattern (``qt/dock_mock.py:33-48``) — frameless,
-    translucent, always-on-top, non-focusable, and click-through. Qt.Tool
-    off-darwin (macOS auto-hides Qt.Tool on app deactivate; we rely on
-    ``apply_macos_accessory_mode`` + collection behavior instead)."""
-    flags = (
-        Qt.WindowType.FramelessWindowHint
-        | Qt.WindowType.WindowStaysOnTopHint
-        | Qt.WindowType.WindowDoesNotAcceptFocus
-    )
-    if sys.platform != "darwin":
-        flags |= Qt.WindowType.Tool
-    w.setWindowFlags(flags)
-    w.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-    w.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-    w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-    w.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-
-
 class SkyWindow(QWidget):
     """Buddy-mounted sky panel.
 
@@ -734,7 +715,11 @@ class SkyWindow(QWidget):
             tuple[tuple[str, ...], int, int, int], QPixmap,
         ] = {}
 
-        _apply_transparent_window_flags(self)
+        self.setWindowFlags(buddy_overlay_flags())
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         sky_h = _MAX_SKY_SPRITE_ROWS * self._line_h + _SKY_HEIGHT_MARGIN_PX
         self.resize(_SKY_W_PX, sky_h)
         self._base_size = (_SKY_W_PX, sky_h)
@@ -1019,7 +1004,11 @@ class BuddyRainOverlay(QWidget):
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._buddy_rect_provider = buddy_rect_provider
 
-        _apply_transparent_window_flags(self)
+        self.setWindowFlags(buddy_overlay_flags())
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.resize(200, 200)
         self._last_anchor: tuple[int, int] = (-9999, -9999)
 

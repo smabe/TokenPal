@@ -21,7 +21,6 @@ glyphs legible:
 from __future__ import annotations
 
 import math
-import sys
 
 from PySide6.QtCore import QRect, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter, QPixmap
@@ -269,20 +268,3 @@ def scale_font(base: QFont, factor: float) -> QFont:
     return font
 
 
-def transparent_window_flags() -> Qt.WindowType:
-    """Shared window-flag bundle for the frameless transparent surfaces.
-
-    Keeping this central means the dock and the history window pick up
-    the same always-on-top + don't-steal-focus behavior. On macOS we
-    drop ``Qt.Tool`` because the NSWindow utility-panel mapping auto-
-    hides when the app loses focus — same rationale as ``BuddyWindow``.
-    Accessory mode (``apply_macos_accessory_mode``) already keeps the
-    buddy off the Dock, so ``Tool`` isn't needed there.
-    """
-    flags = (
-        Qt.WindowType.FramelessWindowHint
-        | Qt.WindowType.WindowStaysOnTopHint
-    )
-    if sys.platform != "darwin":
-        flags |= Qt.WindowType.Tool
-    return flags
