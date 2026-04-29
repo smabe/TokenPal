@@ -53,6 +53,22 @@ class TestCleanEnglish:
         # "café" should pass - single non-ASCII char well under threshold
         assert is_clean_english("Grab a café before the meeting, man.")
 
+    def test_rejects_cjk_numerals_in_long_line(self):
+        # Regression: Qwen3 drift produced 十九 instead of "19" in an EOD
+        # bubble. Old ratio guard let 2 CJK chars through in a 155-char
+        # sentence (1.3% non-ASCII < 10% threshold).
+        assert not is_clean_english(
+            "You spent 十九 minutes flitting between browsers like a "
+            "caffeinated hummingbird, and somehow still found time to be "
+            "idle enough for three returns."
+        )
+
+    def test_rejects_cyrillic(self):
+        assert not is_clean_english("This is русский text inside English.")
+
+    def test_allows_smart_quotes_and_em_dash(self):
+        assert is_clean_english("It's a “good” idea — really.")
+
 
 # ---------------------------------------------------------------
 # _validate_persona
