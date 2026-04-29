@@ -56,6 +56,7 @@ from tokenpal.brain.wedge import (
     WedgeRegistry,
 )
 from tokenpal.brain.wedges.drift import DriftWedge
+from tokenpal.brain.wedges.freeform import FreeformWedge
 from tokenpal.brain.wedges.git_nudge import GitNudgeWedge
 from tokenpal.brain.wedges.rage import RageWedge
 from tokenpal.config.consent import Category, has_consent
@@ -469,6 +470,7 @@ class Brain:
         self._wedges.register(self._git_nudge_wedge)
         if self._intent is not None:
             self._wedges.register(DriftWedge(intent=self._intent))
+        self._wedges.register(FreeformWedge(is_eligible=self._should_freeform))
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -778,8 +780,6 @@ class Brain:
                     emitted = await self._riff(*chosen)
                 elif cap_open:
                     emitted = await self._generate_comment(snapshot)
-                elif self._should_freeform():
-                    emitted = await self._generate_freeform_comment()
 
                 if not emitted and self._idle_tools_eligible():
                     if not await self._maybe_fire_llm_initiated_tool(snapshot):
@@ -1245,7 +1245,9 @@ class Brain:
 
         cap_open is the comment-rate gate (computed once per tick by the
         caller — _should_comment has jitter + side effects). Affects only
-        NEEDS_CAP_OPEN wedges; BYPASS_CAP wedges fire regardless.
+        NEEDS_CAP_OPEN wedges; BYPASS_CAP wedges fire regardless. IDLE_FILL
+        wedges fire only when the cap is closed (the regular comment path
+        won't run that tick).
         """
         proposals: list[tuple[Wedge, EmissionCandidate]] = []
         for w in self._wedges:
@@ -1258,6 +1260,10 @@ class Brain:
                 return (w, c)
             if w.gate is GatePolicy.NEEDS_CAP_OPEN and cap_open:
                 return (w, c)
+        if not cap_open:
+            for w, c in proposals:
+                if w.gate is GatePolicy.IDLE_FILL:
+                    return (w, c)
         return None
 
     async def _riff(
@@ -1303,47 +1309,13 @@ class Brain:
                 "TokenPal (%s): %s (%.0fms)",
                 wedge.name, filtered, response.latency_ms,
             )
-            self._emit_comment(filtered, acknowledge=True)
+            self._emit_comment(filtered, acknowledge=wedge.acknowledge_emit)
             self._recent_outputs.append(filtered)
             wedge.on_emitted(candidate, success=True)
             return True
         log.debug("%s riff filtered out: %r", wedge.name, response.text[:80])
         wedge.on_emitted(candidate, success=False)
         return False
-
-    async def _generate_freeform_comment(self) -> bool:
-        """Generate an unprompted in-character thought. Returns True iff emitted."""
-        prompt = self._personality.build_freeform_prompt()
-
-        try:
-            if self._status_callback:
-                self._status_callback("thinking...")
-            log.debug("Generating freeform comment...")
-            response = await self._llm.generate(
-                prompt,
-                target_latency_s=self._budgets.freeform,
-                min_tokens=self._min_tokens.freeform,
-            )
-            self._push_status()
-
-            filtered = self._personality.filter_response(response.text)
-            if filtered and self._is_near_duplicate(filtered):
-                log.info("TokenPal (freeform suppressed near-duplicate): %s", filtered)
-                self._handle_suppressed_output("freeform near-duplicate")
-                return False
-
-            if filtered:
-                log.info("TokenPal (freeform): %s (%.0fms)", filtered, response.latency_ms)
-                self._emit_comment(filtered)
-                self._recent_outputs.append(filtered)
-                return True
-            log.debug("Freeform filtered out: %r", response.text[:80])
-            return False
-
-        except Exception:
-            log.exception("Freeform generation failed")
-            self._push_status()
-            return False
 
     # ------------------------------------------------------------------
     # Idle-tool roll — third emission path

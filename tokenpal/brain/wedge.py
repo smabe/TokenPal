@@ -48,6 +48,7 @@ class Wedge(ABC):
     priority: ClassVar[int]
     gate: ClassVar[GatePolicy]
     latency_budget: ClassVar[LatencyBudget] = "observation"
+    acknowledge_emit: ClassVar[bool] = True
 
     def ingest(self, readings: list[SenseReading]) -> None:
         pass
