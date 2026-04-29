@@ -136,6 +136,31 @@ async def test_poll_filters_sensitive_terms(enabled_config: dict[str, Any]):
     assert "x/clean" in reading.summary
 
 
+async def test_poll_filters_cjk_descriptions(enabled_config: dict[str, Any]):
+    # Regression: a trending repo with a Chinese description leaked into the
+    # bubble prompt and the buddy parroted the CJK back. Drop non-Latin-script
+    # repos at the sense before they hit the LLM.
+    repos = [
+        GHRepo(
+            full_name="freestylefly/awesome-gpt-image-2",
+            stars=2005,
+            description="Prompt as Code | GPT-Image2 工业级提示词引擎与模板库",
+            language="",
+            url="",
+        ),
+        GHRepo(full_name="x/clean", stars=50, description="d", language="", url=""),
+    ]
+    sense = GitHubTrendingSense(enabled_config)
+    await sense.setup()
+    with patch(
+        "tokenpal.senses.github_trending.sense.fetch_top_repos", return_value=repos,
+    ):
+        reading = await sense.poll()
+    assert reading is not None
+    assert "freestylefly" not in reading.summary
+    assert "x/clean" in reading.summary
+
+
 async def test_poll_dedups_unchanged_summary(enabled_config: dict[str, Any]):
     repos = [GHRepo(full_name="x/y", stars=1, description="d", language="", url="")]
     sense = GitHubTrendingSense(enabled_config)

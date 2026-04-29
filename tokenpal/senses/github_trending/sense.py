@@ -9,7 +9,7 @@ from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.github_trending._client import GHRepo, fetch_top_repos
 from tokenpal.senses.registry import register_sense
-from tokenpal.util.text_guards import truncate_ellipsis
+from tokenpal.util.text_guards import is_latin_script, truncate_ellipsis
 
 log = logging.getLogger(__name__)
 
@@ -45,7 +45,8 @@ class GitHubTrendingSense(AbstractSense):
 
         repos = [
             r for r in fetch_top_repos(limit=_REPO_LIMIT)
-            if not contains_sensitive_content_term(f"{r.full_name} {r.description}")
+            if is_latin_script(f"{r.full_name} {r.description}")
+            and not contains_sensitive_content_term(f"{r.full_name} {r.description}")
         ]
         if not repos:
             return None

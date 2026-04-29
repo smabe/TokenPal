@@ -45,6 +45,17 @@ def _is_latin_or_punct(ch: str) -> bool:
     return False
 
 
+def is_latin_script(text: str) -> bool:
+    """True if *text* is empty or every character is Latin script / punctuation.
+
+    Used to drop external strings (GitHub/HN/Lobsters titles, descriptions)
+    that contain CJK / Cyrillic / etc. before they reach the LLM prompt —
+    the buddy speaks English, so non-Latin content is just noise to riff on
+    and a drift trigger for the underlying model.
+    """
+    return all(_is_latin_or_punct(ch) for ch in text)
+
+
 def is_clean_english(text: str) -> bool:
     """Reject drift: non-Latin script, chain-of-thought, markdown meta-commentary.
 

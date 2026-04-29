@@ -12,7 +12,7 @@ from tokenpal.tools.train_voice import (
     audit_profile,
 )
 from tokenpal.tools.voice_profile import VoiceProfile, save_profile
-from tokenpal.util.text_guards import is_clean_english
+from tokenpal.util.text_guards import is_clean_english, is_latin_script
 
 # ---------------------------------------------------------------
 # is_clean_english
@@ -68,6 +68,28 @@ class TestCleanEnglish:
 
     def test_allows_smart_quotes_and_em_dash(self):
         assert is_clean_english("It's a “good” idea — really.")
+
+
+class TestIsLatinScript:
+    def test_accepts_empty(self):
+        assert is_latin_script("")
+
+    def test_accepts_plain_english(self):
+        assert is_latin_script("freestylefly/awesome-gpt-image-2")
+
+    def test_accepts_accented_latin(self):
+        assert is_latin_script("café résumé naïve")
+
+    def test_rejects_cjk(self):
+        assert not is_latin_script(
+            "Prompt as Code | GPT-Image2 工业级提示词引擎与模板库"
+        )
+
+    def test_rejects_single_cjk_char(self):
+        assert not is_latin_script("repo · 工")
+
+    def test_rejects_cyrillic(self):
+        assert not is_latin_script("Пример проекта")
 
 
 # ---------------------------------------------------------------

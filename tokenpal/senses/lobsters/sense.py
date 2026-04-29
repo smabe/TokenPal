@@ -9,7 +9,7 @@ from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.lobsters._client import fetch_top_stories
 from tokenpal.senses.registry import register_sense
-from tokenpal.util.text_guards import truncate_ellipsis
+from tokenpal.util.text_guards import is_latin_script, truncate_ellipsis
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,8 @@ class LobstersSense(AbstractSense):
 
         stories = [
             s for s in fetch_top_stories(limit=_HEADLINE_LIMIT)
-            if not contains_sensitive_content_term(s.title)
+            if is_latin_script(s.title)
+            and not contains_sensitive_content_term(s.title)
         ]
         if not stories:
             return None
