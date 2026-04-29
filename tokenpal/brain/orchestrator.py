@@ -45,12 +45,18 @@ from tokenpal.brain.news_buffer import (
 from tokenpal.brain.observation_enricher import ObservationEnricher
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
 from tokenpal.brain.proactive import ProactiveScheduler
-from tokenpal.brain.rage_detector import RageDetector, RageSignal
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
 from tokenpal.brain.research_followup import FollowupSession
 from tokenpal.brain.session_summarizer import SessionSummarizer
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
-from tokenpal.brain.wedge import WedgeRegistry
+from tokenpal.brain.wedge import (
+    EmissionCandidate,
+    GatePolicy,
+    PromptContext,
+    Wedge,
+    WedgeRegistry,
+)
+from tokenpal.brain.wedges.rage import RageWedge
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
     AgentConfig,
@@ -453,11 +459,6 @@ class Brain:
             else None
         )
 
-        # Rage / frustration detector (opt-in). Consumes typing_cadence +
-        # app_awareness readings only.
-        self._rage_config: RageDetectConfig = rage_detect_config or RageDetectConfig()
-        self._rage: RageDetector = RageDetector(config=self._rage_config)
-
         # Proactive WIP-commit nudge.
         self._git_nudge_config: GitNudgeConfig = git_nudge_config or GitNudgeConfig()
         self._git_nudge: GitNudgeDetector = GitNudgeDetector(
@@ -466,6 +467,7 @@ class Brain:
         self._user_present: bool = False
 
         self._wedges: WedgeRegistry = WedgeRegistry()
+        self._wedges.register(RageWedge(config=rage_detect_config or RageDetectConfig()))
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -759,9 +761,8 @@ class Brain:
                 # its dwell timer stays accurate.
                 self._sync_intent_app()
 
-                # Rage detector (opt-in) — bypass the comment gate since it
-                # fires rarely and the user explicitly enabled the feature.
-                rage = self._rage.ingest(readings)
+                for w in self._wedges:
+                    w.ingest(readings)
 
                 # Proactive-git: consume readings, then ask the detector.
                 # user_present flips to True on any reading this tick — a
@@ -782,17 +783,17 @@ class Brain:
                     for r in readings
                 )
                 can_comment = (
-                    rage is not None
-                    or git_sig is not None
+                    git_sig is not None
                     or has_urgent
                     or self._should_comment()
                 )
                 drift = (
                     self._intent.check_drift() if self._intent is not None else None
                 )
+                chosen = self._select_candidate()
                 emitted = False
-                if rage is not None:
-                    emitted = await self._generate_rage_check(rage)
+                if chosen is not None:
+                    emitted = await self._riff(*chosen)
                 elif git_sig is not None:
                     emitted = await self._generate_git_nudge(git_sig)
                 elif drift is not None and can_comment:
@@ -1366,50 +1367,71 @@ class Brain:
             self._push_status()
             return False
 
-    async def _generate_rage_check(self, rage: RageSignal) -> bool:
-        """Emit a single in-character check-in after a rage-quit pattern."""
+    def _select_candidate(self) -> tuple[Wedge, EmissionCandidate] | None:
+        """Pick at most one Wedge candidate to riff this tick (priority-ordered, gate-filtered)."""
+        proposals: list[tuple[Wedge, EmissionCandidate]] = []
+        for w in self._wedges:
+            c = w.propose()
+            if c is not None:
+                proposals.append((w, c))
+        proposals.sort(key=lambda p: -p[0].priority)
+        for w, c in proposals:
+            if w.gate is GatePolicy.BYPASS_CAP:
+                return (w, c)
+            if w.gate is GatePolicy.NEEDS_CAP_OPEN and self._should_comment():
+                return (w, c)
+        return None
+
+    async def _riff(
+        self, wedge: Wedge, candidate: EmissionCandidate,
+    ) -> bool:
+        """Shared pipeline: build_prompt, LLM, filter, emit.
+
+        Calls on_emitted on every path that reaches the LLM (success,
+        suppression, sensitive-app block) so wedge cooldowns start. A
+        backend exception leaves the wedge ready to retry on the next tick.
+        """
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
-            # Never trigger a mental-health-adjacent nudge into a sensitive
-            # app context.
-            self._rage.mark_emitted()  # still start cooldown so we don't loop
+            wedge.on_emitted(candidate)
             return False
-        prompt = self._personality.build_rage_check_prompt(rage.app_name)
+        ctx = PromptContext(personality=self._personality, snapshot=snapshot)
+        prompt = wedge.build_prompt(candidate, ctx)
+        if self._status_callback:
+            self._status_callback("thinking...")
+        log.debug("Generating %s riff", wedge.name)
         try:
-            if self._status_callback:
-                self._status_callback("thinking...")
-            log.debug(
-                "Generating rage check: app=%r, pause=%.0fs",
-                rage.app_name,
-                rage.pause_s,
-            )
             response = await self._llm.generate(
                 prompt,
-                target_latency_s=self._budgets.observation,
-                min_tokens=self._min_tokens.observation,
+                target_latency_s=getattr(self._budgets, wedge.latency_budget),
+                min_tokens=getattr(self._min_tokens, wedge.latency_budget),
             )
-            self._push_status()
-            filtered = self._personality.filter_response(response.text)
-            if filtered and self._is_near_duplicate(filtered):
-                log.info("TokenPal (rage suppressed near-duplicate): %s", filtered)
-                self._handle_suppressed_output("rage near-duplicate")
-                self._rage.mark_emitted()
-                return False
-            if filtered:
-                log.info(
-                    "TokenPal (rage): %s (%.0fms)", filtered, response.latency_ms
-                )
-                self._emit_comment(filtered, acknowledge=True)
-                self._recent_outputs.append(filtered)
-                self._rage.mark_emitted()
-                return True
-            log.debug("Rage check filtered out: %r", response.text[:80])
-            self._rage.mark_emitted()
-            return False
         except Exception:
-            log.exception("Rage check generation failed")
+            log.exception("%s riff generation failed", wedge.name)
             self._push_status()
             return False
+        self._push_status()
+        filtered = self._personality.filter_response(response.text)
+        if filtered and self._is_near_duplicate(filtered):
+            log.info(
+                "TokenPal (%s suppressed near-duplicate): %s",
+                wedge.name, filtered,
+            )
+            self._handle_suppressed_output(f"{wedge.name} near-duplicate")
+            wedge.on_emitted(candidate)
+            return False
+        if filtered:
+            log.info(
+                "TokenPal (%s): %s (%.0fms)",
+                wedge.name, filtered, response.latency_ms,
+            )
+            self._emit_comment(filtered, acknowledge=True)
+            self._recent_outputs.append(filtered)
+            wedge.on_emitted(candidate)
+            return True
+        log.debug("%s riff filtered out: %r", wedge.name, response.text[:80])
+        wedge.on_emitted(candidate)
+        return False
 
     async def _generate_freeform_comment(self) -> bool:
         """Generate an unprompted in-character thought. Returns True iff emitted."""

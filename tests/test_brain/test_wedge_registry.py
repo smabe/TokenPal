@@ -5,6 +5,7 @@ import pytest
 from tokenpal.brain.wedge import (
     EmissionCandidate,
     GatePolicy,
+    PromptContext,
     Wedge,
     WedgeRegistry,
 )
@@ -18,10 +19,15 @@ class _DummyWedge(Wedge):
     def __init__(self, fire: bool = False) -> None:
         self.fire = fire
 
-    def propose(self, now: float) -> EmissionCandidate | None:
+    def propose(self) -> EmissionCandidate | None:
         if not self.fire:
             return None
         return EmissionCandidate(wedge_name=self.name, payload="hi")
+
+    def build_prompt(
+        self, candidate: EmissionCandidate, ctx: PromptContext,
+    ) -> str:
+        return ""
 
 
 class _SecondDummy(_DummyWedge):
@@ -31,8 +37,8 @@ class _SecondDummy(_DummyWedge):
 def test_propose_returns_none_or_candidate() -> None:
     silent = _DummyWedge(fire=False)
     firing = _DummyWedge(fire=True)
-    assert silent.propose(now=0.0) is None
-    cand = firing.propose(now=0.0)
+    assert silent.propose() is None
+    cand = firing.propose()
     assert isinstance(cand, EmissionCandidate)
     assert cand.wedge_name == "dummy"
     assert cand.payload == "hi"

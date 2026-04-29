@@ -6,9 +6,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from tokenpal.senses.base import SenseReading
+
+if TYPE_CHECKING:
+    from tokenpal.brain.personality import PersonalityEngine
+
+
+LatencyBudget = Literal["observation", "freeform", "idle_tool", "tools"]
 
 
 class GatePolicy(Enum):
@@ -29,17 +35,33 @@ class EmissionCandidate:
     payload: object
 
 
+@dataclass(frozen=True)
+class PromptContext:
+    """Inputs the Brain hands a Wedge so it can build its prompt."""
+
+    personality: PersonalityEngine
+    snapshot: str
+
+
 class Wedge(ABC):
     name: ClassVar[str]
     priority: ClassVar[int]
     gate: ClassVar[GatePolicy]
+    latency_budget: ClassVar[LatencyBudget] = "observation"
 
     def ingest(self, readings: list[SenseReading]) -> None:
         pass
 
     @abstractmethod
-    def propose(self, now: float) -> EmissionCandidate | None:
+    def propose(self) -> EmissionCandidate | None:
         ...
+
+    @abstractmethod
+    def build_prompt(self, candidate: EmissionCandidate, ctx: PromptContext) -> str:
+        ...
+
+    def on_emitted(self, candidate: EmissionCandidate) -> None:
+        pass
 
 
 class WedgeRegistry:
