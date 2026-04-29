@@ -117,12 +117,17 @@ ranks remaining by `(priority, registration_order)`.
 |----------------------|----------|-----------------|-----------------------------------------|
 | `rage`               | 90       | BYPASS_CAP      | `_rage` + `_generate_rage_check`        |
 | `git_nudge`          | 85       | BYPASS_CAP      | `_git_nudge` + `_generate_git_nudge`    |
-| `urgent_git`         | 80       | BYPASS_CAP      | `has_urgent` flag in cascade            |
 | `drift`              | 50       | NEEDS_CAP_OPEN  | `_intent.check_drift` + `_generate_drift_nudge` |
 | `comment`            | 10       | NEEDS_CAP_OPEN  | `_should_comment` + `_generate_comment` |
 | `freeform`           | 5        | IDLE_FILL       | `_should_freeform` + `_generate_freeform_comment` |
 | `llm_initiated_tool` | 2        | IDLE_FILL       | `_maybe_fire_llm_initiated_tool`        |
 | `idle_tool`          | 1        | IDLE_FILL       | `_maybe_fire_idle_tool` + `_generate_tool_riff` |
+
+`has_urgent` (a git transition reading this tick) is a **cap-bypass flag**, not
+a separate wedge: it opens the cap for the regular Comment wedge so the
+existing observation prompt fires on a git event without dedicating a riff
+to it. Phase 4 wires this into `_select_candidate` when CommentWedge
+migrates; until then it stays in the cascade.
 
 ## Phases
 
@@ -141,9 +146,9 @@ each phase, not at the end.
   `RageWedge.build_prompt`. Tests: existing `test_rage_*` pass through the
   new shape; one new test that picks a rage candidate over a comment when
   both are eligible.
-- **Phase 3: git_nudge + urgent_git.** Same pattern. `urgent_git` is a
-  small new Wedge that turns the `has_urgent` flag into a candidate.
-  Delete the inline `has_urgent` code in the cascade.
+- **Phase 3: git_nudge.** Same pattern as rage. `has_urgent` stays in
+  the cascade as a cap-bypass flag for now; it is not a wedge of its own
+  (it has no dedicated riff).
 - **Phase 4: drift, comment, freeform.** Move `IntentEngine.check_drift`
   behind a `DriftWedge`. Split today's `_generate_comment` and
   `_generate_freeform_comment` into `CommentWedge` and `FreeformWedge`.

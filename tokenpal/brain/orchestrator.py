@@ -31,7 +31,6 @@ from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
-from tokenpal.brain.git_nudge import GitNudgeDetector, GitNudgeSignal
 from tokenpal.brain.idle_tools import IdleFireResult, IdleToolRoller, build_context
 from tokenpal.brain.idle_tools_m3 import LLMInitiatedRoller
 from tokenpal.brain.intent import DriftSignal, IntentStore
@@ -56,6 +55,7 @@ from tokenpal.brain.wedge import (
     Wedge,
     WedgeRegistry,
 )
+from tokenpal.brain.wedges.git_nudge import GitNudgeWedge
 from tokenpal.brain.wedges.rage import RageWedge
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
@@ -459,15 +459,13 @@ class Brain:
             else None
         )
 
-        # Proactive WIP-commit nudge.
-        self._git_nudge_config: GitNudgeConfig = git_nudge_config or GitNudgeConfig()
-        self._git_nudge: GitNudgeDetector = GitNudgeDetector(
-            config=self._git_nudge_config
+        self._git_nudge_wedge = GitNudgeWedge(
+            config=git_nudge_config or GitNudgeConfig(),
         )
-        self._user_present: bool = False
 
         self._wedges: WedgeRegistry = WedgeRegistry()
         self._wedges.register(RageWedge(config=rage_detect_config or RageDetectConfig()))
+        self._wedges.register(self._git_nudge_wedge)
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
@@ -535,8 +533,8 @@ class Brain:
         # Git nudge: hydrate initial state in the background so a WIP
         # branch that was already stale at launch can nudge without
         # waiting for the next git change.
-        if self._git_nudge.enabled:
-            asyncio.create_task(self._git_nudge.hydrate())
+        if self._git_nudge_wedge.enabled:
+            asyncio.create_task(self._git_nudge_wedge.hydrate())
 
         try:
             await self._run_loop()
@@ -764,29 +762,12 @@ class Brain:
                 for w in self._wedges:
                     w.ingest(readings)
 
-                # Proactive-git: consume readings, then ask the detector.
-                # user_present flips to True on any reading this tick — a
-                # cheap "computer is live" proxy so we don't nudge into a
-                # quiet dark room.
-                self._git_nudge.ingest(readings)
-                if readings:
-                    self._user_present = True
-                git_sig = (
-                    self._git_nudge.check(user_present=self._user_present)
-                    if self._git_nudge.enabled
-                    else None
-                )
-
-                # High-signal events bypass the normal gate
+                # Git transitions bypass the comment-rate cap.
                 has_urgent = any(
                     r.sense_name == "git" and r.changed_from
                     for r in readings
                 )
-                can_comment = (
-                    git_sig is not None
-                    or has_urgent
-                    or self._should_comment()
-                )
+                can_comment = has_urgent or self._should_comment()
                 drift = (
                     self._intent.check_drift() if self._intent is not None else None
                 )
@@ -794,8 +775,6 @@ class Brain:
                 emitted = False
                 if chosen is not None:
                     emitted = await self._riff(*chosen)
-                elif git_sig is not None:
-                    emitted = await self._generate_git_nudge(git_sig)
                 elif drift is not None and can_comment:
                     emitted = await self._generate_drift_nudge(drift)
                 elif can_comment:
@@ -1312,60 +1291,6 @@ class Brain:
         self._emit_comment(line, acknowledge=True)
         self._recent_outputs.append(line)
         return True
-
-    async def _generate_git_nudge(self, sig: GitNudgeSignal) -> bool:
-        """Emit a single in-character nudge about a stale WIP commit."""
-        snapshot = self._context.snapshot()
-        if self._personality.check_sensitive_app(snapshot):
-            # Sensitive-app context suppresses all commentary; still start
-            # the cooldown so we don't busy-loop.
-            self._git_nudge.mark_emitted()
-            return False
-        prompt = self._personality.build_git_nudge_prompt(
-            branch=sig.branch,
-            commit_msg=sig.last_commit_msg,
-            stale_hours=sig.stale_hours,
-        )
-        try:
-            if self._status_callback:
-                self._status_callback("thinking...")
-            log.debug(
-                "Generating git nudge: branch=%r, commit=%r, stale=%.0fh",
-                sig.branch,
-                sig.last_commit_msg,
-                sig.stale_hours,
-            )
-            response = await self._llm.generate(
-                prompt,
-                target_latency_s=self._budgets.observation,
-                min_tokens=self._min_tokens.observation,
-            )
-            self._push_status()
-            filtered = self._personality.filter_response(response.text)
-            if filtered and self._is_near_duplicate(filtered):
-                log.info(
-                    "TokenPal (git-nudge suppressed near-duplicate): %s", filtered
-                )
-                self._handle_suppressed_output("git-nudge near-duplicate")
-                self._git_nudge.mark_emitted()
-                return False
-            if filtered:
-                log.info(
-                    "TokenPal (git nudge): %s (%.0fms)",
-                    filtered,
-                    response.latency_ms,
-                )
-                self._emit_comment(filtered, acknowledge=True)
-                self._recent_outputs.append(filtered)
-                self._git_nudge.mark_emitted()
-                return True
-            log.debug("Git nudge filtered out: %r", response.text[:80])
-            self._git_nudge.mark_emitted()
-            return False
-        except Exception:
-            log.exception("Git nudge generation failed")
-            self._push_status()
-            return False
 
     def _select_candidate(self) -> tuple[Wedge, EmissionCandidate] | None:
         """Pick at most one Wedge candidate to riff this tick (priority-ordered, gate-filtered)."""
