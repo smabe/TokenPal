@@ -50,6 +50,7 @@ from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
 from tokenpal.brain.research_followup import FollowupSession
 from tokenpal.brain.session_summarizer import SessionSummarizer
 from tokenpal.brain.stop_reason import AgentStopReason, ResearchStopReason
+from tokenpal.brain.wedge import WedgeRegistry
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.config.schema import (
     AgentConfig,
@@ -463,6 +464,8 @@ class Brain:
             config=self._git_nudge_config
         )
         self._user_present: bool = False
+
+        self._wedges: WedgeRegistry = WedgeRegistry()
 
     async def start(self) -> None:
         """Initialize all components and start the main loop."""
