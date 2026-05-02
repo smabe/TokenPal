@@ -397,7 +397,10 @@ class QtOverlay(AbstractOverlay):
             self._weather_sim,
             font_family=self._font_family,
             font_size=self._font_size,
-            overlay_update_hook=self._buddy_rain_overlay.update,
+            # Route through _refresh_rain_overlay so a particle spawned
+            # while the buddy is asleep (no position_changed → no
+            # _reanchor_weather) still wakes the overlay up.
+            overlay_update_hook=self._refresh_rain_overlay,
             buddy_rect_provider=self._buddy_world_rect_for_sim,
         )
         self._buddy.position_changed.connect(self._reanchor_weather)
@@ -1123,23 +1126,25 @@ class QtOverlay(AbstractOverlay):
         buddy is asleep."""
         if self._sky_window is not None:
             self._sky_window.reanchor()
-        if self._buddy_rain_overlay is None:
-            return
-        self._buddy_rain_overlay.reanchor()
-        # Only repaint the rain overlay when there's actually something
-        # to render — empty particle lists were costing a translucent
-        # always-on-top compositor pass per buddy tick.
-        if (
-            self._weather_sim is not None
-            and len(self._weather_sim.particles) > 0
-        ):
-            self._buddy_rain_overlay.update()
+        self._refresh_rain_overlay()
         if (
             self._buddy is not None
             and self._weather_sim is not None
             and self._buddy.is_dragging()
         ):
             self._weather_sim.clear_buddy_accum()
+
+    def _refresh_rain_overlay(self) -> None:
+        """Reanchor the buddy rain overlay and request a paint iff it's
+        actually showing anything. ``BuddyRainOverlay.reanchor`` hides
+        the widget when there are no particles, so DWM stops paying the
+        per-vsync translucent compositor cost while the weather is
+        clear."""
+        if self._buddy_rain_overlay is None:
+            return
+        self._buddy_rain_overlay.reanchor()
+        if not self._buddy_rain_overlay.isHidden():
+            self._buddy_rain_overlay.update()
 
     # --- UI-thread implementations --------------------------------------
 

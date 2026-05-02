@@ -1022,9 +1022,13 @@ class BuddyRainOverlay(QWidget):
     def reanchor(self) -> None:
         """Idempotent re-anchor to current buddy rect + padding. ``position_
         changed`` fires every physics tick (``buddy_window.py:344``), so we
-        early-return if the integer pos hasn't shifted."""
+        early-return if the integer pos hasn't shifted.
+
+        Also hides the overlay when there's nothing to draw — DWM still
+        composites a translucent always-on-top rect every vsync if the
+        widget is shown, even with zero painted content."""
         rect = self._buddy_rect_provider()
-        if rect is None or rect.isEmpty():
+        if rect is None or rect.isEmpty() or not self._sim.particles:
             if not self.isHidden():
                 self.hide()
             return
