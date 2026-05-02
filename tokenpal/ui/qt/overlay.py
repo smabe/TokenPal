@@ -1126,7 +1126,14 @@ class QtOverlay(AbstractOverlay):
         if self._buddy_rain_overlay is None:
             return
         self._buddy_rain_overlay.reanchor()
-        self._buddy_rain_overlay.update()
+        # Only repaint the rain overlay when there's actually something
+        # to render — empty particle lists were costing a translucent
+        # always-on-top compositor pass per buddy tick.
+        if (
+            self._weather_sim is not None
+            and len(self._weather_sim.particles) > 0
+        ):
+            self._buddy_rain_overlay.update()
         if (
             self._buddy is not None
             and self._weather_sim is not None

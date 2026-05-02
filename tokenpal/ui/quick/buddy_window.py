@@ -134,10 +134,15 @@ class BuddyQuickWindow(QObject):
         self._active.frameSwapped.connect(self._on_sync_tick)
 
         # frameSwapped pauses when nothing is painting; a 60 Hz kick wakes
-        # physics on demand.
+        # physics on demand. Only runs while the buddy is awake — when
+        # he settles, both the kick and frameSwapped go quiet so a
+        # transparent QQuickWindow that would otherwise present every
+        # vsync stops dirtying scene-graph nodes (DWM still pays for
+        # the empty present, but no Python work backs it).
         self._kick_timer = QTimer(self)
         self._kick_timer.setInterval(16)
         self._kick_timer.timeout.connect(lambda: self._buddy_item.update())
+        self._core.awake_changed.connect(self._on_awake_changed)
 
         self._trace_count = 0
         self._trace_t0 = time.perf_counter()
@@ -148,7 +153,8 @@ class BuddyQuickWindow(QObject):
             self._active.frameSwapped.connect(self._on_frame_swapped_trace)
 
         self._sync_geometry()
-        self._kick_timer.start()
+        if not self._core.sim.sleeping:
+            self._kick_timer.start()
         self._buddy_item.update()
 
     # --- public API consumed by QtOverlay -----------------------------
@@ -263,6 +269,12 @@ class BuddyQuickWindow(QObject):
 
     def _on_sync_tick(self) -> None:
         self._core._on_tick()
+        # Once _on_tick decides we're at rest, the kick timer stops
+        # and we skip _sync_geometry to leave the scene graph clean —
+        # otherwise the buddy_item.update() in _sync_geometry re-dirties
+        # the scene every vsync and frameSwapped never goes quiet.
+        if self._core.is_idle():
+            return
         cx, cy = self._core.sim.position
         target = self._pick_screen(cx, cy)
         if target is not None and target is not self._active:
@@ -272,6 +284,14 @@ class BuddyQuickWindow(QObject):
             self._trace_count += 1
             if self._trace_count % _TRACE_EVERY == 0:
                 self._dump_trace()
+
+    def _on_awake_changed(self, awake: bool) -> None:
+        if awake:
+            if not self._kick_timer.isActive():
+                self._kick_timer.start()
+            self._buddy_item.update()
+        else:
+            self._kick_timer.stop()
 
     def _dump_trace(self) -> None:
         from tokenpal.ui.buddy_core import FIXED_DT_S

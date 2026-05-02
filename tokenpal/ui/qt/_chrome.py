@@ -152,11 +152,14 @@ class BuddyResizeGrip(QWidget):
         new_x = int(anchor_world.x()) - ax
         new_y = int(anchor_world.y()) - ay
         pos = self.pos()
-        if pos.x() != new_x or pos.y() != new_y:
+        moved = pos.x() != new_x or pos.y() != new_y
+        if moved:
             self.move(new_x, new_y)
         if prev_angle != angle_rad:
             self._update_click_mask()
-        self.repaint()
+            self.repaint()
+        elif moved:
+            self.repaint()
 
     def showEvent(self, event: QShowEvent) -> None:
         super().showEvent(event)
