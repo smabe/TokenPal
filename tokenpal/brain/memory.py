@@ -155,10 +155,30 @@ def _migration_3_chat_log(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_4_conversation_summaries(conn: sqlite3.Connection) -> None:
+    """v3 -> v4: add conversation_summaries for chat continuity across expiry."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversation_summaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp REAL NOT NULL,
+            session_id TEXT NOT NULL,
+            started_at REAL NOT NULL,
+            ended_at REAL NOT NULL,
+            turns INTEGER NOT NULL,
+            summary TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_conversation_summaries_time
+            ON conversation_summaries(timestamp);
+        """
+    )
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_1_session_summaries,
     _migration_2_active_intent,
     _migration_3_chat_log,
+    _migration_4_conversation_summaries,
 ]
 
 CURRENT_SCHEMA_VERSION = len(_MIGRATIONS)
@@ -407,6 +427,48 @@ class MemoryStore:
         if row is None:
             return None
         return float(row[0]), str(row[1])
+
+    def record_conversation_summary(
+        self, text: str, started_at: float, ended_at: float, turns: int
+    ) -> None:
+        """Insert a summary of one expired conversation session."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO conversation_summaries "
+                "(timestamp, session_id, started_at, ended_at, turns, summary) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (time.time(), self._session_id, started_at, ended_at, turns, text),
+            )
+            self._conn.commit()
+
+    def get_latest_conversation_summary(
+        self, max_lookback_s: float
+    ) -> tuple[float, str] | None:
+        """Return (timestamp, summary) of the most recent conversation summary
+        within max_lookback_s seconds, or None.
+        """
+        if not self._enabled or not self._conn:
+            return None
+        cutoff = time.time() - max_lookback_s
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT timestamp, summary FROM conversation_summaries "
+                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 1",
+                (cutoff,),
+            ).fetchone()
+        if row is None:
+            return None
+        return float(row[0]), str(row[1])
+
+    def clear_conversation_summaries(self) -> None:
+        """Wipe every row in conversation_summaries."""
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute("DELETE FROM conversation_summaries")
+            self._conn.commit()
 
     def get_recent_summaries(
         self, since_ts: float, limit: int = 5
@@ -740,7 +802,7 @@ class MemoryStore:
     # ------------------------------------------------------------------
 
     def _prune(self) -> None:
-        """Delete observations older than retention period."""
+        """Delete observations and conversation summaries older than retention period."""
         if not self._enabled or not self._conn:
             return
         cutoff = time.time() - self._retention_days * 86400
@@ -748,9 +810,14 @@ class MemoryStore:
             result = self._conn.execute(
                 "DELETE FROM observations WHERE timestamp < ?", (cutoff,)
             )
-            self._conn.commit()
             if result.rowcount > 0:
                 log.info("Pruned %d old observations", result.rowcount)
+            result = self._conn.execute(
+                "DELETE FROM conversation_summaries WHERE timestamp < ?", (cutoff,)
+            )
+            if result.rowcount > 0:
+                log.info("Pruned %d old conversation summaries", result.rowcount)
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Daily aggregation
