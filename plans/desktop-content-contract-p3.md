@@ -1,0 +1,48 @@
+# desktop-content-contract-p3 — `--validate` permission rows, registry invariants test, docs
+
+You are phase `p3` of the `desktop-content-contract` plan. This phase delivers, as one commit, the read-only macOS permission probes and their `--validate` rows, the registry-driven invariants test that every future marked action must pass, and the documentation that tells a tool author what the contract is.
+
+## Locked decisions
+See the master `plans/desktop-content-contract.md`. The decisions binding this phase:
+- Probes never prompt: `HIServices.AXIsProcessTrusted()` (already used at `tokenpal/senses/_keyboard_bus.py:33-37`) and `Quartz.CGPreflightScreenCaptureAccess()` (Apple: preflight is non-prompting, https://developer.apple.com/documentation/coregraphics/cgpreflightscreencaptureaccess(); probed from the repo venv 2026-09-02 with no dialog). `CGRequestScreenCaptureAccess` is never called.
+- A missing Screen Recording grant is a warning row, not a counted problem; a missing Accessibility grant stays a warning too (today's block is a warning, `tokenpal/cli.py:408-414`).
+- Off macOS, one row: `desktop tools: no OS permission grants needed`.
+
+## Work
+- Scope trace: DIRECT — "`--validate` reports Accessibility and Screen Recording status as granted/missing" and "the contract test exists and passes with zero content tools" and "`docs/claude/actions.md` gains a desktop content tools section" are three of the issue's acceptance criteria.
+- `tokenpal/desktop/permissions.py` — new. Shape (proposed):
+  ```python
+  def accessibility_granted() -> bool | None:
+      """True/False on macOS; None when not macOS or pyobjc is unavailable."""
+
+  def screen_recording_granted() -> bool | None:
+      """Same contract, via Quartz.CGPreflightScreenCaptureAccess."""
+  ```
+  Both gate on `platform.system() == "Darwin"`, import pyobjc inside the function, and catch `ImportError` plus any pyobjc exception as `None` with a DEBUG log, mirroring `_keyboard_bus.py:29-39`.
+- `tokenpal/cli.py` — replace block 7 (`cli.py:408-414`) with a call to a new `_check_desktop_permissions(plat: str) -> None` defined beside `_check_audio` (`cli.py:170`). Import the probes inside the function as `from tokenpal.desktop import permissions` and call `permissions.accessibility_granted()` (the way `_check_audio` imports `tokenpal.audio.deps` at `cli.py:185`, which is what lets `tests/test_audio/test_validate.py:38-41` patch it). It prints a header line `desktop tools (permissions checked for <sys.executable>)` and, on Darwin, one row per probe: `_CHECK` + `Accessibility: granted` / `_WARN` + `Accessibility: missing — System Settings > Privacy & Security > Accessibility`, likewise `Screen Recording` (settings path `... > Screen & System Audio Recording`); a `None` probe prints `_WARN` + `Accessibility: unknown (pyobjc unavailable)`. Off Darwin, the single n/a row. Returns nothing; the summary counter is untouched (locked decision).
+- `tests/test_desktop/test_validate.py` — new, patterned on `tests/test_audio/test_validate.py:1-40`: patch `tokenpal.desktop.permissions.accessibility_granted`/`screen_recording_granted` and assert the rendered rows (not the header, which carries `sys.executable`) for (granted, granted), (missing, missing), (None, None) with `plat="Darwin"`, and the `no OS permission grants needed` row with `plat="Windows"`.
+- `tests/test_desktop/test_privacy_contract.py` — new. Calls `discover_actions()` and reads `_ACTION_REGISTRY` (`tokenpal/actions/registry.py:15-34`), selects classes with `reads_desktop_content` true, and parametrizes over them (an empty set skips, which pytest reports as such). Per marked action assert: `cacheable is False`; `safe is True` or `requires_confirm is True`; `action_name` not in `M3_CATALOG` (`tokenpal/brain/idle_tools_m3.py:34-44`); `action_name` not equal to any `tool_name` or any entry of `extra_tool_names` across `M1_RULES` (`tokenpal/brain/idle_rules.py:286-644`; `idle_tools.py:306,429` read `rule.tool_name`); `action_name` not in `DEFAULT_TOOLS` (`tokenpal/config/schema.py`, imported by `catalog.py:17`); and `execute()` with no arguments and consent absent (monkeypatch `tokenpal.desktop.content.has_consent` to return `False`) returns an unsuccessful `ActionResult` whose output contains `'desktop content' consent` — the "consent before argument validation" ordering rule from p1's module docstring. Also one non-parametrized test: `DesktopContent` is importable from `tokenpal.desktop.content` and `Category.DESKTOP_CONTENT == "desktop_content"` (guards the string the docs cite).
+- `docs/claude/actions.md` — append a `## Desktop content tools` section: the marker (`reads_desktop_content = True`, `cacheable = False`), the call order (`require_consent()` → OS read → `refuse_if_sensitive()` → `DesktopContent(...).to_prompt_block()`), what the runner does for marked tools (trace redaction, no cache, network tools dropped, hidden reasoning, unpersisted final answer), what the conversation path does (never lists them and refuses them by name), where content goes (the configured inference server, which may be a LAN `api_url`), the `persist=False` channel for slash commands that call the LLM directly, the two things never to do (`log` the `.text`, set `display_text` from it), the same-batch rule from p2 (a network tool requested in the same LLM response as a content read is skipped with a fixed result), and the two tests a new tool inherits (`test_privacy_contract.py`) versus must write itself (sensitive-source refusal with a fake OS read, and `assert_no_leak` over its own path).
+- `CLAUDE.md` — one bullet under `## Privacy` (`CLAUDE.md:52`): desktop content tools (selected text, documents, OCR) are explicit-command only, gated by the `desktop_content` consent category, prompt-only (never `memory.db`, never logs), refused for sensitive apps, and never exposed to the ambient or conversation tool paths; pointer to `docs/claude/actions.md`.
+
+## Decisions & findings
+### Decision: static invariants in the shared test, behavior in per-tool tests  *(status: active)*
+- **Rationale:** a generic test cannot call an unknown tool with valid arguments or fake its OS read, so the shared test pins what is checkable from the class alone plus the one dynamic rule the contract fixes as order-independent of arguments (consent first). Refusal and no-leak over the real read path are each tool's own tests, with `assert_no_leak` (p2) as the shared assertion. Issue #51 asked for all four checks in the parametrized test; this narrows it, is recorded in the master's Locked decisions, and is surfaced at approval.
+- **Evidence:** `AbstractAction.execute(**kwargs)` (`tokenpal/actions/base.py:68-70`) carries no argument metadata beyond the JSON schema.
+
+### Decision: probes live in `tokenpal/desktop/`, not `cli.py`  *(status: active)*
+- **Rationale:** #52 (selected text) and #55 (OCR) need the same answers at runtime to explain a failed read; `cli.py` is not importable from a tool.
+- **Evidence:** `_keyboard_bus.py:23-39` already duplicates the Accessibility call for its own reason (warmup); parked as adjacent in the master.
+
+## Failure modes to anticipate
+- `Quartz` import cost: pyobjc's Quartz binding takes noticeable time to import; keep the import inside the function so `tokenpal --check` and normal startup do not pay it.
+- On macOS, `CGPreflightScreenCaptureAccess` reflects the TCC state for the *host binary* (the Python interpreter or the app bundle). Running from a terminal, the grant attaches to the terminal app or to `python`; that is why the header line names `sys.executable`.
+- `discover_actions()` imports every module under `tokenpal.actions`; the invariants test must run it once (module-level or fixture), and it must tolerate platform-gated actions that are registered but not constructible on the test host — instantiate with `{}` inside a `try` and skip with a reason if construction raises.
+- The Windows row is verified on the AMD desktop per the author-on-target-host rule; the test covers the branch, the run covers the reality.
+
+## Done criteria
+- Observable: `./run.sh --validate` on this Mac prints the two permission rows and no system dialog appears (checked by watching for the TCC prompt while it runs); paste the two rows into the master's Status.
+- Observable: `.\run.ps1 --validate` on the Windows box prints the `no OS permission grants needed` row. This is a master-level Done criterion checked before `/plan ship`; p3 may commit on the strength of its test with the row marked pending in the master's Status.
+- `tests/test_desktop/test_validate.py` and `tests/test_desktop/test_privacy_contract.py` pass; the contract test reports the parametrized case as skipped (zero marked tools) and the non-parametrized cases as passed.
+- `docs/claude/actions.md` and `CLAUDE.md` updated; both reference `desktop_content` and `reads_desktop_content` by the exact strings the code uses (grep both docs for each string).
+- `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
