@@ -68,13 +68,10 @@ files added to Files touched (`loader.py`, `util/text_guards.py`,
 Done criteria p2: unit criteria green (2091 full suite); live: expiry →
 summary row → recap injected on the next chat, proven in runs 7 and 10;
 `CLAUDE.md` privacy bullets rewritten; ruff and mypy clean on touched modules.
-NEXT: p2. Read `plans/conversation-continuity-p2.md` FIRST. Binding
-decisions: one rollover path `_rollover_expired_session()` used by the tick
-and both session-creation sites; creation sites await a pending summary via
-`wait_for(shield(task))` and swallow `CancelledError` only when the summary
-task itself was cancelled; the summarizer is constructed when either
-`[session_summary]` toggle is on; `/clear` wipes stored summaries and cancels
-in-flight work; teardown cancels and awaits before `_llm.teardown()`.
+**p2 SHIPPED** in `2d40209` (2026-09-02). All phases shipped; master Done
+criteria met (shard criteria, live expiry → row → recap on this Mac against
+MTPLX, full suite 2091 green).
+**Shipped: 2026-09-02** (8e22f62 + 2d40209)
 
 ## Goal
 A conversation with the buddy keeps its context across a pause of many
@@ -135,3 +132,5 @@ the next conversation so the buddy can pick up where you left off.
 - **Summarize on shutdown.** Brain stop with an active session loses it; would need an awaited LLM call during teardown. Deferred.
 - **Surface the observation handoff note to conversation.** `_previous_session_note` (`orchestrator.py:594-612`) feeds only `build_prompt`; the conversation system message never sees it. Separate product question.
 - **`build_conversation_prompt` single-turn fallback** (`personality.py:1389`) has no callers under `tokenpal/`, only tests (grounding audit grep). Dead code; separate cleanup.
+
+**Ship disposition 2026-09-02:** every parking-lot item plus the review leftovers (four unmapped loader sections, recap wording, console stdin buffering, dead `build_conversation_prompt`) filed as GitHub issue #45. Nothing dropped.

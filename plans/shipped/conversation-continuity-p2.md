@@ -35,6 +35,14 @@ See the master `plans/conversation-continuity.md`. The decisions binding this ph
 
 Operational step, no repo file (this Mac's gitignored repo-root `config.toml:29-31`): set `[conversation] max_turns = 40` and `timeout_s = 900`. Signed off 2026-09-02.
 
+Added during the review round (2026-09-02), all in service of the same behavior:
+- `tokenpal/config/loader.py` — `session_summary` added to `_SECTION_MAP`; the section never loaded before this phase.
+- `tests/test_actions/test_config.py` — loader test proving both `[session_summary]` toggles load as False when set so.
+- `tokenpal/util/text_guards.py` — `neutralize_envelope_tags` moved here from `session_summarizer.py` (second consumer is `build_conversation_recap`).
+- `tokenpal/util/timefmt.py` — new; `format_age()` lifted from the orchestrator's `_format_cache_age`, shared by the cache-age line and the recap.
+- `tokenpal/brain/memory.py` — `get_latest_conversation_summary` orders by `ended_at DESC`.
+- `tokenpal/brain/session_summarizer.py` — imports the moved helper; NONE clause narrowed so one-line factual chats are kept.
+
 ## Decisions & findings
 ### Decision: gate on a `[session_summary]` toggle, not on `[chat_log] persist`  *(status: active; name `conversations`, default true, signed off 2026-09-02)*
 - **Rationale:** the Brain already holds `_session_summary_config` (`orchestrator.py:594-612`, `:622-631`) and never sees `ChatLogConfig`; the feature is a session summary in kind; a separate toggle lets a user keep observation handoff notes while refusing chat summaries.
