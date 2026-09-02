@@ -15,9 +15,16 @@ sampling instead of layered-window per-pixel hit-test).
 """
 from __future__ import annotations
 
+from typing import cast
+
 from PySide6.QtCore import QPointF, QRect, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter
-from PySide6.QtQuick import QQuickItem, QSGSimpleTextureNode
+from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter
+from PySide6.QtQuick import (
+    QQuickItem,
+    QSGNode,
+    QSGSimpleTextureNode,
+    QSGTexture,
+)
 
 from tokenpal.ui.qt._chrome import (
     BUDDY_GRIP_HIT_SIDE,
@@ -44,7 +51,7 @@ class GripQuickItem(QQuickItem):
         # the same QImage forever; updatePaintNode's id-equality check
         # then rebinds the existing QSGTexture each frame at zero cost.
         self._image: QImage = self._render_image()
-        self._texture = None
+        self._texture: QSGTexture | None = None
         self._tex_image_id: int | None = None
 
         self._last_y: int | None = None
@@ -69,8 +76,12 @@ class GripQuickItem(QQuickItem):
         p.end()
         return img
 
-    def updatePaintNode(self, old_node, _data):
-        node = old_node
+    def updatePaintNode(
+        self,
+        old_node: QSGNode | None,
+        _data: QQuickItem.UpdatePaintNodeData,
+    ) -> QSGNode:
+        node = cast("QSGSimpleTextureNode | None", old_node)
         if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
@@ -80,24 +91,26 @@ class GripQuickItem(QQuickItem):
             node.setOwnsTexture(True)
         elif node is None:
             node = QSGSimpleTextureNode()
-            node.setTexture(self._texture)
+            node.setTexture(cast(QSGTexture, self._texture))
             node.setOwnsTexture(False)
         node.setRect(QRectF(0.0, 0.0, self.width(), self.height()))
         return node
 
-    def contains(self, point: QPointF) -> bool:
+    # PySide6 widens the stub's parameter to the set of types Qt can
+    # implicitly convert to QPointF; the C++ virtual takes QPointF only.
+    def contains(self, point: QPointF) -> bool:  # type: ignore[override]
         return (
             0.0 <= point.x() <= float(self._side)
             and 0.0 <= point.y() <= float(self._side)
         )
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._last_y = int(event.globalPosition().toPoint().y())
         event.accept()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         if self._last_y is None:
             return
         cur_y = int(event.globalPosition().toPoint().y())
@@ -107,7 +120,7 @@ class GripQuickItem(QQuickItem):
             self._last_y = cur_y
         event.accept()
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._last_y = None
@@ -122,7 +135,7 @@ class GripQuickItem(QQuickItem):
     def hide(self) -> None:
         self.setVisible(False)
 
-    def set_pose(self, _anchor_world, _angle_rad) -> None:
+    def set_pose(self, _anchor_world: QPointF, _angle_rad: float) -> None:
         return
 
     def close(self) -> None:

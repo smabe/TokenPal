@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from tokenpal.util.http_json import http_json
 
@@ -31,7 +32,7 @@ def _normalize_title(raw: str) -> str:
     return " ".join(html.unescape(raw).split())
 
 
-def _parse_story(item: dict) -> LobstersStory | None:
+def _parse_story(item: dict[str, Any]) -> LobstersStory | None:
     title = _normalize_title(item.get("title") or "")
     if not title:
         return None

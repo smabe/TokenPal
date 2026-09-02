@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from tokenpal.util.http_json import http_json
 
@@ -37,7 +38,7 @@ def _trending_url(today: dt.date, per_page: int) -> str:
     )
 
 
-def _parse_repo(item: dict) -> GHRepo | None:
+def _parse_repo(item: dict[str, Any]) -> GHRepo | None:
     full_name = item.get("full_name") or ""
     if not full_name:
         return None

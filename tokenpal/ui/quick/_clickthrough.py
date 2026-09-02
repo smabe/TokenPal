@@ -21,6 +21,7 @@ import logging
 import os
 import sys
 from collections.abc import Callable
+from typing import Any
 
 from PySide6.QtCore import QObject, QPointF, QTimer
 from PySide6.QtQuick import QQuickWindow
@@ -42,8 +43,10 @@ _TRACE = bool(os.environ.get("TOKENPAL_QUICK_CLICKTHROUGH_TRACE"))
 OpaqueProbe = Callable[[QPointF], bool]
 
 
-def _bind_user32():
-    u32 = ctypes.windll.user32
+# Typed ``Any``: ``ctypes.windll`` and the WinDLL function pointers it
+# hands back exist only on Windows, and typeshed hides them elsewhere.
+def _bind_user32() -> Any:
+    u32 = ctypes.windll.user32  # type: ignore[attr-defined]
     u32.GetWindowLongPtrW.restype = ctypes.c_longlong
     u32.GetWindowLongPtrW.argtypes = [ctypes.wintypes.HWND, ctypes.c_int]
     u32.SetWindowLongPtrW.restype = ctypes.c_longlong
@@ -89,7 +92,7 @@ class ClickThroughToggle(QObject):
         self._window = window
         self._probe = opaque_probe
         self._hwnd: ctypes.wintypes.HWND | None = None
-        self._u32 = None
+        self._u32: Any = None
         self._currently_transparent: bool | None = None
         self._tick_log_count: int = 0
         self._timer = QTimer(self)

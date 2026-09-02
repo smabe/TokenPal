@@ -13,9 +13,16 @@ QWidget mock's ``WA_TransparentForMouseEvents`` semantics.
 """
 from __future__ import annotations
 
+from typing import cast
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtQuick import QQuickItem, QSGSimpleTextureNode
+from PySide6.QtQuick import (
+    QQuickItem,
+    QSGNode,
+    QSGSimpleTextureNode,
+    QSGTexture,
+)
 
 
 class DockMockQuickItem(QQuickItem):
@@ -26,7 +33,7 @@ class DockMockQuickItem(QQuickItem):
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
 
         self._image: QImage | None = None
-        self._texture = None
+        self._texture: QSGTexture | None = None
         self._tex_image_id: int | None = None
         self._anchor_parent = QPointF(0.0, 0.0)
         self._content_w = 0.0
@@ -68,7 +75,7 @@ class DockMockQuickItem(QQuickItem):
     def hide(self) -> None:
         self.set_visible(False)
 
-    def set_pose(self, _anchor_world, _angle_rad) -> None:
+    def set_pose(self, _anchor_world: QPointF, _angle_rad: float) -> None:
         return
 
     def close(self) -> None:
@@ -79,10 +86,16 @@ class DockMockQuickItem(QQuickItem):
         self.setX(self._anchor_parent.x() - self._content_w / 2.0)
         self.setY(self._anchor_parent.y())
 
-    def updatePaintNode(self, old_node, _data):
+    # Qt treats a null return as "drop the node"; the PySide6 stub types
+    # the return as non-optional.
+    def updatePaintNode(  # type: ignore[override]
+        self,
+        old_node: QSGNode | None,
+        _data: QQuickItem.UpdatePaintNodeData,
+    ) -> QSGNode | None:
         if self._image is None:
             return None
-        node = old_node
+        node = cast("QSGSimpleTextureNode | None", old_node)
         if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
@@ -92,7 +105,7 @@ class DockMockQuickItem(QQuickItem):
             node.setOwnsTexture(True)
         elif node is None:
             node = QSGSimpleTextureNode()
-            node.setTexture(self._texture)
+            node.setTexture(cast(QSGTexture, self._texture))
             node.setOwnsTexture(False)
         node.setRect(QRectF(0.0, 0.0, self.width(), self.height()))
         return node

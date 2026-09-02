@@ -18,7 +18,7 @@ import math
 import time
 from collections.abc import Callable
 from dataclasses import fields as dataclass_fields
-from typing import Any, ClassVar
+from typing import Any, ClassVar, cast
 
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
@@ -347,7 +347,7 @@ class QtOverlay(AbstractOverlay):
         # under the pivot, so its set_pose is a no-op (the pivot
         # rotates it for free).
         if self._use_quick_backend:
-            self._dock_mock = self._buddy_host.dock_mock_item  # type: ignore[union-attr,assignment]
+            self._dock_mock = self._buddy_host.dock_mock_item  # type: ignore[union-attr]
         else:
             self._dock_mock = DockMock()
         self._dock_mock_active = False
@@ -410,7 +410,10 @@ class QtOverlay(AbstractOverlay):
         # bottom-right via _reposition_grip. On the Quick backend the
         # grip is a sibling QQuickItem under the pivot.
         if self._use_quick_backend:
-            self._resize_grip = self._buddy_host.grip_item  # type: ignore[union-attr,assignment]
+            self._resize_grip = cast(
+                BuddyResizeGrip,
+                self._buddy_host.grip_item,  # type: ignore[union-attr]
+            )
         else:
             self._resize_grip = BuddyResizeGrip()
         self._resize_grip.zoom_drag_delta.connect(self._on_zoom_drag_delta)

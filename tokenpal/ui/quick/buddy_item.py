@@ -15,28 +15,39 @@ from __future__ import annotations
 
 import time
 from collections import deque
+from typing import cast
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtQuick import QQuickItem, QSGSimpleTextureNode
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtQuick import (
+    QQuickItem,
+    QSGNode,
+    QSGSimpleTextureNode,
+    QSGTexture,
+)
 
 from tokenpal.ui.buddy_core import BuddyCore
 
 
 class BuddyQuickItem(QQuickItem):
-    def __init__(self, core: BuddyCore):
+    def __init__(self, core: BuddyCore) -> None:
         super().__init__()
         self._core = core
         self._cached_pixmap_id: int | None = None
-        self._texture = None
+        self._texture: QSGTexture | None = None
         self.setFlag(QQuickItem.Flag.ItemHasContents, True)
         self.setAcceptedMouseButtons(
             Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
         )
         self.paint_samples_ms: deque[float] = deque(maxlen=600)
 
-    def updatePaintNode(self, old_node, _data):
+    def updatePaintNode(
+        self,
+        old_node: QSGNode | None,
+        _data: QQuickItem.UpdatePaintNodeData,
+    ) -> QSGNode:
         t0 = time.perf_counter()
-        node = old_node
+        node = cast("QSGSimpleTextureNode | None", old_node)
         pm = self._core.render_art_pixmap()
         if self._cached_pixmap_id != id(pm) or self._texture is None:
             img = pm.toImage()
@@ -54,7 +65,9 @@ class BuddyQuickItem(QQuickItem):
         self.paint_samples_ms.append((time.perf_counter() - t0) * 1000.0)
         return node
 
-    def contains(self, point: QPointF) -> bool:
+    # PySide6 widens the stub's parameter to the set of types Qt can
+    # implicitly convert to QPointF; the C++ virtual takes QPointF only.
+    def contains(self, point: QPointF) -> bool:  # type: ignore[override]
         # event positions are passed in item-local coords AFTER Qt has
         # inverted the parent pivot's rotation, so the local point is
         # equivalent to an art-frame coord (with the item sized to
@@ -63,7 +76,7 @@ class BuddyQuickItem(QQuickItem):
             return self._core.is_painted_cell_at(point.x(), point.y())
         return False
 
-    def mousePressEvent(self, event):
+    def mousePressEvent(self, event: QMouseEvent) -> None:
         c = self._core
         if event.button() == Qt.MouseButton.RightButton:
             handler = c.right_click_handler
@@ -80,14 +93,14 @@ class BuddyQuickItem(QQuickItem):
         c.begin_drag(QPointF(art.x(), art.y()), event.globalPosition())
         event.accept()
 
-    def mouseMoveEvent(self, event):
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
         c = self._core
         if not c.is_dragging():
             return
         cursor = event.globalPosition()
         c.set_grab_target(cursor.x(), cursor.y())
 
-    def mouseReleaseEvent(self, event):
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._core.end_drag()

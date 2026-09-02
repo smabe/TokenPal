@@ -17,9 +17,16 @@ with no QPainter on the hot path.
 """
 from __future__ import annotations
 
+from typing import cast
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QImage, QPainter
-from PySide6.QtQuick import QQuickItem, QSGSimpleTextureNode
+from PySide6.QtQuick import (
+    QQuickItem,
+    QSGNode,
+    QSGSimpleTextureNode,
+    QSGTexture,
+)
 
 from tokenpal.config.chatlog_writer import (
     DEFAULT_BACKGROUND_COLOR,
@@ -79,7 +86,7 @@ class BubbleQuickItem(QQuickItem):
 
         self._image: QImage | None = None
         self._image_dirty = True
-        self._texture = None
+        self._texture: QSGTexture | None = None
         self._tex_image_id: int | None = None
 
         self._timer = QTimer(self)
@@ -234,13 +241,19 @@ class BubbleQuickItem(QQuickItem):
         p.end()
         return img
 
-    def updatePaintNode(self, old_node, _data):
+    # Qt treats a null return as "drop the node"; the PySide6 stub types
+    # the return as non-optional.
+    def updatePaintNode(  # type: ignore[override]
+        self,
+        old_node: QSGNode | None,
+        _data: QQuickItem.UpdatePaintNodeData,
+    ) -> QSGNode | None:
         if self._image_dirty or self._image is None:
             self._image = self._render_image()
             self._image_dirty = False
         if self._image is None:
             return None
-        node = old_node
+        node = cast("QSGSimpleTextureNode | None", old_node)
         if self._tex_image_id != id(self._image):
             self._texture = self.window().createTextureFromImage(self._image)
             self._tex_image_id = id(self._image)
@@ -250,12 +263,14 @@ class BubbleQuickItem(QQuickItem):
             node.setOwnsTexture(True)
         elif node is None:
             node = QSGSimpleTextureNode()
-            node.setTexture(self._texture)
+            node.setTexture(cast(QSGTexture, self._texture))
             node.setOwnsTexture(False)
         node.setRect(QRectF(0.0, 0.0, self.width(), self.height()))
         return node
 
-    def contains(self, point: QPointF) -> bool:
+    # PySide6 widens the stub's parameter to the set of types Qt can
+    # implicitly convert to QPointF; the C++ virtual takes QPointF only.
+    def contains(self, point: QPointF) -> bool:  # type: ignore[override]
         if self._content_w <= 0 or self._content_h <= 0:
             return False
         return (
@@ -274,7 +289,7 @@ class BubbleQuickItem(QQuickItem):
     def hide(self) -> None:
         self.setVisible(False)
 
-    def set_pose(self, _tail_world, _angle_rad) -> None:
+    def set_pose(self, _tail_world: QPointF, _angle_rad: float) -> None:
         return
 
     def close(self) -> None:
