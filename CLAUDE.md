@@ -96,6 +96,31 @@ Examples killed by the say-what phase 3 simplify pass (commit `909a4e9`): `last_
 - Plan files in `plans/` — active plans track current work, shipped plans in `plans/shipped/`
 - Open issues: `gh issue list`
 
+## Required skills
+
+| Trigger | Skill or requirement |
+|---|---|
+| Multi-file work, or any new file or symbol | `plan` before coding |
+| After each phase, before review | `simplify` |
+| Independent review before every commit | `auto-review` |
+| Every commit | `commit` |
+| Explicit end-of-session shipment | `ship` |
+| After a feature ships | `post-ship` |
+| Bundling multiple file-disjoint issues | `parallel-issues` |
+
+`simplify` is not optional and not satisfiable by reading the diff and judging it
+clean: invoke the skill. It has repeatedly found things a mental pass missed --
+the say-what phase 3 review surfaced ~20, and the train-voice-llm-client review
+found the change that deleted a class constant, a clip, a comment, and two tests
+from a diff that had already passed an 8-agent code review.
+
+When `simplify` flags duplication that already has two concrete consumers,
+refactor in that pass. Deferring it cost three follow-up touch-ups last time.
+
+Order of operations: research/plan -> code -> `simplify` -> `auto-review` ->
+test -> `commit`. Closing an issue: write `Fixes #N` in the commit message, not
+just `(#N)`, or GitHub will not auto-close it.
+
 ## Agent skills
 
 ### Backlog
