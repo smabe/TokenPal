@@ -28,6 +28,7 @@ class LLMResponse:
     latency_ms: float
     tool_calls: list[ToolCall] = field(default_factory=list)
     finish_reason: str | None = None
+    reasoning: str | None = None
 
     def to_assistant_message(self) -> dict[str, Any]:
         """OpenAI-format assistant message for round-tripping back to the LLM.
@@ -118,6 +119,7 @@ class AbstractLLMBackend(abc.ABC):
         response_format: dict[str, Any] | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        thinking_effort: str | None = None,
     ) -> LLMResponse:
         """Single-shot generation.
 
@@ -136,6 +138,8 @@ class AbstractLLMBackend(abc.ABC):
         ``max_tokens`` and user pins still win per resolution order.
         ``min_tokens`` sets a floor on the derived cap (token-elasticity
         guard). No effect when ``max_tokens`` or the user pin takes over.
+        ``thinking_effort`` is an engine-specific effort string, sent only when
+        thinking is on and never validated client-side (see docs/claude/llm.md).
         """
 
     async def generate_with_tools(
@@ -148,6 +152,7 @@ class AbstractLLMBackend(abc.ABC):
         response_format: dict[str, Any] | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        thinking_effort: str | None = None,
     ) -> LLMResponse:
         """Chat completion with tool definitions. Default: fall back to generate()."""
         prompt = messages[-1].get("content", "") if messages else ""
@@ -158,6 +163,7 @@ class AbstractLLMBackend(abc.ABC):
             response_format=response_format,
             target_latency_s=target_latency_s,
             min_tokens=min_tokens,
+            thinking_effort=thinking_effort,
         )
 
     async def stream(

@@ -66,6 +66,27 @@ def test_llamacpp_dispatch_sends_chat_template_kwargs():
     assert body["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+@pytest.mark.parametrize(
+    ("engine", "enable", "effort", "expected"),
+    [
+        ("llamacpp", True, "low", "low"),
+        ("llamacpp", False, "low", None),
+        ("llamacpp", True, None, None),
+        ("ollama", True, "low", "low"),
+        ("ollama", False, "low", "none"),
+        ("ollama", True, None, "high"),
+    ],
+)
+def test_thinking_effort_written_per_engine(engine, enable, effort, expected):
+    backend = HttpBackend({
+        "api_url": "http://localhost:11434/v1",
+        "inference_engine": engine,
+    })
+    body: dict = {}
+    backend._apply_thinking_controls(body, enable_thinking=enable, thinking_effort=effort)
+    assert body.get("reasoning_effort") == expected
+
+
 def test_llamacpp_dispatch_respects_backend_default_when_disable_reasoning_false():
     backend = HttpBackend({
         "api_url": "http://localhost:11434/v1",
@@ -128,13 +149,10 @@ def test_ollama_default_engine_when_unset():
     assert "chat_template_kwargs" not in body
 
 
-@pytest.mark.asyncio
-async def test_generate_passes_response_format_to_body(monkeypatch):
-    """response_format kwarg is forwarded to the OpenAI-compat request body."""
-    import httpx
-
+def _fake_backend(message: dict) -> tuple[HttpBackend, dict]:
+    """HttpBackend whose client records the request body and replies with `message`."""
     backend = HttpBackend({
-        "api_url": "http://localhost:11434/v1",
+        "api_url": "http://localhost:8000/v1",
         "inference_engine": "llamacpp",
     })
     captured: dict = {}
@@ -143,7 +161,7 @@ async def test_generate_passes_response_format_to_body(monkeypatch):
         def raise_for_status(self): pass
         def json(self):
             return {
-                "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+                "choices": [{"message": message, "finish_reason": "stop"}],
                 "usage": {"total_tokens": 1},
             }
 
@@ -151,9 +169,15 @@ async def test_generate_passes_response_format_to_body(monkeypatch):
         async def post(self, url, json):
             captured["body"] = json
             return _FakeResponse()
-        async def aclose(self): pass
 
     backend._client = _FakeClient()  # type: ignore[assignment]
+    return backend, captured
+
+
+@pytest.mark.asyncio
+async def test_generate_passes_response_format_to_body():
+    """response_format kwarg is forwarded to the OpenAI-compat request body."""
+    backend, captured = _fake_backend({"content": "{}"})
     schema = {"type": "object", "properties": {"k": {"type": "string"}}}
     await backend.generate(
         "hello",
@@ -164,4 +188,26 @@ async def test_generate_passes_response_format_to_body(monkeypatch):
         "type": "json_schema",
         "schema": schema,
     }
-    _ = httpx  # silence unused-import linter if enabled
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_tools", [False, True])
+@pytest.mark.parametrize(
+    ("message", "reasoning"),
+    [
+        ({"content": "the answer", "reasoning_content": "let me think"}, "let me think"),
+        ({"content": "the answer", "reasoning": "ollama shape"}, "ollama shape"),
+        ({"content": "plain", "reasoning_content": ""}, None),
+        ({"content": "plain"}, None),
+    ],
+)
+async def test_reasoning_content_surfaces_on_both_paths(message, reasoning, with_tools):
+    backend, _ = _fake_backend(message)
+    if with_tools:
+        response = await backend.generate_with_tools(
+            [{"role": "user", "content": "hi"}], [], max_tokens=10,
+        )
+    else:
+        response = await backend.generate("hi", max_tokens=10)
+    assert response.reasoning == reasoning
+    assert response.text == message["content"]

@@ -43,6 +43,7 @@ class FakeLLM:
         response_format: dict[str, Any] | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        thinking_effort: str | None = None,
     ) -> LLMResponse:
         self.calls.append(prompt)
         if self.raise_next:

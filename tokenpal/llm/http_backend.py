@@ -164,7 +164,10 @@ class HttpBackend(AbstractLLMBackend):
         )
 
     def _apply_thinking_controls(
-        self, body: dict[str, Any], enable_thinking: bool | None
+        self,
+        body: dict[str, Any],
+        enable_thinking: bool | None,
+        thinking_effort: str | None = None,
     ) -> None:
         """Write the per-engine thinking controls into the request body.
 
@@ -182,8 +185,10 @@ class HttpBackend(AbstractLLMBackend):
         if self._inference_engine == "llamacpp":
             body["chat_template_kwargs"] = {"enable_thinking": effective}
             body["reasoning_format"] = "deepseek"
+            if effective and thinking_effort:
+                body["reasoning_effort"] = thinking_effort
         else:
-            body["reasoning_effort"] = "high" if effective else "none"
+            body["reasoning_effort"] = (thinking_effort or "high") if effective else "none"
 
     def _apply_cache_hints(self, body: dict[str, Any]) -> None:
         """llama-server host-memory prompt cache: reuses KV across calls with
@@ -369,47 +374,17 @@ class HttpBackend(AbstractLLMBackend):
         response_format: dict[str, Any] | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        thinking_effort: str | None = None,
     ) -> LLMResponse:
-        assert self._client is not None, "Call setup() first"
-
-        start = time.monotonic()
-        effective_max = self._resolve_max_tokens(
-            max_tokens, target_latency_s, min_tokens
-        )
-        body: dict[str, Any] = {
-            "model": self._model_name,
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": effective_max,
-            "temperature": self._temperature,
-        }
-        self._apply_thinking_controls(body, enable_thinking)
-        self._apply_cache_hints(body)
-        if response_format is not None:
-            body["response_format"] = response_format
-
-        resp = await self._client.post(
-            f"{self._api_url}/chat/completions",
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        elapsed_s = time.monotonic() - start
-
-        choice = data["choices"][0]
-        text = choice["message"].get("content") or ""
-        finish_reason = choice.get("finish_reason")
-        usage = data.get("usage", {})
-        tokens = usage.get("total_tokens", 0)
-        completion_tokens = usage.get("completion_tokens")
-        if isinstance(completion_tokens, int):
-            self._record_sample(completion_tokens, elapsed_s)
-
-        return LLMResponse(
-            text=text,
-            tokens_used=tokens,
-            model_name=self._model_name,
-            latency_ms=elapsed_s * 1000,
-            finish_reason=finish_reason,
+        return await self.generate_with_tools(
+            [{"role": "user", "content": prompt}],
+            [],
+            max_tokens,
+            enable_thinking=enable_thinking,
+            response_format=response_format,
+            target_latency_s=target_latency_s,
+            min_tokens=min_tokens,
+            thinking_effort=thinking_effort,
         )
 
     async def generate_with_tools(
@@ -422,6 +397,7 @@ class HttpBackend(AbstractLLMBackend):
         response_format: dict[str, Any] | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        thinking_effort: str | None = None,
     ) -> LLMResponse:
         assert self._client is not None, "Call setup() first"
 
@@ -437,7 +413,7 @@ class HttpBackend(AbstractLLMBackend):
         }
         if tools:
             body["tools"] = tools
-        self._apply_thinking_controls(body, enable_thinking)
+        self._apply_thinking_controls(body, enable_thinking, thinking_effort)
         self._apply_cache_hints(body)
         if response_format is not None:
             body["response_format"] = response_format
@@ -482,6 +458,7 @@ class HttpBackend(AbstractLLMBackend):
             latency_ms=elapsed_s * 1000,
             tool_calls=tool_calls,
             finish_reason=finish_reason,
+            reasoning=message.get("reasoning_content") or message.get("reasoning") or None,
         )
 
     @property
