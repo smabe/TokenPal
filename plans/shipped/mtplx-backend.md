@@ -2,6 +2,7 @@
 
 ## Status
 **Approval: APPROVED 2026-09-01**
+**Shipped: 2026-09-01** (b1b8d0b; follow-ups filed as #44)
 **Authored at: f11978e**
 **Spec check** — 2/2 Work items evidenced (`docs/claude/llm.md`,
 `config.default.toml`) · none unclaimed · operational steps applied to the
@@ -291,3 +292,5 @@ per-machine `config.toml` is gitignored):
 - **MTPLX session header.** `x-mtplx-session-id` made the first shared-prefix
   call hit fully (1228/1229 cached) instead of at the 1024 block boundary.
   Worth ~0.5 s per conversation turn; not worth engine-specific headers today.
+
+**Ship disposition 2026-09-01:** all five parking-lot items (the four above plus the estimator-from-server-timings note) filed together as GitHub issue #44. Nothing dropped.
