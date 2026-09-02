@@ -51,9 +51,11 @@ max_per_hour = 6             # hard rate cap
 
 [llm]
 backend = "http"
-# inference_engine = "ollama"   # "ollama" | "llamacpp" - set "llamacpp" on AMD
-                                # dGPUs using the llama.cpp-direct path (RDNA 4).
-                                # See docs/amd-dgpu-setup.md.
+# inference_engine = "ollama"   # "ollama" | "llamacpp" - set "llamacpp" for any
+                                # llama-server-shaped OpenAI-compatible server: AMD
+                                # dGPUs using the llama.cpp-direct path (RDNA 4, see
+                                # docs/amd-dgpu-setup.md) and MTPLX on macOS (see
+                                # docs/claude/llm.md, MTPLX bullet).
 api_url = "http://localhost:11434/v1"
 model_name = "gemma4"           # global default, used when the active server has no remembered model
 max_tokens = 150                # global default, used when the active server has no remembered cap.
