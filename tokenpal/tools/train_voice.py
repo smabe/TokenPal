@@ -66,6 +66,25 @@ def _get_model() -> str:
         return "gemma4"
 
 
+def _thinking_controls() -> dict[str, object]:
+    """Per-engine fields that switch reasoning off, matching HttpBackend.
+
+    llama-server and MTPLX reject or ignore ``reasoning_effort`` and take
+    ``chat_template_kwargs.enable_thinking``; Ollama is the reverse.
+    """
+    try:
+        from tokenpal.config.loader import load_config
+        engine = load_config().llm.inference_engine
+    except Exception:
+        engine = "ollama"
+    if engine == "llamacpp":
+        return {
+            "chat_template_kwargs": {"enable_thinking": False},
+            "reasoning_format": "deepseek",
+        }
+    return {"reasoning_effort": "none"}
+
+
 def _get_voices_dir() -> Path:
     """Resolve voices directory from config, with fallback."""
     try:
@@ -93,7 +112,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
         "temperature": temperature,
-        "reasoning_effort": "none",
+        **_thinking_controls(),
     }).encode()
 
     req = urllib.request.Request(
@@ -108,7 +127,7 @@ def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7
             text = str(data["choices"][0]["message"]["content"]).strip()
             return text.strip("\"'").strip()
     except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError) as e:
-        print(f"  Warning: Ollama call failed ({e})", file=sys.stderr)
+        log.warning("Voice-training LLM call failed: %s", e)
         return None
 
 
