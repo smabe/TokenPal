@@ -327,6 +327,26 @@ async def test_step_cap_stops_loop_and_forces_synthesis() -> None:
 
 
 @pytest.mark.asyncio
+async def test_forced_synthesis_uses_step_controls_and_counts_tokens() -> None:
+    llm = ScriptedLLM([
+        LLMResponse(
+            text="", tokens_used=5, model_name="t", latency_ms=0,
+            tool_calls=[_call("echo", {"text": "x"}, "c0")],
+        ),
+        LLMResponse(text="ran out", tokens_used=7, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, max_steps=1, thinking=True).run("loop")
+
+    assert session.stopped_reason == "step_cap"
+    assert session.final_text == "ran out"
+    assert session.tokens_used == 12
+    assert llm.calls[1][1] == []
+    assert llm.call_kwargs[1] == {
+        "max_tokens": 2048, "enable_thinking": True, "thinking_effort": "low",
+    }
+
+
+@pytest.mark.asyncio
 async def test_token_budget_stops_loop() -> None:
     llm = ScriptedLLM([
         LLMResponse(

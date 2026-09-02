@@ -144,7 +144,9 @@ class AgentRunner:
                     session.tokens_used,
                     self._token_budget,
                 )
-                session.final_text = await self._force_synthesis(messages)
+                session.final_text = await self._force_synthesis(
+                    session, messages, thinking=thinking,
+                )
                 return session
 
             try:
@@ -191,7 +193,9 @@ class AgentRunner:
 
             if denied:
                 session.stopped_reason = AgentStopReason.DENIED
-                session.final_text = await self._force_synthesis(messages)
+                session.final_text = await self._force_synthesis(
+                    session, messages, thinking=thinking,
+                )
                 return session
             # "using <tool>..." intentionally persists through the follow-up
             # LLM step; a fast gather would otherwise be overwritten before
@@ -200,16 +204,21 @@ class AgentRunner:
 
         session.stopped_reason = AgentStopReason.STEP_CAP
         log.info("Agent hit step cap (%d)", self._max_steps)
-        session.final_text = await self._force_synthesis(messages)
+        session.final_text = await self._force_synthesis(session, messages, thinking=thinking)
         return session
 
     async def _step(
-        self, session: AgentSession, messages: list[dict[str, Any]], *, thinking: bool,
+        self,
+        session: AgentSession,
+        messages: list[dict[str, Any]],
+        *,
+        thinking: bool,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         response = await asyncio.wait_for(
             self._llm.generate_with_tools(
                 messages=messages,
-                tools=self._tool_specs,
+                tools=self._tool_specs if tools is None else tools,
                 max_tokens=self._max_tokens,
                 enable_thinking=thinking,
                 thinking_effort=self._thinking_effort,
@@ -270,14 +279,13 @@ class AgentRunner:
             self._log(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, duration_ms)
 
-    async def _force_synthesis(self, messages: list[dict[str, Any]]) -> str:
+    async def _force_synthesis(
+        self, session: AgentSession, messages: list[dict[str, Any]], *, thinking: bool,
+    ) -> str:
         """Best-effort final text with tools disabled so a capped run still
         returns something useful instead of a bare trace."""
         try:
-            response = await asyncio.wait_for(
-                self._llm.generate_with_tools(messages=messages, tools=[]),
-                timeout=self._per_step_timeout_s,
-            )
+            response = await self._step(session, messages, thinking=thinking, tools=[])
             return response.text
         except Exception:
             log.exception("Forced synthesis failed")
