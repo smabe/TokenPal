@@ -64,14 +64,17 @@ class DockMock(QWidget):
         Synchronous ``repaint()`` so the dock paint lands in the same
         DWM composite frame as the buddy paint — see SpeechBubble.set_pose
         for the full reasoning."""
+        prev_angle = self._angle_rad
         self._angle_rad = angle_rad
         ax, ay = self._anchor_widget
         new_x = int(anchor_world.x()) - ax
         new_y = int(anchor_world.y()) - ay
         pos = self.pos()
-        if pos.x() != new_x or pos.y() != new_y:
+        moved = pos.x() != new_x or pos.y() != new_y
+        if moved:
             self.move(new_x, new_y)
-        self.repaint()
+        if moved or prev_angle != angle_rad:
+            self.repaint()
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         if self._pixmap is None or self._pixmap.isNull():

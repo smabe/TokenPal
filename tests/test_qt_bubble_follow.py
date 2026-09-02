@@ -54,7 +54,7 @@ def test_bubble_repositions_when_buddy_moves(qapp: QApplication) -> None:
         _pump(qapp, ms=20)
 
 
-def test_buddy_emits_position_changed_every_tick(qapp: QApplication) -> None:
+def test_buddy_emits_position_changed_while_awake(qapp: QApplication) -> None:
     from tokenpal.ui.ascii_renderer import BUDDY_IDLE
     from tokenpal.ui.qt.buddy_window import BuddyWindow
     buddy = BuddyWindow(
@@ -63,11 +63,33 @@ def test_buddy_emits_position_changed_every_tick(qapp: QApplication) -> None:
     try:
         fires: list[int] = []
         buddy.position_changed.connect(lambda: fires.append(1))
-        # Force a move — snap_home teleports body + home anchor;
-        # _on_tick refreshes the view and emits position_changed
-        # unconditionally (the emit doesn't gate on sleeping state).
-        buddy.sim.snap_home(700.0, 400.0)
+        # Wake with an impulse so the sim has motion to advance —
+        # post-moveo-it, position_changed only fires while the buddy is
+        # awake (not sleeping AND not dragging AND no rescue pending).
+        buddy.sim.apply_impulse(0.0, -200.0)
         buddy.core._on_tick()
-        assert fires, "position_changed should fire on every tick"
+        assert fires, "position_changed should fire while buddy is awake"
+    finally:
+        buddy.close()
+
+
+def test_buddy_skips_emit_when_idle(qapp: QApplication) -> None:
+    from tokenpal.ui.ascii_renderer import BUDDY_IDLE
+    from tokenpal.ui.qt.buddy_window import BuddyWindow
+    buddy = BuddyWindow(
+        frame_lines=BUDDY_IDLE, initial_anchor=(300.0, 300.0),
+    )
+    try:
+        # Drive to fully-settled state.
+        buddy.sim.snap_home(300.0, 300.0)
+        buddy.core._on_tick()
+        fires: list[int] = []
+        buddy.position_changed.connect(lambda: fires.append(1))
+        for _ in range(10):
+            buddy.core._on_tick()
+        assert fires == [], (
+            "position_changed should not fire on subsequent ticks after the "
+            "buddy has settled"
+        )
     finally:
         buddy.close()

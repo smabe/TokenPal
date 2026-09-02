@@ -137,6 +137,12 @@ class BuddyCore(QObject):
     # Fires whenever physics advances or the frame swaps. Followers
     # (bubble, dock, resize grip) connect to this to stay attached.
     position_changed = Signal()
+    # Fires on transitions in/out of the at-rest state. True when the
+    # buddy becomes interactive (drag/rescue/non-sleeping); False when
+    # he settles. Backends use this to gate their render loops — on the
+    # Quick path, frameSwapped keeps firing at vsync regardless of any
+    # timer, so we disconnect it from the physics tick while idle.
+    awake_changed = Signal(bool)
 
     def __init__(
         self,
@@ -217,6 +223,15 @@ class BuddyCore(QObject):
         self._tick_durations: deque[float] = deque(maxlen=600)
         self._tick_profile_last_log = 0.0
         self._tick_profile_last_perf = 0.0
+
+        # Track at-rest state across ticks so position_changed.emit()
+        # can no-op while the buddy is fully settled. Without this, the
+        # Quick backend's frameSwapped-driven _on_tick fires every
+        # vsync forever and the four position_changed slots in the
+        # overlay (bubble/dock/grip/rain reanchors) keep dirtying
+        # translucent always-on-top widgets, costing real DWM time on
+        # iGPU-class hardware.
+        self._was_idle = self._sim.sleeping
 
     # --- Public state accessors ---------------------------------------
 
@@ -500,20 +515,39 @@ class BuddyCore(QObject):
         refresh_hz = float(primary.refreshRate()) if primary else 60.0
         self._paint_target_ts = now + 1.0 / max(refresh_hz, 1.0)
         self.tick_offscreen_rescue(now)
-        self.position_changed.emit()
+        rescue_pending = (
+            self._offscreen_since is not None or self._rescue_t0 is not None
+        )
+        is_idle = (
+            self._sim.sleeping
+            and not self._drag_active
+            and not rescue_pending
+        )
+        # Skip the emit (and the four-slot cascade it drives) while
+        # the buddy is fully at rest — but still emit on the
+        # transition-into-rest tick so observers paint the settled
+        # pose once.
+        if not (is_idle and self._was_idle):
+            self.position_changed.emit()
+        if is_idle != self._was_idle:
+            self._was_idle = is_idle
+            self.awake_changed.emit(not is_idle)
         if _PHYSICS_DEBUG:
             self._debug_tick_counter += 1
             if self._debug_tick_counter % _PHYSICS_DEBUG_LOG_EVERY == 0:
                 self._log_physics_debug()
         if _TICK_PROFILE:
             self._record_tick_profile(now, time.perf_counter() - body_start)
-        rescue_pending = (
-            self._offscreen_since is not None or self._rescue_t0 is not None
-        )
-        if self._sim.sleeping and not self._drag_active and not rescue_pending:
+        if is_idle:
             self.sleep_tick_timer()
 
     def wake_tick_timer(self) -> None:
+        # Fire the transition signal first so backends (Quick path's
+        # frameSwapped consumer) can restart their render loops before
+        # the next physics tick lands.
+        if self._was_idle:
+            self._was_idle = False
+            self.awake_changed.emit(True)
         if not self._timer.isActive():
             now = time.monotonic()
             self._last_tick_ts = now
@@ -531,6 +565,9 @@ class BuddyCore(QObject):
 
     def is_tick_active(self) -> bool:
         return self._timer.isActive()
+
+    def is_idle(self) -> bool:
+        return self._was_idle
 
     def _record_tick_profile(self, now: float, body_s: float) -> None:
         prev = self._tick_profile_last_perf
