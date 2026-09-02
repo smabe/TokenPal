@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import re
 
-_ENVELOPE_TAG_RE = re.compile(r"<(\s*/?\s*transcript\s*)>", re.IGNORECASE)
-
 _META_MARKERS = (
     "wikipedia",
     "copiert",
@@ -34,11 +32,27 @@ def truncate_ellipsis(text: str, max_chars: int) -> str:
     return text[: max_chars - 1].rstrip() + "…"
 
 
-def neutralize_envelope_tags(text: str) -> str:
-    """Rewrite any <transcript> / </transcript> tag in *text* with full-width
-    angle brackets so it cannot close or open a prompt envelope.
+# Characters a model renders as nothing but that would otherwise let untrusted
+# text hide a closing tag from the matcher: whitespace, Unicode format chars,
+# soft hyphen, and the C0/C1 controls that are not whitespace.
+_IGN = r"\s\u00ad\u200b-\u200f\u2060\ufeff\x00-\x08\x0e-\x1f\x7f-\x9f"
+_IGNORABLE = rf"[{_IGN}]*"
+
+
+def _envelope_tag_pattern(tag: str) -> str:
+    """Match <tag>, </tag>, <tag/>, and <tag attr="v">, tolerating ignorable
+    characters interleaved anywhere inside the name. The name must be followed
+    by a separator or the bracket, so <transcripts> is not a <transcript>."""
+    spaced_name = _IGNORABLE.join(re.escape(ch) for ch in tag)
+    return rf"<({_IGNORABLE}/?{_IGNORABLE}{spaced_name}(?:[{_IGN}/][^<>]*)?)>"
+
+
+def neutralize_envelope_tags(text: str, tag: str = "transcript") -> str:
+    """Rewrite any <tag> / </tag> in *text* with full-width angle brackets so
+    it cannot close or open a prompt envelope.
     """
-    return _ENVELOPE_TAG_RE.sub(lambda m: f"＜{m.group(1)}＞", text)
+    pattern = _envelope_tag_pattern(tag)
+    return re.sub(pattern, lambda m: f"＜{m.group(1)}＞", text, flags=re.IGNORECASE)
 
 
 def _is_latin_or_punct(ch: str) -> bool:

@@ -10,6 +10,8 @@ Known categories (callers should use the ``Category`` constants):
     research_mode       — /research multi-step planner + fetch
     audio_input         — mic capture (wake word, ASR)
     audio_output        — speaker playback (TTS)
+    desktop_content     — text read from other apps (selection, documents, OCR);
+                          prompt-only
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ class Category:
     RESEARCH_MODE: Final = "research_mode"
     AUDIO_INPUT: Final = "audio_input"
     AUDIO_OUTPUT: Final = "audio_output"
+    DESKTOP_CONTENT: Final = "desktop_content"
 
 
 ALL_CATEGORIES: Final[tuple[str, ...]] = (
@@ -39,6 +42,7 @@ ALL_CATEGORIES: Final[tuple[str, ...]] = (
     Category.RESEARCH_MODE,
     Category.AUDIO_INPUT,
     Category.AUDIO_OUTPUT,
+    Category.DESKTOP_CONTENT,
 )
 
 
@@ -55,6 +59,9 @@ def load_consent(path: Path | None = None) -> dict[str, bool]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         log.warning("consent file %s unreadable: %s — treating as unset", path, e)
+        return {c: False for c in ALL_CATEGORIES}
+    if not isinstance(raw, dict):
+        log.warning("consent file %s is not an object — treating as unset", path)
         return {c: False for c in ALL_CATEGORIES}
     return {c: bool(raw.get(c, False)) for c in ALL_CATEGORIES}
 

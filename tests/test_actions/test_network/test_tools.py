@@ -83,7 +83,7 @@ async def test_currency_sensitive_filter(monkeypatch: pytest.MonkeyPatch) -> Non
     )
     # Force the scrubber to treat anything with EUR as sensitive.
     monkeypatch.setattr(
-        "tokenpal.actions.network._http.contains_sensitive_term",
+        "tokenpal.util.untrusted_text.contains_sensitive_term",
         lambda text: "EUR" in (text or ""),
     )
     currency._rate_cache.clear()

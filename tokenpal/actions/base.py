@@ -36,6 +36,14 @@ class ActionResult:
     display_text: str | None = None
 
 
+def consent_error(category_label: str) -> ActionResult:
+    """Uniform refusal when the user hasn't granted *category_label*."""
+    return ActionResult(
+        output=f"Tool requires '{category_label}' consent. Open /consent to grant it.",
+        success=False,
+    )
+
+
 class AbstractAction(abc.ABC):
     """Base class every LLM-callable action must inherit from.
 

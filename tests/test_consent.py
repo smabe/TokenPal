@@ -75,3 +75,13 @@ def test_has_consent_rejects_unknown_category(consent_path: Path) -> None:
 def test_audio_categories_registered() -> None:
     assert Category.AUDIO_INPUT in ALL_CATEGORIES
     assert Category.AUDIO_OUTPUT in ALL_CATEGORIES
+
+
+def test_desktop_content_category_registered() -> None:
+    assert Category.DESKTOP_CONTENT in ALL_CATEGORIES
+
+
+def test_desktop_content_roundtrips(consent_path: Path) -> None:
+    save_consent({Category.DESKTOP_CONTENT: True}, consent_path)
+    assert load_consent(consent_path)[Category.DESKTOP_CONTENT] is True
+    assert has_consent(Category.DESKTOP_CONTENT, consent_path) is True

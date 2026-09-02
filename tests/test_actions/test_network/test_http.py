@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from tokenpal.actions.network import _http
+from tokenpal.actions.network import _base, _http
+from tokenpal.util import untrusted_text
 
 
 def test_wrap_result_envelope_contains_tool_name() -> None:
@@ -16,9 +17,16 @@ def test_wrap_result_scrubs_sensitive_lines(monkeypatch) -> None:
     def fake_sensitive(text: str) -> bool:
         return "BAD" in (text or "")
 
-    monkeypatch.setattr(_http, "contains_sensitive_term", fake_sensitive)
+    monkeypatch.setattr(untrusted_text, "contains_sensitive_term", fake_sensitive)
     out = _http.wrap_result("foo", "line one\nBAD line\nline three")
     assert "[filtered]" in out
     assert "BAD line" not in out
     assert "line one" in out
     assert "line three" in out
+
+
+def test_consent_error_message_unchanged() -> None:
+    """Pins the copy all 13 network tools show; base.consent_error owns it now."""
+    assert _base.consent_error().output == (
+        "Tool requires 'web fetches' consent. Open /consent to grant it."
+    )

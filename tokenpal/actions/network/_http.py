@@ -2,7 +2,8 @@
 
 One lazily-initialized ``aiohttp.ClientSession`` process-wide so the tools
 share connection pooling. Every external response is run through
-``contains_sensitive_term`` and wrapped in ``<tool_result>`` delimiters
+``scrub_body`` (``tokenpal.util.untrusted_text``) and wrapped in
+``<tool_result>`` delimiters
 before the brain ever sees it — same pattern as ``/ask`` and the
 world_awareness sense.
 """
@@ -16,13 +17,15 @@ from typing import Any
 
 import aiohttp
 
-from tokenpal.brain.personality import contains_sensitive_term
+# Re-exported for the seven tools that import scrub_body from here. The
+# redundant alias is what mypy strict's no_implicit_reexport requires;
+# collapsing it to a plain import breaks type-checking in all seven.
+from tokenpal.util.untrusted_text import scrub_body as scrub_body
 
 log = logging.getLogger(__name__)
 
 _USER_AGENT = "TokenPal/1.0 (github.com/smabe/TokenPal)"
 _DEFAULT_TIMEOUT_S = 10.0
-_SENSITIVE_PLACEHOLDER = "[filtered]"
 
 _session: aiohttp.ClientSession | None = None
 _session_lock = asyncio.Lock()
@@ -112,19 +115,6 @@ async def fetch_text(
         except (aiohttp.ClientError, TimeoutError) as exc:
             last_err = f"{type(exc).__name__}: {exc}"
     return None, last_err or "unknown fetch failure"
-
-
-def _scrub_line(line: str) -> str:
-    return _SENSITIVE_PLACEHOLDER if contains_sensitive_term(line) else line
-
-
-def scrub_body(body: str) -> str:
-    """Line-wise sensitive-term scrub. One bad token shouldn't nuke the
-    whole response, so we filter per-line. Used by ``wrap_result`` (LLM
-    path) and by ``ActionResult.display_text`` (chat-log path) so a
-    third-party API can't bleed sensitive-app names into either sink."""
-    safe_lines = [_scrub_line(line) for line in body.splitlines() or [body]]
-    return "\n".join(safe_lines)
 
 
 def wrap_result(tool_name: str, body: str) -> str:
