@@ -455,7 +455,7 @@ class MemoryStore:
         with self._lock:
             row = self._conn.execute(
                 "SELECT timestamp, summary FROM conversation_summaries "
-                "WHERE timestamp >= ? ORDER BY timestamp DESC LIMIT 1",
+                "WHERE timestamp >= ? ORDER BY ended_at DESC LIMIT 1",
                 (cutoff,),
             ).fetchone()
         if row is None:

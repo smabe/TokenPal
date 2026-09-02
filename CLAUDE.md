@@ -53,8 +53,8 @@ Load the relevant doc on demand rather than reading all of them.
 - No clipboard monitoring (explicitly rejected)
 - Sensitive app exclusion: banking, passwords, health, messaging — goes silent
 - Browser window titles sanitized (stripped unless matching music player patterns)
-- Session memory stores only app names and timestamps, never content
-- During active conversations, user messages are held in memory (not saved to disk) until the session times out (~2 min of silence). Conversation buffer is cleared on sensitive app detection. User input truncated to 30 chars in log output
+- Observation memory (`observations`, `session_summaries`) stores app names, timestamps, and LLM-written handoff notes, never screen content; chat content reaches memory.db only through the persisted chat log and conversation summaries described below
+- Conversation history lives in an in-memory buffer that is cleared with no summary on sensitive app detection and on `/clear`. When `[chat_log] persist` is true (default) the right-pane transcript is stored in memory.db. When `[session_summary] conversations` is true (default) an expired chat (`[conversation] timeout_s` of silence) is compressed to 2-3 sentences, filtered by `contains_sensitive_term`, and stored in `conversation_summaries`; `/clear` and the options modal's "Clear history now" wipe those rows. User input truncated to 30 chars in log output
 - Log files and memory.db at 0o600 (owner-only)
 - Music track names redacted from DEBUG logs
 - Network senses/commands — all opt-in, all keyless by default: `weather` (Open-Meteo), `world_awareness` (HN Algolia), `lobsters` (lobste.rs hottest), `github_trending` (GitHub Search API), `/ask` (DuckDuckGo + Wikipedia; Brave via `TOKENPAL_BRAVE_KEY` env var stubbed). All keyless polling routes through `tokenpal/util/http_json.py`. All untrusted external text wrapped in delimiters + filtered via `contains_sensitive_term` before any prompt composition. `/ask` shows an explicit first-use consent warning; queries never persisted to disk

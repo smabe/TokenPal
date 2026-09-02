@@ -50,6 +50,15 @@ Added after peer review round 1 (2026-09-02), same files:
 - **Alternatives considered:** a `ConversationSummarizer` class (duplicates the gate and LLM plumbing); reusing `record_summary` with a marker (pollutes two readers, see master Non-goals).
 - **Evidence:** `session_summarizer.py:71-166`; `memory.py:392-409`, `:583-587`.
 
+### Findings from execution (shipped 8e22f62, 2026-09-02)
+- All line hints in this shard were accurate at d9f83fa; `FakeLLM.generate` already accepted `enable_thinking`.
+- The repo has no shared delimiter helper; every composing site hand-writes an XML-style envelope (`<search_result>` in `app.py:1020-1023`, `<tool_result>` in `actions/network/_http.py:132`). `neutralize_envelope_tags()` is the first reusable piece of that pattern; p2 imports it for the recap.
+- `truncate_ellipsis` in `tokenpal/util/text_guards.py` is the line truncator (appends `…`, not an em dash).
+- "Empty history is a no-op" is checked on the rendered transcript, so a history holding only `system` rows also makes no LLM call. p2 must never pass system rows expecting a summary.
+- No prune test existed before; `_prune` runs only from `setup()` (`memory.py:247`). The new test seeds a row two days old with `retention_days=1`.
+- Peer review (three rounds) added: `clear_conversation_summaries`, prune, the envelope, tag neutralization. Its design findings against p2 are recorded in the master Status and already folded into the p2 shard.
+- Pre-existing at HEAD, untouched: 10 ruff errors in `tokenpal/ui/quick/*`, 38 mypy errors in 10 files; none in the files this phase touched.
+
 ## Failure modes to anticipate
 - The observation summarizer's `target_latency_s` is the observation budget (5 s). A transcript at this Mac's `max_turns` cap may not compress well in the derived cap; the `min_tokens` floor (40 by default) protects against truncation to nothing. If summaries come back cut mid-sentence in p2's live test, raise the floor for this call rather than the budget.
 - `contains_sensitive_term` is a substring filter; a chat about "password managers" will be dropped entirely. That is the intended failure direction (drop, not redact).

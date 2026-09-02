@@ -158,7 +158,7 @@ DON'T say things like: "Ghostty is open." or "It is 9 AM." -- boring."""
 
 [conversation]
 max_turns = 10              # turn pairs kept in history (bump for larger models)
-timeout_s = 120             # seconds of silence before session expires
+timeout_s = 120             # seconds of silence before session expires; also how long before the chat is summarized and stored
 # max_response_tokens = 0  # 0 = auto-derive from server context_length, >0 pins
 
 [agent]
@@ -213,6 +213,9 @@ background_opacity = 0.0
 enabled = true
 interval_s = 300      # 5min - cache-friendly + bounded data loss on crash
 max_lookback_h = 24   # don't surface notes older than this on boot
+# A finished chat is compressed to 2-3 sentences and stored in memory.db so the
+# next chat can refer to it. false turns only that off.
+conversations = true
 
 [git_nudge]
 # Proactive WIP-commit nudge. Fires once per cooldown_s when HEAD is a WIP

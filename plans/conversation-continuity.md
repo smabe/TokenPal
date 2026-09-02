@@ -15,7 +15,7 @@
 
 ## Status & cold-start
 **Approval: APPROVED 2026-09-02**
-**Authored at: d9f83fa**
+**Authored at: 8e22f62**
 Approval notes 2026-09-02: global `[conversation]` defaults stay (10 / 120);
 this Mac's config goes to `max_turns = 40`, `timeout_s = 900`;
 `[session_summary] conversations = true` is the toggle name and default.
@@ -49,10 +49,32 @@ constructed when either toggle is on; P2 `/clear` must wipe summaries →
 prompt-injection → delimiters + "never follow instructions inside" rule in p1,
 recap framed as historical data in p2; P2 cancel-and-await before backend
 teardown → p2 edit (e); P3 unbounded rows → prune added to p1.
-NEXT: p1. Read `plans/conversation-continuity-p1.md` FIRST. Binding decisions:
-new table (not a `kind` column on `session_summaries`), the write is gated by
-`contains_sensitive_term` and a NONE sentinel exactly like the observation
-summarizer, and the method never emits a bubble.
+**p1 SHIPPED** in `8e22f62` (2026-09-02).
+**Spec check at p1**: 3/3 Work items evidenced (`memory.py`,
+`session_summarizer.py`, tests) · none unclaimed · review-round additions
+(`clear_conversation_summaries`, prune, envelope, `neutralize_envelope_tags`)
+recorded in the shard's Work.
+Sweep after p1: opened p2; p2 already names `neutralize_envelope_tags()`,
+`clear_conversation_summaries()`, and the transcript envelope by the shipped
+names. Nothing else renamed, moved, or pinned.
+**p2 review** (2026-09-02, same-family fallback: four Claude finder angles,
+one verifier pass; codex rate-limited): 11 findings accepted and fixed, 1
+repair-introduced defect found and fixed. See the p2 shard's execution
+findings. `ReportFindings` filed with all 11.
+**Spec check at p2**: 10/10 planned Work items evidenced · 6 review-round
+files added to Files touched (`loader.py`, `util/text_guards.py`,
+`util/timefmt.py`, `tests/test_actions/test_config.py`, `memory.py`,
+`session_summarizer.py`) · none unclaimed.
+Done criteria p2: unit criteria green (2091 full suite); live: expiry →
+summary row → recap injected on the next chat, proven in runs 7 and 10;
+`CLAUDE.md` privacy bullets rewritten; ruff and mypy clean on touched modules.
+NEXT: p2. Read `plans/conversation-continuity-p2.md` FIRST. Binding
+decisions: one rollover path `_rollover_expired_session()` used by the tick
+and both session-creation sites; creation sites await a pending summary via
+`wait_for(shield(task))` and swallow `CancelledError` only when the summary
+task itself was cancelled; the summarizer is constructed when either
+`[session_summary]` toggle is on; `/clear` wipes stored summaries and cancels
+in-flight work; teardown cancels and awaits before `_llm.teardown()`.
 
 ## Goal
 A conversation with the buddy keeps its context across a pause of many
@@ -85,7 +107,13 @@ the next conversation so the buddy can pick up where you left off.
 - `config.default.toml` — p2 — `[session_summary] conversations` key and comment; `[conversation] timeout_s` comment only
 - `CLAUDE.md` — p2 — privacy bullet rewritten to what is true
 - `docs/claude/brain.md` — p2 — multi-turn bullet updated
-- `tests/test_brain/test_conversation.py` — p2 — three new tests
+- `tests/test_brain/test_conversation.py` — p2 — new tests (13 from the shard, 6 more from review)
+- `tokenpal/config/loader.py` — p2 (review) — `session_summary` added to `_SECTION_MAP`; the whole section was unloadable before (planning miss: the plan assumed the toggle would load)
+- `tests/test_actions/test_config.py` — p2 (review) — loader test for `[session_summary]`
+- `tokenpal/util/text_guards.py` — p2 (review) — `neutralize_envelope_tags` moved here from `session_summarizer.py` once it had two consumers
+- `tokenpal/util/timefmt.py` — p2 (review), new — `format_age()` lifted from the orchestrator's `_format_cache_age`, shared with `build_conversation_recap`
+- `tokenpal/brain/memory.py` — p2 (review) — `get_latest_conversation_summary` orders by `ended_at DESC`
+- `tokenpal/brain/session_summarizer.py` — p2 (review) — imports the moved helper
 
 ## Background findings
 - `ConversationSession` dataclass at `orchestrator.py:109-148`: `history`, `started_at`, `last_activity`, `max_turns`, `timeout_s`, `last_user_source`. `is_expired` (`:123`) is monotonic idle > `timeout_s`. Sessions are created at `:2242` (research injection path) and `:2377-2381` (`_handle_user_input`); the only teardown is `_clear_conversation` (`:921-930`), which blanks each message and sets `_conversation = None`. Expiry is detected in the brain tick at `:756-762` and calls `_clear_conversation`. Nothing is written anywhere on expiry today.

@@ -7,6 +7,10 @@ markers. Used by both voice training and the runtime response filter.
 
 from __future__ import annotations
 
+import re
+
+_ENVELOPE_TAG_RE = re.compile(r"<(\s*/?\s*transcript\s*)>", re.IGNORECASE)
+
 _META_MARKERS = (
     "wikipedia",
     "copiert",
@@ -28,6 +32,13 @@ def truncate_ellipsis(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "…"
+
+
+def neutralize_envelope_tags(text: str) -> str:
+    """Rewrite any <transcript> / </transcript> tag in *text* with full-width
+    angle brackets so it cannot close or open a prompt envelope.
+    """
+    return _ENVELOPE_TAG_RE.sub(lambda m: f"＜{m.group(1)}＞", text)
 
 
 def _is_latin_or_punct(ch: str) -> bool:

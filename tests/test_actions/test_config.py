@@ -40,3 +40,17 @@ def test_load_config_parses_cloud_llm_section(tmp_path, monkeypatch) -> None:
     assert cfg.cloud_llm.enabled is True
     assert cfg.cloud_llm.model == "claude-sonnet-4-6"
     assert cfg.cloud_llm.timeout_s == 45.0
+
+
+def test_load_config_parses_session_summary_section(tmp_path) -> None:
+    """Regression: [session_summary] was missing from _SECTION_MAP, so both
+    toggles silently loaded as their True defaults."""
+    toml = tmp_path / "config.toml"
+    toml.write_text(
+        "[session_summary]\n"
+        "enabled = false\n"
+        "conversations = false\n"
+    )
+    cfg = load_config(config_path=toml)
+    assert cfg.session_summary.enabled is False
+    assert cfg.session_summary.conversations is False

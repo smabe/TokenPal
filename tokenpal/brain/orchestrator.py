@@ -76,6 +76,7 @@ from tokenpal.config.schema import (
 )
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
+from tokenpal.util.timefmt import format_age
 
 log = logging.getLogger(__name__)
 
@@ -110,10 +111,13 @@ class ConversationSession:
     """Tracks state for an active multi-turn conversation."""
 
     history: list[dict[str, str]] = field(default_factory=list)
-    started_at: float = field(default_factory=time.monotonic)
+    # Wall clock: stored in memory.db on expiry. Idle tracking is monotonic.
+    started_at: float = field(default_factory=time.time)
     last_activity: float = field(default_factory=time.monotonic)
     max_turns: int = 10
     timeout_s: float = 120.0
+    # Previous chat's stored summary, rendered as a system message.
+    recap: str | None = None
     # Most recent user-turn origin. Reply routing reads this to decide
     # whether to speak the assistant turn — voice-initiated session →
     # speak; typed turn → text only, even mid-session.
@@ -147,6 +151,14 @@ class ConversationSession:
         if len(self.history) > self.max_turns * 2:
             del self.history[:2]
 
+
+# Extra seconds past the summarizer's latency budget that a new session
+# waits for the previous chat's summary before starting without it.
+_SUMMARY_WAIT_MARGIN_S = 2.0
+
+# Assistant turn recorded when a reply was filtered out, so history stays
+# paired. Sessions holding only placeholders are not worth summarizing.
+_NO_RESPONSE_PLACEHOLDER = "[no response]"
 
 # Max comments in a rolling window (guardrail §2)
 _MAX_COMMENTS_PER_WINDOW = 8
@@ -438,6 +450,7 @@ class Brain:
         self._previous_session_note: str | None = None
         self._session_summarizer: SessionSummarizer | None = None
         self._session_summary_task: asyncio.Task[None] | None = None
+        self._conversation_summary_tasks: set[asyncio.Task[None]] = set()
 
         # Intent tracking — only when memory is available.
         self._intent_config: IntentConfig = intent_config or IntentConfig()
@@ -612,23 +625,26 @@ class Brain:
         log.info("Loaded previous session handoff note (%d chars)", len(text))
 
     def _start_session_summarizer(self) -> None:
-        """Spawn the periodic summarizer task; no-op if disabled."""
+        """Construct the summarizer when either toggle is on; only the
+        periodic observation loop needs `enabled`."""
+        cfg = self._session_summary_config
         if (
             self._memory is None
             or not self._memory.enabled
-            or not self._session_summary_config.enabled
+            or not (cfg.enabled or cfg.conversations)
         ):
             return
         self._session_summarizer = SessionSummarizer(
             memory=self._memory,
             llm=self._llm,
-            interval_s=self._session_summary_config.interval_s,
+            interval_s=cfg.interval_s,
             target_latency_s=self._budgets.observation,
             min_tokens=self._min_tokens.observation,
         )
-        self._session_summary_task = asyncio.create_task(
-            self._session_summarizer.run_forever()
-        )
+        if cfg.enabled:
+            self._session_summary_task = asyncio.create_task(
+                self._session_summarizer.run_forever()
+            )
 
     def _compute_first_session_of_day(self) -> bool:
         """True when no prior session_start landed in today's memory.db."""
@@ -752,14 +768,7 @@ class Brain:
                 # Respects conversation + sensitive-app gates via _proactive_paused.
                 self._proactive.tick()
 
-                # Clean up expired conversation sessions
-                if self._conversation and self._conversation.is_expired:
-                    log.debug(
-                        "Conversation session expired (%.0fs idle, %d turns)",
-                        time.monotonic() - self._conversation.last_activity,
-                        self._conversation.turn_count,
-                    )
-                    self._clear_conversation()
+                self._rollover_expired_session()
 
                 # Sync the intent store with the current foreground app so
                 # its dwell timer stays accurate.
@@ -910,13 +919,102 @@ class Brain:
 
     def reset_conversation(self) -> None:
         """Clear the conversation session. Thread-safe: can be called from main thread."""
+        self._run_on_loop(self._clear_conversation)
+
+    def clear_conversation_history(self) -> None:
+        """/clear: drop the live session, in-flight summaries, and stored
+        recaps. Thread-safe: can be called from main thread."""
+        self._run_on_loop(self._clear_conversation_and_summaries)
+
+    def _run_on_loop(self, fn: Callable[[], None]) -> None:
         if self._loop is None:
-            self._clear_conversation()
+            fn()
             return
         try:
-            self._loop.call_soon_threadsafe(self._clear_conversation)
+            self._loop.call_soon_threadsafe(fn)
         except RuntimeError:
-            self._clear_conversation()
+            fn()
+
+    def _clear_conversation_and_summaries(self) -> None:
+        for task in self._conversation_summary_tasks:
+            task.cancel()
+        if self._memory is not None and self._memory.enabled:
+            try:
+                self._memory.clear_conversation_summaries()
+            except Exception:
+                log.debug("clear_conversation_summaries failed", exc_info=True)
+        self._clear_conversation()
+
+    def _rollover_expired_session(self) -> None:
+        """The one expiry path: schedule the recap summary, then clear."""
+        session = self._conversation
+        if session is None or not session.is_expired:
+            return
+        log.debug(
+            "Conversation session expired (%.0fs idle, %d turns)",
+            time.monotonic() - session.last_activity,
+            session.turn_count,
+        )
+        if (
+            self._session_summarizer is not None
+            and self._session_summary_config.conversations
+            and any(
+                m["role"] == "assistant" and m["content"] != _NO_RESPONSE_PLACEHOLDER
+                for m in session.history
+            )
+        ):
+            # _clear_conversation blanks the message dicts in place, so the
+            # summary needs its own copies.
+            history = [dict(m) for m in session.history]
+            task = asyncio.create_task(
+                self._session_summarizer.summarize_conversation(
+                    history, started_at=session.started_at, ended_at=time.time(),
+                )
+            )
+            self._conversation_summary_tasks.add(task)
+            task.add_done_callback(self._conversation_summary_tasks.discard)
+        self._clear_conversation()
+
+    async def _new_conversation_session(self) -> ConversationSession:
+        """Roll over an expired session, wait (bounded) for its summary, then
+        open a fresh session carrying the latest stored recap."""
+        self._rollover_expired_session()
+        pending = [t for t in self._conversation_summary_tasks if not t.done()]
+        if pending:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*(asyncio.shield(t) for t in pending)),
+                    timeout=self._budgets.observation + _SUMMARY_WAIT_MARGIN_S,
+                )
+            except TimeoutError:
+                log.debug("Conversation summary still running; starting without it")
+            except asyncio.CancelledError:
+                if not any(t.cancelled() for t in pending):
+                    raise
+        session = ConversationSession(
+            max_turns=self._conv_config.max_turns,
+            timeout_s=self._conv_config.timeout_s,
+        )
+        if (
+            self._memory is None
+            or not self._memory.enabled
+            or not self._session_summary_config.conversations
+        ):
+            return session
+        try:
+            lookback_s = self._session_summary_config.max_lookback_h * 3600
+            row = self._memory.get_latest_conversation_summary(lookback_s)
+        except Exception:
+            log.debug("get_latest_conversation_summary failed", exc_info=True)
+            return session
+        if row is not None:
+            ts, text = row
+            age_s = time.time() - ts
+            session.recap = self._personality.build_conversation_recap(text, age_s)
+            log.info(
+                "Injected conversation recap (%d chars, %.0f min old)", len(text), age_s / 60
+            )
+        return session
 
     def _clear_conversation(self) -> None:
         """Drop references to message contents before clearing the buffer.
@@ -1104,7 +1202,11 @@ class Brain:
 
         assert self._audio_pipeline is not None
         await speak(text, source="voice", pipeline=self._audio_pipeline)
-        if self._audio_pipeline.input is not None:
+        self._release_voice_mic()
+
+    def _release_voice_mic(self) -> None:
+        """Move the voice FSM out of SPEAKING; it has no deadline of its own."""
+        if self._audio_pipeline is not None and self._audio_pipeline.input is not None:
             self._audio_pipeline.input.notify_tts_done()
 
     def _handle_suppressed_output(self, reason: str) -> None:
@@ -1940,7 +2042,7 @@ class Brain:
             # follow-ups typed directly (not via /refine) have context.
             # Without this, "what about side sleepers?" hits an empty local
             # context and fumbles.
-            self._inject_research_into_conversation(question, session)
+            await self._inject_research_into_conversation(question, session)
             self._maybe_stash_followup_session(session, cloud_mode=cloud_mode)
         return session
 
@@ -2183,7 +2285,7 @@ class Brain:
         final = fake_session.answer.strip() or "(no refined answer)"
         self._ui_callback(final)
         self._last_comment_time = time.monotonic()
-        self._inject_research_into_conversation(follow_up, fake_session)
+        await self._inject_research_into_conversation(follow_up, fake_session)
 
     async def _handle_followup(self, question: str) -> None:
         """Run a /followup slash against the research_followup action.
@@ -2227,7 +2329,7 @@ class Brain:
             self._ui_callback(result.output)
         self._last_comment_time = time.monotonic()
 
-    def _inject_research_into_conversation(
+    async def _inject_research_into_conversation(
         self, question: str, session: ResearchSession
     ) -> None:
         """Append a synthetic assistant turn to the conversation session so
@@ -2239,10 +2341,7 @@ class Brain:
         if not session.answer:
             return
         if self._conversation is None or self._conversation.is_expired:
-            self._conversation = ConversationSession(
-                max_turns=self._conv_config.max_turns,
-                timeout_s=self._conv_config.timeout_s,
-            )
+            self._conversation = await self._new_conversation_session()
         # Cap the excerpt so we don't stuff 20K tokens into every follow-up.
         # 1500 chars ~= 375 tokens, plenty to reference without ballooning.
         excerpt = session.answer.strip()
@@ -2304,7 +2403,7 @@ class Brain:
             )
             for i, s in enumerate(payload)
         ]
-        prefix = _format_cache_age(age)
+        prefix = f"(cached {format_age(age)})"
         return ResearchSession(
             question=question,
             sources=sources,
@@ -2375,26 +2474,30 @@ class Brain:
 
         # Start or continue conversation session
         if self._conversation is None or self._conversation.is_expired:
-            self._conversation = ConversationSession(
-                max_turns=self._conv_config.max_turns,
-                timeout_s=self._conv_config.timeout_s,
-            )
+            self._conversation = await self._new_conversation_session()
             log.debug("New conversation session started")
+        # Local handle: a /clear arriving while the reply is generating sets
+        # self._conversation to None under us.
+        session = self._conversation
 
         # Record user turn (also resets timeout)
-        self._conversation.add_user_turn(user_message, source=source)
+        session.add_user_turn(user_message, source=source)
 
-        # Build messages array: [system, history..., context, user]
+        # Build messages array: [system, recap?, history..., context, user]
         system_msg = self._personality.build_conversation_system_message(
             tool_names=list(self._actions.keys()),
         )
         context_msg = self._personality.build_context_injection(snapshot)
+        recap_msgs: list[dict[str, Any]] = (
+            [{"role": "system", "content": session.recap}] if session.recap else []
+        )
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_msg},
+            *recap_msgs,
             # history[:-1]: the user turn was just appended by add_user_turn(),
             # so we exclude it here and re-add it below with fresh context injected
-            *self._conversation.history[:-1],
+            *session.history[:-1],
             {"role": "system", "content": context_msg},  # fresh context
             {"role": "user", "content": user_message},    # current turn
         ]
@@ -2404,7 +2507,7 @@ class Brain:
                 self._status_callback("replying...")
             log.debug(
                 "Conversation turn %d (%.30s...)",
-                self._conversation.turn_count + 1,
+                session.turn_count + 1,
                 user_message,
             )
             effective_max_tokens = self._effective_conv_max_tokens()
@@ -2412,6 +2515,11 @@ class Brain:
                 messages, effective_max_tokens,
             )
             self._push_status()
+            if self._conversation is not session:
+                log.debug("Conversation cleared mid-reply; dropping response")
+                if source == "voice":
+                    self._release_voice_mic()
+                return
 
             filtered = self._personality.filter_conversation_response(reply_text)
             conv_recent = self._conversation_recent_outputs
@@ -2419,12 +2527,18 @@ class Brain:
                 log.info("TokenPal (reply near-duplicate, retrying): %s", filtered)
                 retry_messages: list[dict[str, Any]] = [
                     {"role": "system", "content": system_msg + _RETRY_NEAR_DUP_INSTRUCTION},
-                    *self._conversation.history[:-1],
+                    *recap_msgs,
+                    *session.history[:-1],
                     {"role": "user", "content": user_message},
                 ]
                 retry_text = await self._reply_with_continuation(
                     retry_messages, effective_max_tokens,
                 )
+                if self._conversation is not session:
+                    log.debug("Conversation cleared mid-retry; dropping response")
+                    if source == "voice":
+                        self._release_voice_mic()
+                    return
                 retry_filtered = self._personality.filter_conversation_response(retry_text)
                 filtered = retry_filtered
                 if retry_filtered and self._is_near_duplicate(retry_filtered, conv_recent):
@@ -2443,7 +2557,7 @@ class Brain:
                         len(filtered), char_cap,
                     )
                     filtered = filtered[: char_cap - 3] + "..."
-                self._conversation.add_assistant_turn(filtered)
+                session.add_assistant_turn(filtered)
                 log.info("TokenPal (reply): %s", filtered)
                 self._personality.record_comment(filtered)
                 self._recent_outputs.append(filtered)
@@ -2452,15 +2566,15 @@ class Brain:
                 self._last_comment_time = time.monotonic()
             else:
                 # Record placeholder so history stays coherent
-                self._conversation.add_assistant_turn("[no response]")
+                session.add_assistant_turn(_NO_RESPONSE_PLACEHOLDER)
                 log.debug("Conversation response filtered: %r", reply_text[:80])
                 quip = self._personality.get_confused_quip()
                 await _emit_reply(quip)
         except Exception:
             log.exception("Failed to generate conversation response")
             # Don't record failed exchange — remove the user turn we just added
-            if self._conversation.history and self._conversation.history[-1]["role"] == "user":
-                self._conversation.history.pop()
+            if session.history and session.history[-1]["role"] == "user":
+                session.history.pop()
             quip = self._personality.get_confused_quip()
             await _emit_reply(quip)
 
@@ -2609,6 +2723,21 @@ class Brain:
                 await action.teardown()
             except Exception:
                 log.exception("Error tearing down action '%s'", action.action_name)
+        tasks = [
+            t for t in (self._session_summary_task, *self._conversation_summary_tasks)
+            if t is not None and not t.done()
+        ]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._session_summary_task = None
+        self._conversation_summary_tasks.clear()
+        if self._session_summarizer is not None:
+            self._session_summarizer.stop()
         await self._llm.teardown()
         log.info("Brain stopped")
 
@@ -2647,16 +2776,6 @@ def _format_session_summary(
     )
     tail = ", ".join(f"{n} {name}" for name, n in counts)
     return f"{reason} in {duration_s:.1f}s ({tail}, {session.tokens_used} tokens)"
-
-
-def _format_cache_age(age_s: float) -> str:
-    if age_s < 60:
-        return "(cached just now)"
-    if age_s < 3600:
-        return f"(cached {int(age_s / 60)}m ago)"
-    if age_s < 86400:
-        return f"(cached {int(age_s / 3600)}h ago)"
-    return f"(cached {int(age_s / 86400)}d ago)"
 
 
 def _format_research_summary(session: ResearchSession) -> str:

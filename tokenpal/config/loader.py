@@ -30,6 +30,7 @@ from tokenpal.config.schema import (
     ResearchConfig,
     SensesConfig,
     ServerConfig,
+    SessionSummaryConfig,
     TargetLatencyConfig,
     TokenPalConfig,
     ToolsConfig,
@@ -68,6 +69,7 @@ _SECTION_MAP: dict[str, type] = {
     "cloud_llm": CloudLLMConfig,
     "cloud_search": CloudSearchConfig,
     "chat_log": ChatLogConfig,
+    "session_summary": SessionSummaryConfig,
     "audio": AudioConfig,
 }
 

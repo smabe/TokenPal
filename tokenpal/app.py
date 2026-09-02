@@ -358,7 +358,7 @@ def main() -> None:
     def _cmd_clear(_args: str) -> CommandResult:
         overlay.schedule_callback(overlay.hide_speech)
         overlay.clear_log()
-        brain.reset_conversation()
+        brain.clear_conversation_history()
         return CommandResult("")
 
     def _cmd_mood(_args: str) -> CommandResult:
@@ -893,6 +893,7 @@ def main() -> None:
                     except Exception as e:
                         log.warning("clear_chat_log failed: %s", e)
                 overlay.clear_log()
+                brain.clear_conversation_history()
                 overlay.log_buddy_message("/options: chat history cleared.")
 
             from tokenpal.audio.deps import format_warning

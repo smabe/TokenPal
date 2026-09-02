@@ -484,6 +484,9 @@ class SessionSummaryConfig:
     enabled: bool = True
     interval_s: int = 300
     max_lookback_h: int = 24
+    # Compress an expired chat into a recap row the next chat can read.
+    # Independent of `enabled` (the observation handoff notes).
+    conversations: bool = True
 
 
 @dataclass
