@@ -72,5 +72,5 @@ Currently defaults to the stock `hey_jarvis_v0.1.onnx` from openWakeWord's relea
 ## Known limitations
 - Live-toggle of voice mode requires restart — `start_input` / `stop_input` exist but the orchestrator only calls `start_input` once at brain bootup.
 - ASR fallback has no cooldown — if the remote is consistently dead, every voice utterance pays the 2s connect timeout before falling back. Add a circuit breaker if it bites in practice.
-- The three trailing-window scenarios from `plans/say-what.md` done-criteria (5s speech + silence, 5s speech + pink noise, 5s speech + 4s gap + 5s speech) are integration tests against real audio. Manual smoke only; nothing automated.
+- The three trailing-window scenarios from `plans/shipped/say-what.md` done-criteria (5s speech + silence, 5s speech + pink noise, 5s speech + 4s gap + 5s speech) are integration tests against real audio. Manual smoke only; nothing automated.
 - `--verbose` doesn't yet show per-frame VAD probability; the listening-timeout log surfaces max-prob since reset. For finer-grained tuning, instrument `SileroVAD.process` directly.

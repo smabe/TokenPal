@@ -1,6 +1,6 @@
 """VoiceSession FSM tests.
 
-Pin the routing rules from plans/say-what.md:
+Pin the routing rules from plans/shipped/say-what.md:
 
 * wake from idle → LISTENING
 * good transcript → Decision(SUBMIT, text), state = SPEAKING

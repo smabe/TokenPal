@@ -490,7 +490,7 @@ class SessionSummaryConfig:
 class AudioConfig:
     # Both toggles are independent and default OFF. speak_ambient_enabled never
     # opens a mic stream; voice_conversation_enabled additionally requires the
-    # AUDIO_INPUT consent gate. See plans/say-what.md for the four-state matrix.
+    # AUDIO_INPUT consent gate. See plans/shipped/say-what.md for the four-state matrix.
     voice_conversation_enabled: bool = False
     speak_ambient_enabled: bool = False
     # Output-only opt-out from the type-in/type-out symmetry rule —
@@ -518,7 +518,7 @@ class AudioConfig:
     # keeps the session open forever.
     trailing_window_s: float = 8.0
     # "server" POSTs to the optional ASR endpoint mounted by create_app and
-    # falls back to "local" on a 2s timeout (see plans/say-what.md).
+    # falls back to "local" on a 2s timeout (see plans/shipped/say-what.md).
     asr_backend: Literal["local", "server"] = "local"
     asr_server_url: str = ""
     asr_model_size: str = "small.en"

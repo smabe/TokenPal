@@ -50,7 +50,7 @@
 Runtime is feature-complete and clean. Two manual items + two enhancement items remain:
 
 **Manual / external (not code work):**
-1. **Train `hey_tokenpal.onnx`** via openWakeWord's Colab (~1h on free T4). Notes in [`tools/wakeword-training/README.md`](../tools/wakeword-training/README.md). Drop result at `~/.tokenpal/audio/wakeword/hey_tokenpal.onnx`, set `[audio] wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml`. No code change needed.
+1. **Train `hey_tokenpal.onnx`** via openWakeWord's Colab (~1h on free T4). Notes in [`tools/wakeword-training/README.md`](../../tools/wakeword-training/README.md). Drop result at `~/.tokenpal/audio/wakeword/hey_tokenpal.onnx`, set `[audio] wakeword_model_name = "hey_tokenpal"` in `~/.tokenpal/config.toml`. No code change needed.
 2. **Three trailing-window real-audio smoke tests** from done-criteria: 5s speech + 12s silence; 5s speech + 12s pink noise; 5s speech + 4s gap + 5s speech. Need a mic, not automatable in CI. Manual against the running buddy.
 
 **Code follow-ups, ordered by leverage:**
@@ -58,7 +58,7 @@ Runtime is feature-complete and clean. Two manual items + two enhancement items 
 4. **`ASRWithFallback` cooldown.** If a remote ASR endpoint turns out flappy in practice, every utterance pays the 2s connect timeout before falling back. Add a simple exponential-backoff cooldown (60s after failure → 5min after consecutive failures, reset on success). Premature until someone hits it; documented for the day someone does.
 5. **Per-frame VAD probability surfacing.** Listening-timeout log line shows max prob since reset, but for fine-grained tuning a `--verbose` mode that emits per-frame prob would help. Trivial to add behind a `TOKENPAL_VAD_TRACE=1` env var; punt until needed.
 
-**Documentation status:** Full surface in [`docs/claude/audio.md`](../docs/claude/audio.md). Sub-doc table in `CLAUDE.md` updated. Custom-activation training path in [`tools/wakeword-training/README.md`](../tools/wakeword-training/README.md).
+**Documentation status:** Full surface in [`docs/claude/audio.md`](../../docs/claude/audio.md). Sub-doc table in `CLAUDE.md` updated. Custom-activation training path in [`tools/wakeword-training/README.md`](../../tools/wakeword-training/README.md).
 
 ## Goal
 Add an opt-in **voice conversation mode** modeled on ChatGPT/Claude voice: user says "hey tokenpal", the buddy answers in voice, the mic stays hot through a short trailing window so the user can keep talking without re-waking. Typed conversations stay text-only. Random ambient observations stay text-only by default; speaking them is a separate sub-opt-in that does not require the mic.

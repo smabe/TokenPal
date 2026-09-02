@@ -6,7 +6,7 @@ Phases 1–4 landed on Windows: spike, buddy port, followers, backend dispatch, 
 
 **Phase 5 (retire QWidget) is NOT shipped** — gated on cross-platform validation (macOS M-series + AMD laptop/desktop with Linux KDE/X11) we can't run from this box. When that hardware is available, a separate plan picks up Phase 5: flip the default, ship a bridge release, delete QWidget code paths.
 
-**Deferred from the original done criteria** (moved to `plans/qt-quick-followups.md`):
+**Deferred from the original done criteria** (moved to `plans/shipped/qt-quick-followups.md`):
 - Multi-monitor support (works on single-screen; mixed-DPR multi-monitor produces disjoint render — needs per-screen QQuickWindow with reparenting on edge cross).
 - Cross-platform smoke pass on macOS / Linux KDE / Linux X11.
 - Automated tests under `tests/test_quick/`. Manual smokes (`tests/manual/quick_buddy.py`, `quick_followers.py`, `quick_backend_smoke.py`) have done the validation work in practice.
