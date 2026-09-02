@@ -39,6 +39,7 @@ class HttpBackend(AbstractLLMBackend):
         self._disable_reasoning = config.get("disable_reasoning", True)
         self._inference_engine: InferenceEngine = config.get("inference_engine", "ollama")
         self._server_mode = config.get("server_mode", "auto")
+        self._request_timeout_s: float = float(config.get("request_timeout_s", 60.0))
         self._initial_max_tokens: int = int(config.get("max_tokens", 256))
         self._max_tokens: int = self._initial_max_tokens
         # Resolve per-server overrides (populated by /model and /server switch)
@@ -421,6 +422,7 @@ class HttpBackend(AbstractLLMBackend):
         resp = await self._client.post(
             f"{self._api_url}/chat/completions",
             json=body,
+            timeout=self._request_timeout_s,
         )
         resp.raise_for_status()
         data = resp.json()

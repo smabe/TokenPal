@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
+from tests._helpers import ScriptedLLM, ok_response
+from tokenpal.config.schema import LLMConfig, TokenPalConfig
 from tokenpal.tools import train_voice
 from tokenpal.tools.train_voice import (
     _frames_look_usable,
@@ -351,3 +353,59 @@ def test_generate_lines_returns_best_effort_after_all_fail():
             "Finn", ["line one", "line two"], "Write some greetings.",
         )
     assert out == []
+
+
+# ---------------------------------------------------------------
+# _ollama_generate goes through HttpBackend
+# ---------------------------------------------------------------
+
+
+def _llamacpp_config() -> TokenPalConfig:
+    """A config whose engine is llamacpp, standing in for load_config()."""
+    return TokenPalConfig(llm=LLMConfig(inference_engine="llamacpp"))
+
+
+def test_ollama_generate_builds_backend_from_config():
+    captured: list[dict] = []
+    backend = ScriptedLLM([ok_response("  \"a persona line\"  ")])
+    load_config = Mock(side_effect=_llamacpp_config)
+
+    def fake_backend(config):
+        captured.append(config)
+        return backend
+
+    with (
+        patch.object(train_voice, "HttpBackend", fake_backend),
+        patch.object(train_voice, "load_config", load_config),
+    ):
+        out = train_voice._ollama_generate("prompt", max_tokens=500, temperature=0.3)
+
+    assert out == "a persona line"
+    assert load_config.call_count == 1
+    assert captured[0]["temperature"] == 0.3
+    assert captured[0]["request_timeout_s"] == 120.0
+    assert captured[0]["inference_engine"] == "llamacpp"
+    assert backend.call_kwargs == [{"max_tokens": 500, "enable_thinking": False}]
+
+
+def test_ollama_generate_returns_none_on_empty_text():
+    """`content: null` reaches HttpBackend.generate as text=""."""
+    with (
+        patch.object(train_voice, "HttpBackend", lambda _c: ScriptedLLM([ok_response("")])),
+        patch.object(train_voice, "load_config", _llamacpp_config),
+    ):
+        assert train_voice._ollama_generate("prompt") is None
+
+
+def test_ollama_generate_returns_none_when_backend_raises():
+    """Empty `choices` raises IndexError inside generate; it must not escape."""
+
+    class _Exploding(ScriptedLLM):
+        async def generate(self, prompt, max_tokens=256, **kwargs):
+            raise IndexError("list index out of range")
+
+    with (
+        patch.object(train_voice, "HttpBackend", lambda _c: _Exploding([])),
+        patch.object(train_voice, "load_config", _llamacpp_config),
+    ):
+        assert train_voice._ollama_generate("prompt") is None

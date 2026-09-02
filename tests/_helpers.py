@@ -49,7 +49,7 @@ class ScriptedLLM(AbstractLLMBackend):
         self, prompt: str, max_tokens: int = 256, **kwargs: Any,
     ) -> LLMResponse:
         self.prompts.append(prompt)
-        self.call_kwargs.append(kwargs)
+        self.call_kwargs.append({"max_tokens": max_tokens, **kwargs})
         if not self._responses:
             return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
         return self._responses.pop(0)

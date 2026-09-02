@@ -59,7 +59,7 @@ from tokenpal.config.tools_writer import set_enabled_tools
 from tokenpal.config.ui_state import UiState, load_ui_state, save_ui_state
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import ALLOWED_MODELS
-from tokenpal.llm.registry import discover_backends, resolve_backend
+from tokenpal.llm.registry import backend_config, discover_backends, resolve_backend
 from tokenpal.nl_commands import match_nl_command
 from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
@@ -153,13 +153,7 @@ def main() -> None:
         sense_configs=sense_configs,
     )
 
-    llm_config = dataclasses.asdict(config.llm)
-    llm_config["server_mode"] = config.server.mode
-    # Backends with a throughput estimator persist their EWMAs keyed by
-    # (api_url, model) so a known rig doesn't burn its 3-call bootstrap
-    # window on every restart. See plans/gpu-scaling.md.
-    if memory:
-        llm_config["memory_store"] = memory
+    llm_config = backend_config(config, memory_store=memory)
     llm = resolve_backend(llm_config)
 
     ui_config = dataclasses.asdict(config.ui)

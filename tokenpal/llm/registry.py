@@ -1,14 +1,19 @@
-"""LLM backend discovery and registration."""
+"""LLM backend discovery, registration, and config marshalling."""
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 import logging
 import pkgutil
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.util.platform import current_platform
+
+if TYPE_CHECKING:
+    from tokenpal.brain.memory import MemoryStore
+    from tokenpal.config.schema import TokenPalConfig
 
 log = logging.getLogger(__name__)
 
@@ -32,6 +37,26 @@ def discover_backends() -> None:
             importlib.import_module(modname)
         except ImportError as e:
             log.debug("Skipping backend module %s: %s", modname, e)
+
+
+def backend_config(
+    config: TokenPalConfig,
+    *,
+    memory_store: MemoryStore | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Build the flat config dict a backend is constructed from.
+
+    Passing *memory_store* lets backends with a throughput estimator persist
+    their EWMAs keyed by (api_url, model) so a known rig doesn't burn its
+    3-call bootstrap window on every restart. See plans/gpu-scaling.md.
+    """
+    llm_config = dataclasses.asdict(config.llm)
+    llm_config["server_mode"] = config.server.mode
+    if memory_store is not None:
+        llm_config["memory_store"] = memory_store
+    llm_config.update(overrides)
+    return llm_config
 
 
 def resolve_backend(config: dict[str, Any]) -> AbstractLLMBackend:

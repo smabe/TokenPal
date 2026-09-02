@@ -1,9 +1,14 @@
 """Tests for set_api_url() on LLM backends."""
 
+from unittest.mock import patch
+
+import httpx
 import pytest
 
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.http_backend import HttpBackend
+
+real_async_client = httpx.AsyncClient
 
 
 def test_set_api_url_changes_endpoint():
@@ -166,8 +171,9 @@ def _fake_backend(message: dict) -> tuple[HttpBackend, dict]:
             }
 
     class _FakeClient:
-        async def post(self, url, json):
+        async def post(self, url, json, timeout=None):
             captured["body"] = json
+            captured["timeout"] = timeout
             return _FakeResponse()
 
     backend._client = _FakeClient()  # type: ignore[assignment]
@@ -211,3 +217,47 @@ async def test_reasoning_content_surfaces_on_both_paths(message, reasoning, with
         response = await backend.generate("hi", max_tokens=10)
     assert response.reasoning == reasoning
     assert response.text == message["content"]
+
+
+# ---------------------------------------------------------------------------
+# request_timeout_s
+# ---------------------------------------------------------------------------
+
+
+async def _connect_timeouts_by_route(config: dict) -> dict[str, float]:
+    """Run setup() + generate(), reporting the connect budget httpx applied per route."""
+    seen: dict[str, float] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        route = request.url.path.rsplit("/", 1)[-1]
+        seen[route] = request.extensions["timeout"]["connect"]
+        if route == "models":
+            return httpx.Response(200, json={"data": [{"id": "gemma4"}]})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+        })
+
+    with patch.object(
+        httpx, "AsyncClient",
+        side_effect=lambda **kw: real_async_client(
+            transport=httpx.MockTransport(handler), **kw,
+        ),
+    ):
+        backend = HttpBackend({"model_name": "gemma4", **config})
+        await backend.setup()
+        await backend.generate("hi", max_tokens=10)
+    return seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("overrides", "completion"), [
+    ({"request_timeout_s": 120.0}, 120.0),
+    ({}, 60.0),
+])
+async def test_request_timeout_s_applies_to_the_completion_only(overrides, completion):
+    """A raised budget reaches the generation POST, never the reachability probe."""
+    seen = await _connect_timeouts_by_route(
+        {"api_url": "http://localhost:11434/v1", **overrides},
+    )
+    assert seen["completions"] == completion
+    assert seen["models"] == 60.0

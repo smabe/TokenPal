@@ -10,13 +10,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import random
 import re
 import sys
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -26,7 +25,11 @@ from typing import Any
 from rich.errors import MarkupError
 from rich.text import Text
 
+from tokenpal.config.loader import load_config
+from tokenpal.config.schema import TokenPalConfig
 from tokenpal.config.toml_writer import update_config
+from tokenpal.llm.http_backend import HttpBackend
+from tokenpal.llm.registry import backend_config
 from tokenpal.tools.transcript_parser import extract_lines, extract_lines_from_text
 from tokenpal.tools.voice_profile import (
     VoiceProfile,
@@ -56,79 +59,44 @@ from tokenpal.util.text_guards import is_clean_english
 log = logging.getLogger(__name__)
 
 
-def _get_model() -> str:
-    """Resolve model name from config, with fallback."""
-    try:
-        from tokenpal.config.loader import load_config
-        config = load_config()
-        return config.llm.model_name
-    except Exception:
-        return "gemma4"
-
-
-def _thinking_controls() -> dict[str, object]:
-    """Per-engine fields that switch reasoning off, matching HttpBackend.
-
-    llama-server and MTPLX reject or ignore ``reasoning_effort`` and take
-    ``chat_template_kwargs.enable_thinking``; Ollama is the reverse.
-    """
-    try:
-        from tokenpal.config.loader import load_config
-        engine = load_config().llm.inference_engine
-    except Exception:
-        engine = "ollama"
-    if engine == "llamacpp":
-        return {
-            "chat_template_kwargs": {"enable_thinking": False},
-            "reasoning_format": "deepseek",
-        }
-    return {"reasoning_effort": "none"}
-
-
 def _get_voices_dir() -> Path:
     """Resolve voices directory from config, with fallback."""
     try:
-        from tokenpal.config.loader import load_config
         config = load_config()
         return Path(config.paths.data_dir).expanduser().resolve() / "voices"
     except Exception:
         return Path.home() / ".tokenpal" / "voices"
 
 
-def _get_ollama_url() -> str:
-    """Resolve Ollama API URL from config, with fallback."""
-    try:
-        from tokenpal.config.loader import load_config
-        config = load_config()
-        return config.llm.api_url + "/chat/completions"
-    except Exception:
-        return "http://localhost:11434/v1/chat/completions"
-
-
 def _ollama_generate(prompt: str, max_tokens: int = 60, temperature: float = 0.7) -> str | None:
-    """Send a prompt to Ollama and return the response text."""
-    payload = json.dumps({
-        "model": _get_model(),
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        **_thinking_controls(),
-    }).encode()
+    """One prompt through an HttpBackend built from config; None on any failure."""
+    try:
+        config = load_config()
+    except Exception:
+        log.warning("Voice-training LLM call: config unreadable, using defaults")
+        config = TokenPalConfig()
+    llm_config = backend_config(config, temperature=temperature, request_timeout_s=120.0)
 
-    req = urllib.request.Request(
-        _get_ollama_url(),
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
+    async def _run() -> str:
+        backend = HttpBackend(llm_config)
+        try:
+            await backend.setup()
+            response = await backend.generate(
+                prompt, max_tokens=max_tokens, enable_thinking=False,
+            )
+        finally:
+            await backend.teardown()
+        return response.text
 
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
-            text = str(data["choices"][0]["message"]["content"]).strip()
-            return text.strip("\"'").strip()
-    except (urllib.error.URLError, KeyError, json.JSONDecodeError, TimeoutError) as e:
+        text = asyncio.run(_run()).strip().strip("\"'").strip()
+    except Exception as e:
         log.warning("Voice-training LLM call failed: %s", e)
         return None
+    if not text:
+        log.warning("Voice-training LLM call returned no text")
+        return None
+    return text
 
 
 def _sample_block(lines: list[str], n: int = 10) -> str:
