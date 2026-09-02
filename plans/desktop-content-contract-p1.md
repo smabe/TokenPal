@@ -72,6 +72,23 @@ See the master `plans/desktop-content-contract.md`. The decisions binding this p
 - **Alternatives considered:** a `__slots__` class with a private attribute and accessor (more ceremony, same guarantee).
 - **Evidence:** the `caplog` test in Work.
 
+### Finding: the shard's `scrub_body` inventory missed two monkeypatch sites  *(status: resolved)*
+- Both `tests/test_actions/test_network/test_http.py` and `test_tools.py` patch `contains_sensitive_term` **on `_http`**. After the move that attribute is gone, so `monkeypatch.setattr` raises at patch time. Retargeted to `tokenpal.util.untrusted_text`; `_scrub_line` reads the module global at call time, so the patch still reaches the seven tools' `display_text` path. Assertions unchanged.
+
+### Finding: mypy strict rejects a plain re-export  *(status: resolved)*
+- `from tokenpal.util.untrusted_text import scrub_body` in `_http.py` produced seven `attr-defined` errors, one per importing tool, because `pyproject.toml` sets `strict = true` which implies `no_implicit_reexport`. The redundant `import scrub_body as scrub_body` is the explicit-re-export form and is load-bearing; a comment on the line says so. Confirmed by shadow-running mypy with the alias collapsed: exactly seven errors. Any later phase relocating a symbol behind a re-export hits this.
+
+### Finding: no import cycle, and the fallback was not needed  *(status: resolved)*
+- `tokenpal/util/__init__.py` and `tokenpal/brain/__init__.py` are both empty and `personality.py` imports only `tokenpal.util.text_guards` / `timefmt`, so `tokenpal.util.untrusted_text` importing `tokenpal.brain.personality` is safe today. The direction is nonetheless inverted (a leaf utility importing brain), and the natural second consumers of `scrub_body` — `eod_summary.py:142`, `session_summarizer.py:178`, `intent.py:79` — all live in `brain` and would close the loop. Parked in the master.
+
+### Finding: two prompt-injection holes in `to_prompt_block`, found at review  *(status: resolved)*
+- A body containing a literal `</desktop_content>` closed the envelope; `source_app` was sanitized for `"` only, so `<`, `>` and line separators forged the opening tag. Both are fixed and tested, and both tests were confirmed to fail against the pre-fix code. The fix reuses `neutralize_envelope_tags` rather than adding a second guard, which required giving it a `tag` parameter.
+- Hardening the neutralizer for attributed tags initially broke `<transcript>` handling: `[^<>]*` after the name matched the trailing `s` in `<transcripts>`, which the old pattern left alone. The name must now be followed by a separator, `/`, or the bracket. Verified identical to the old pattern over ~200k differential inputs.
+- `kind` is interpolated into the same header and its `Literal` is unenforced at runtime, so it goes through the same sanitizer. Unreachable today (only tests construct `DesktopContent`), live the moment a tool forwards a model-supplied value.
+
+### Finding: `load_consent` raised on a non-object consent file  *(status: resolved)*
+- `raw.get(...)` raised `AttributeError` when `.consent.json` held valid JSON that was not an object. `require_consent()` is documented as the gate that runs *first*, so it would throw rather than refuse. Guarded with `isinstance(raw, dict)`, returning the same all-`False` shape as the missing-file and decode-error branches.
+
 ## Failure modes to anticipate
 - Moving `scrub_body` changes the import graph: `tokenpal/util/` importing `tokenpal.brain.personality` could create a cycle if `personality` (or anything it imports) imports from `tokenpal.util`. Check with `python -c "import tokenpal.util.untrusted_text"` and `grep -n "^from tokenpal.util\|^import tokenpal.util" tokenpal/brain/personality.py` before moving; if a cycle appears, import inside the function as `_keyboard_bus.py:33` does for pyobjc.
 - `ALL_CATEGORIES` is the schema of `.consent.json`: adding a key is backward compatible because `load_consent` fills missing keys with `False` (`consent.py:59`). No migration.

@@ -3,14 +3,14 @@
 Tracks GitHub issue #51, first sub-issue of epic #59.
 
 ## Phase map
-**Phase p1 — value type, consent category, sensitive-app refusal**
+**Phase p1 — value type, consent category, sensitive-app refusal** — SHIPPED `660e8c3`
 - Enters when: start here
 - Done signal: `tests/test_desktop/test_content.py` proves the value type cannot leak through `repr`/`str`/`%s` and the consent + refusal helpers return the documented errors (see shard)
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p1.md`
 
-**Phase p2 — unpersisted chat channel and agent/conversation gating**
-- Enters when: p1 committed
+**Phase p2 — unpersisted chat channel and agent/conversation gating** — NEXT
+- Enters when: p1 committed (done, `660e8c3`)
 - Done signal: a marked test action run through `AgentRunner` leaves no fixture text in the trace, and `log_buddy_message(..., persist=False)` reaches the pane but not the persist callback (see shard)
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p2.md`
@@ -28,10 +28,14 @@ Operator answers at approval: config keys deferred to their reading issues; comp
 Verification pass 2026-09-02 — three auditors. Grounding: 99/99 claims checked, 79 ok, 20 wrong, 0 unchecked; all 20 fixed: `orchestrator.py:2554` → `2563-2564`; `agent.py` ranges for `_execute_one`/`run`/`_step`/preview/reasoning/batch loop/caps refreshed to `233-280`/`123-208`/`210-231`/`266`/`230`/`177-200`/`33-39`; `_SENSITIVE_PLACEHOLDER` at `_http.py:25`; `pop()` at `:2580`; `_helpers.py:43`; `base.py:68-70`; idle rules container named as `M1_RULES` incl. `extra_tool_names`; `CloudBackend` also built by `train_voice.py:470`; the Apple and Microsoft URL attributions reduced to what the pages say (probe carries the non-prompting claim; Windows no-grant is an inference verified on the box before ship). Executability: 12 findings, 1 blocking; blocking (bubble copy unapproved) promoted to approval with the literal string drafted in; fixed: `_make_brain` gains `agent_bridge` and the flagged-delivery branch gets a Brain-level test; same-batch network skip moved from Failure modes into Work/Done with test (5); conversation executor now refuses marked tools by name; `LogFn` Protocol carries `markup`, lambda-fallback risk named with `_noop_log` fix; Textual test specified with `run_test`; `_base.consent_error` justification corrected; `has_consent` imported at module level in `content.py`; `cli.py` imports `permissions` inside the function; `sys.executable` moved to the header line; Windows timing unified (master Done before ship, p3 may commit on its test). Coherence: 9 contradictions, all fixed: bubble "instead of" vs "plus" (Non-goals reworded); tool-drop subject (marked vs consent-gated) corrected in master; same-batch "still execute" paragraph replaced; `markup` in Protocol; Windows timing; "n/a" wording replaced with the real row text; `has_consent` binding stated in p1; contract-test narrowing added to master Locked decisions; LAN-transport claim moved from refusal text to the docs section. 0 refuted, 0 uncheckable.
 Re-audit of the persona-bubble delta 2026-09-02 — 8/8 claims ok; fixed: Non-goals still said "fixed sentence" (reworded); `_desktop_done_line` budget attribute pinned to `freeform`; `filter_response` 15-char minimum noted; test (c) made writable by recording `prompt` in `_MockLLM.generate`.
 
-NEXT: p1 — read `plans/desktop-content-contract-p1.md` FIRST. Binding decisions for p1:
-- `scrub_body` moves to `tokenpal/util/untrusted_text.py`; `tokenpal/actions/network/_http.py` keeps importing it so the seven network tools that import `scrub_body` from `_http` do not change.
-- `consent_error` becomes `consent_error(category_label: str)` in `tokenpal/actions/base.py`; the network `_base.consent_error()` delegates with `"web fetches"` so its message is byte-identical.
-- No `[desktop]` config section and no `[paths] allowed_dirs` in this plan (see Locked decisions).
+p1 shipped 2026-09-02 as `660e8c3`, preceded by `b3c383d` which cleared the ruff/mypy baseline to zero per the operator's decision. **Spec check at p1** — 10/10 Work items evidenced · 2 unclaimed hunks (`test_http.py`, `test_tools.py`), both required by the described work and added to Work with the planning miss recorded. Review: external peer unavailable (Codex usage limit until 2026-09-06), so the host-native fan-out ran instead — five angles plus two verifiers, then a separate single review for the baseline commit. No receipt-backed stamp exists for either commit; the fan-out is the record. Findings applied: two prompt-injection holes in `to_prompt_block`, a `load_consent` crash path, a dropped docstring rationale, a stale `_http` docstring, a relocated regression pin, and a de-hardcoded assertion. Operator decisions at review: clean the lint baseline rather than relax the criterion; scrub desktop bodies with the content-term list; make the sensitive-app refusal generic.
+**Sweep after p1** — opened `p2` and `p3`. Neither references `scrub_body`, `consent_error`, or the refusal copy, so nothing was falsified by the rename or the copy change; `p3`'s docs bullet gained the three new contract facts (envelope neutralization, content-term scrub, generic refusal). The `ruff`/`mypy` clean criteria in both shards are now literally achievable and were left as written.
+
+NEXT: p2 — read `plans/desktop-content-contract-p2.md` FIRST. Binding decisions for p2:
+- Marked actions are excluded from the conversation path's tool specs AND refused by name in `_execute_tool_call`; they are reachable only from `/agent` and from slash commands that call the LLM directly.
+- The unpersisted channel is `log_buddy_message(text, persist=False)`; Qt already has `persist` on `_do_log`, Textual gains the same gate.
+- A flagged agent session delivers its answer through that channel plus one persona bubble generated from a content-free prompt, with the fixed fallback "Done. The answer is in the chat log and was not saved."
+- p1 shipped two helpers p2 builds on: `scrub_content_body` (content-term list, for prose) alongside `scrub_body` (app-name list, for the network tools), and `neutralize_envelope_tags(text, tag)`.
 
 ## Goal
 Before any tool reads text from another desktop app (selection, document, OCR), land the consent category, a read-only permission preflight in `tokenpal --validate`, and a code-level privacy contract with tests, so every later content tool in epic #59 inherits "prompt-only, never persisted, never logged, refused in sensitive apps" instead of re-deriving it.
