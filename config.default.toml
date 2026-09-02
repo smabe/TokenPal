@@ -166,8 +166,13 @@ timeout_s = 120             # seconds of silence before session expires; also ho
 # Plan recommends qwen2.5:32b on 40GB+ VRAM; DO NOT use deepseek-r1 for execution.
 # model = "qwen2.5:32b"
 max_steps = 8
-per_step_timeout_s = 45.0
+per_step_timeout_s = 60.0
 token_budget = 12000
+thinking = false            # model reasoning per step, shown in the agent log and counted toward
+                            # token_budget. Independent of [llm] disable_reasoning.
+thinking_effort = "low"     # sent only when thinking = true; accepted values per engine in docs/claude/llm.md
+max_tokens = 2048           # per-step completion cap; overrides [llm.per_server_max_tokens] for agent
+                            # steps. A step cut off mid-thought finishes the run without thinking.
 
 [research]
 # /research pipeline. Empty planner_model/synth_model/reader_model reuse

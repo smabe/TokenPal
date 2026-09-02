@@ -214,7 +214,7 @@ class ChatHistoryWindow(TranslucentLogWindow):
     ) -> None:
         ts_str = format_chat_ts(ts) if ts is not None else ""
         safe_author = escape(author)
-        safe_text = escape(text)
+        safe_text = escape(text).replace("\n", "<br>")
         if url is not None:
             safe_text = (
                 f'{safe_text} <a href="{escape(url, quote=True)}">'

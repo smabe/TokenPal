@@ -10,6 +10,7 @@ import pytest
 from tests._helpers import ScriptedLLM
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner, AgentSession
+from tokenpal.config.schema import AgentConfig
 from tokenpal.llm.base import LLMResponse, ToolCall
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ def _runner(
     token_budget: int = 12000,
     per_step_timeout_s: float = 5.0,
     logs: list[str] | None = None,
+    thinking: bool = False,
 ) -> AgentRunner:
     return AgentRunner(
         llm=llm,
@@ -102,6 +104,7 @@ def _runner(
         max_steps=max_steps,
         token_budget=token_budget,
         per_step_timeout_s=per_step_timeout_s,
+        thinking=thinking,
     )
 
 
@@ -396,7 +399,7 @@ async def test_tool_timeout_does_not_crash_loop() -> None:
 async def test_llm_step_timeout_stops_run() -> None:
     class _HangLLM(ScriptedLLM):
         async def generate_with_tools(
-            self, messages, tools, max_tokens=256
+            self, messages, tools, max_tokens=None, **kwargs
         ):
             await asyncio.sleep(5)
             raise AssertionError("should have timed out")
@@ -532,3 +535,117 @@ async def test_noncacheable_tool_never_hits_cache() -> None:
     session = await _runner(llm, actions={"live": _Live({})}).run("g")
     assert [s.cached for s in session.steps] == [False, False]
     assert _Counting.calls == 2
+
+
+# ---------------------------------------------------------------------------
+# Thinking controls + truncation retry
+# ---------------------------------------------------------------------------
+
+
+def test_agent_config_defaults() -> None:
+    cfg = AgentConfig()
+    assert cfg.thinking is False
+    assert cfg.thinking_effort == "low"
+    assert cfg.per_step_timeout_s == 60.0
+    assert cfg.max_tokens == 2048
+
+
+@pytest.mark.asyncio
+async def test_default_runner_sends_thinking_off_and_max_tokens() -> None:
+    llm = ScriptedLLM([
+        LLMResponse(text="done", tokens_used=5, model_name="t", latency_ms=0),
+    ])
+    await _runner(llm).run("go")
+
+    assert llm.call_kwargs == [
+        {"max_tokens": 2048, "enable_thinking": False, "thinking_effort": "low"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_thinking_runner_sends_effort_and_logs_reasoning() -> None:
+    reasoning = "First paragraph of thought.\n\nSecond paragraph, " + "x" * 600
+    logs: list[str] = []
+    llm = ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=50,
+            model_name="t",
+            latency_ms=0,
+            tool_calls=[_call("echo", {"text": "hi"}, "c1")],
+            reasoning=reasoning,
+        ),
+        LLMResponse(text="done", tokens_used=5, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, logs=logs, thinking=True).run("go")
+
+    assert session.stopped_reason == "complete"
+    assert llm.call_kwargs[0] == {
+        "max_tokens": 2048, "enable_thinking": True, "thinking_effort": "low",
+    }
+    assert logs[0] == f"\u2026 {reasoning}"
+    assert logs[1].startswith("\u2192 echo(")
+
+
+@pytest.mark.asyncio
+async def test_thinking_truncation_falls_back_to_no_thinking_for_the_run() -> None:
+    logs: list[str] = []
+    llm = ScriptedLLM([
+        LLMResponse(
+            text="",
+            tokens_used=2048,
+            model_name="t",
+            latency_ms=0,
+            finish_reason="length",
+            reasoning="still thinking...",
+        ),
+        LLMResponse(
+            text="", tokens_used=30, model_name="t", latency_ms=0,
+            tool_calls=[_call("echo", {"text": "hi"}, "c1")],
+        ),
+        LLMResponse(
+            text="answer", tokens_used=5, model_name="t", latency_ms=0,
+            finish_reason="stop",
+        ),
+    ])
+    session = await _runner(llm, logs=logs, thinking=True).run("go")
+
+    assert [k["enable_thinking"] for k in llm.call_kwargs] == [True, False, False]
+    assert session.stopped_reason == "complete"
+    assert session.final_text == "answer"
+    assert session.tokens_used == 2083
+    assert logs[:2] == [
+        "\u2026 still thinking...",
+        "(step truncated while thinking; continuing without thinking)",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_truncated_answer_is_kept_not_retried() -> None:
+    llm = ScriptedLLM([
+        LLMResponse(
+            text="a long answer that got cut", tokens_used=2048, model_name="t",
+            latency_ms=0, finish_reason="length", reasoning="done thinking",
+        ),
+        LLMResponse(text="never", tokens_used=1, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, thinking=True).run("go")
+
+    assert len(llm.call_kwargs) == 1
+    assert session.final_text == "a long answer that got cut"
+
+
+@pytest.mark.asyncio
+async def test_truncation_without_thinking_does_not_retry() -> None:
+    llm = ScriptedLLM([
+        LLMResponse(
+            text="cut off", tokens_used=2048, model_name="t", latency_ms=0,
+            finish_reason="length",
+        ),
+        LLMResponse(text="never", tokens_used=1, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm).run("go")
+
+    assert len(llm.call_kwargs) == 1
+    assert session.final_text == "cut off"
+    assert session.stopped_reason == "complete"

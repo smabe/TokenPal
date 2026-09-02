@@ -23,9 +23,12 @@ from typing import Any
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.stop_reason import AgentStopReason
-from tokenpal.llm.base import AbstractLLMBackend, ToolCall
+from tokenpal.config.schema import AgentConfig
+from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 
 log = logging.getLogger(__name__)
+
+_DEFAULTS = AgentConfig()
 
 # Cap for each tool result *as fed back to the LLM*. Without this, a single
 # verbose tool (system_info, list_processes) blows the prompt-context window
@@ -88,9 +91,12 @@ class AgentRunner:
         is_sensitive: SensitiveFn,
         status_callback: Callable[[str], None] | None = None,
         tool_specs: list[dict[str, Any]] | None = None,
-        max_steps: int = 8,
-        token_budget: int = 12000,
-        per_step_timeout_s: float = 45.0,
+        max_steps: int = _DEFAULTS.max_steps,
+        token_budget: int = _DEFAULTS.token_budget,
+        per_step_timeout_s: float = _DEFAULTS.per_step_timeout_s,
+        thinking: bool = _DEFAULTS.thinking,
+        thinking_effort: str = _DEFAULTS.thinking_effort,
+        max_tokens: int = _DEFAULTS.max_tokens,
         system_prompt: str | None = None,
         invoker: ToolInvoker | None = None,
     ) -> None:
@@ -108,6 +114,9 @@ class AgentRunner:
         self._max_steps = max_steps
         self._token_budget = token_budget
         self._per_step_timeout_s = per_step_timeout_s
+        self._thinking = thinking
+        self._thinking_effort = thinking_effort
+        self._max_tokens = max_tokens
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self._invoker = invoker or ToolInvoker()
 
@@ -118,6 +127,7 @@ class AgentRunner:
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": goal},
         ]
+        thinking = self._thinking
 
         for step in range(self._max_steps):
             if self._is_sensitive():
@@ -138,18 +148,20 @@ class AgentRunner:
                 return session
 
             try:
-                response = await asyncio.wait_for(
-                    self._llm.generate_with_tools(
-                        messages=messages, tools=self._tool_specs
-                    ),
-                    timeout=self._per_step_timeout_s,
-                )
+                response = await self._step(session, messages, thinking=thinking)
+                if (
+                    thinking
+                    and response.finish_reason == "length"
+                    and not response.tool_calls
+                    and not response.text.strip()
+                ):
+                    thinking = False
+                    self._log("(step truncated while thinking; continuing without thinking)")
+                    response = await self._step(session, messages, thinking=False)
             except TimeoutError:
                 session.stopped_reason = AgentStopReason.TIMEOUT
                 log.warning("Agent step %d timed out", step)
                 return session
-
-            session.tokens_used += response.tokens_used
 
             if not response.tool_calls:
                 session.final_text = response.text
@@ -190,6 +202,24 @@ class AgentRunner:
         log.info("Agent hit step cap (%d)", self._max_steps)
         session.final_text = await self._force_synthesis(messages)
         return session
+
+    async def _step(
+        self, session: AgentSession, messages: list[dict[str, Any]], *, thinking: bool,
+    ) -> LLMResponse:
+        response = await asyncio.wait_for(
+            self._llm.generate_with_tools(
+                messages=messages,
+                tools=self._tool_specs,
+                max_tokens=self._max_tokens,
+                enable_thinking=thinking,
+                thinking_effort=self._thinking_effort,
+            ),
+            timeout=self._per_step_timeout_s,
+        )
+        session.tokens_used += response.tokens_used
+        if response.reasoning:
+            self._log(f"\u2026 {response.reasoning}")
+        return response
 
     async def _execute_one(self, tc: ToolCall) -> AgentStep:
         action = self._actions.get(tc.name)

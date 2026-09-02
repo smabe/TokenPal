@@ -45,3 +45,12 @@ See the master `plans/agent-thinking.md`. The decisions binding this phase:
 ## Done criteria
 - `tests/test_server/test_llm_backend.py` passes with the new cases; `pytest` green; ruff and mypy clean.
 - A live probe against `http://localhost:8000/v1` (MTPLX, running on this Mac; check with `pgrep -fl mtplx`) through `HttpBackend.generate_with_tools(..., enable_thinking=True, thinking_effort="low", max_tokens=2048)` returns a non-empty `reasoning` and a content-only `text`. Run it as a scratchpad script and paste the token count and latency into this shard's findings.
+
+### Findings from execution (shipped 521bdc0)
+- Live MTPLX probe: `generate_with_tools(..., max_tokens=2048, enable_thinking=True, thinking_effort="low")` returned 664 total tokens in 5.3 s, `finish_reason="stop"`, reasoning 135 chars, content one clean sentence, no `<think>` leakage. Effort "low" reached the server and was honored.
+- Ollama's OpenAI layer returns thinking under `reasoning`, not `reasoning_content` (`openai/openai.go`: `Reasoning string \`json:"reasoning,omitempty"\``, assigned from `Message.Thinking`). The backend reads both; empty string collapses to `None`.
+- llama-server master `tools/server/server-common.cpp`: `reasoning_effort` "none" sets `enable_thinking=false`; any other value is forwarded as a chat-template kwarg; only `best_of` and `suffix` are rejected. So "accepts and ignores" holds for Qwen3 templates.
+- Ollama's OpenAI layer validates `reasoning_effort` (low/medium/high/max, `none` disables; the exact accepted set varies by version) and 400s on an unknown string. p2's default "low" is valid everywhere.
+- `HttpBackend.generate` was a strict subset of `generate_with_tools` and now delegates to it with `tools=[]`; the only behavioral delta is that a server emitting `tool_calls` on a tools-less request now surfaces them, which no `generate` caller reads.
+- Pre-existing gate noise on this tree: `ruff check tokenpal/` has 10 N802 errors in `tokenpal/ui/quick/`, `mypy tokenpal/` has 38 errors in 10 files, none in `tokenpal/llm/`. Both identical on HEAD before this phase.
+- Review surfaced three findings in `tokenpal/tools/train_voice.py` (duplicate thinking-controls dispatch, `IndexError` on empty `choices`, three config reloads per call); parked in the master for a follow-up issue at ship.

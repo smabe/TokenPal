@@ -58,14 +58,15 @@ class ScriptedLLM(AbstractLLMBackend):
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
-        max_tokens: int = 256,
-        **_: Any,
+        max_tokens: int | None = None,
+        **kwargs: Any,
     ) -> LLMResponse:
         if self._forbid_tools:
             raise AssertionError(
                 "this path must not use generate_with_tools",
             )
         self.calls.append((list(messages), list(tools)))
+        self.call_kwargs.append({"max_tokens": max_tokens, **kwargs})
         if not self._responses:
             return LLMResponse(text="", tokens_used=0, model_name="t", latency_ms=0)
         return self._responses.pop(0)

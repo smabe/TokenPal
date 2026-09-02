@@ -210,7 +210,7 @@ Run a multi-step tool-calling loop toward a natural-language goal.
    - Model returns text with no tool calls → `COMPLETE`
    - Step cap hit (default 8) → `STEP_CAP` with forced final synthesis
    - Token budget hit (default 12k) → `TOKEN_BUDGET` with forced synthesis
-   - Per-step timeout (default 45s) → `TIMEOUT`
+   - Per-step timeout (default 60s) → `TIMEOUT`
    - Sensitive-app detected mid-run → `SENSITIVE`, abort
    - User denies a `requires_confirm` tool → `DENIED`, forced synthesis
    - Exception inside a tool → logged as an error step, loop continues
@@ -231,16 +231,22 @@ The cache lives on the `AgentRunner` and is reset at the start of each `run()`. 
 [agent]
 model = ""                      # empty = fall back to [llm] model_name
 max_steps = 8
-per_step_timeout_s = 45.0
+per_step_timeout_s = 60.0
 token_budget = 12000            # soft cap (Ollama sometimes reports 0)
+thinking = false                # per-step model reasoning, shown in the agent log as a "…" line
+thinking_effort = "low"         # sent only when thinking = true (MTPLX: auto/low/medium/high/xhigh)
+max_tokens = 2048               # per-step completion cap; a thinking step cut off mid-thought finishes the run without thinking
 ```
+
+Reasoning tokens count toward `token_budget`, so with `thinking = true` the soft cap trips sooner (at ~600 tokens per step, around 20 steps, still above `max_steps`).
 
 ### Notes on model choice
 
 - ✅ `qwen2.5:32b` — BFCL ≈ GPT-4o-mini for tool calling, the sweet spot
 - ✅ `llama3.3:70b` — most robust if you have the VRAM
 - ⚠️ `gemma4:26b` — OK at <20 tools, degrades past that
-- ❌ `deepseek-r1:32b` — **do not use for the agent loop.** R1 wraps tool calls inside `<think>` tags and frequently emits JSON inside reasoning instead of the `tool_calls` field. Same failure as Qwen3.
+- ❌ `deepseek-r1:32b` — **do not use for the agent loop.** R1 wraps tool calls inside `<think>` tags and frequently emits JSON inside reasoning instead of the `tool_calls` field.
+- ✅ Qwen3.8 on MTPLX returns a well-formed `tool_calls` array with thinking on (measured 2026-09-02: 6.3 s / 118 tokens for a two-tool request), so `[agent] thinking = true` is safe there.
 
 ---
 
@@ -276,7 +282,7 @@ Bypass by editing the question (adds a word, punctuation, whatever) — keys are
 ```toml
 [research]
 planner_model = ""              # empty = reuse [llm] model_name
-synth_model = ""                # both can use deepseek-r1:32b — no tool calls, no <think>-tag problem
+synth_model = ""                # both can use deepseek-r1:32b (no tool calls)
 reader_model = ""               # reader stays on qwen2.5:32b or similar (no reasoning benefit)
 max_queries = 3
 max_fetches = 8
@@ -412,7 +418,7 @@ Backends are `tokenpal/senses/web_search/client.py` — `BackendName` Literal + 
 |---|---|---|---|
 | single tool call | `gemma4` / `qwen3:8b` | `qwen3:14b` | simple routing, ≤8 tools |
 | inline research (conversation) | `qwen3:8b` | `qwen3:14b` | tool routing + synthesis on the same model |
-| agent loop | `gemma4:26b` | `qwen2.5:32b` | multi-step planning degrades below 26B |
+| agent loop | `gemma4:26b` | `qwen2.5:32b` | multi-step planning degrades below 26B; `[agent] thinking = true` measured on Qwen3.8/MTPLX; off by default |
 | research planner/synth | `qwen2.5:32b` / `qwen3:14b` | `deepseek-r1:32b` | reasoning helps decomposition + citation fidelity |
 | research reader | no LLM needed | — | reader is pure HTTP fetch + trafilatura |
 

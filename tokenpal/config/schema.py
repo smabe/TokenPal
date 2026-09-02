@@ -311,10 +311,14 @@ class AgentConfig:
     # `qwen2.5:32b` for tool-call reliability on a 40GB-class GPU.
     model: str = ""
     max_steps: int = 8
-    per_step_timeout_s: float = 45.0
+    per_step_timeout_s: float = 60.0
     # Soft cap — Ollama sometimes returns usage.total_tokens = 0, so the loop
     # warns and keeps going up to max_steps when the cap trips on bad data.
     token_budget: int = 12000
+    thinking: bool = False
+    # Engine-specific; accepted values per engine in docs/claude/llm.md.
+    thinking_effort: str = "low"
+    max_tokens: int = 2048
 
 
 @dataclass

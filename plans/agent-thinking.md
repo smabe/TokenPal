@@ -17,9 +17,12 @@
 **Approval: APPROVED 2026-09-02**
 **Authored at: 6e76b9b**
 Verification pass 2026-09-02 — grounding 61/64 claims resolve (3 line drifts fixed: `to_assistant_message` cite `agent.py:156`→`:159`, table row `agents-and-tools.md:416`→`:415`, `insertHtml`→`QTextBrowser.append`; 5 live-server claims re-stated with the probe that backs them) · executability 24/31 → 8 fixed (`tests/_helpers.py` edit stated outright and listed; runner defaults now mirror `AgentConfig` so tests (1)-(2) hold; deepseek-r1 line kept and table note fixed, no worker forks; `try` widened over both `_step` calls; `startswith("… ")` assertion; `screencapture` and the driver recipe named; `_force_synthesis` reworded to "unchanged") · coherence 8 found → 7 fixed (Ollama rationale, Files touched, comparison-table location and columns, retry gated on thinking in the scope contract, effort value set, Ollama exclusion wording) · 1 promoted (reasoning-line persistence, below) · 0 refuted · 0 uncheckable.
-NEXT: p1. Read `plans/agent-thinking-p1.md` FIRST. Binding decisions for p1:
-- `thinking_effort` is a new keyword-only parameter on both `generate` and `generate_with_tools`, threaded to `_apply_thinking_controls`; the ABC's default `generate_with_tools` forwards to `generate` by name, so both must accept it.
-- `LLMResponse.reasoning: str | None = None` is filled from `message["reasoning_content"]` in both HTTP paths; `text` stays content-only.
+p1 SHIPPED 521bdc0. NEXT: p2. Read `plans/agent-thinking-p2.md` FIRST. Binding decisions for p2:
+- `[agent] thinking` defaults false; `thinking_effort` "low"; `max_tokens` 2048 passed explicitly on every step; `per_step_timeout_s` 60. Runner constructor defaults mirror the dataclass.
+- A thinking step that returns `finish_reason == "length"` with no tool calls and no content is re-run with thinking off, and thinking stays off for the rest of that run (review-driven change from the drafted single retry; see p2 Decisions).
+- Reasoning is logged whole with a `…` prefix through the ordinary log path; the Qt log turns `\n` into `<br>` for every line.
+**Spec check at p1** — 6/6 Work items evidenced · none unclaimed.
+Sweep after p1: opened `plans/agent-thinking-p2.md`; p1 gave `_apply_thinking_controls` a `None` default and made `reasoning` dual-key, neither of which p2's text depends on. p2 clean.
 
 Operator sign-off 2026-09-02: reasoning lines persist to the memory.db chat log like every other agent log line ("persist is fine for now"). The Qt `<br>` transform applies to every agent log line, not only reasoning ("as drafted is fine").
 
@@ -71,6 +74,8 @@ Let `/agent` run with model reasoning enabled when `[agent] thinking = true` (de
 - Comparison table in p2's Decisions & findings: three goals, thinking off vs on, columns steps / wall time / tokens / correct answer, measured against the live MTPLX server.
 
 ## Parking lot
+- `AgentRunner._force_synthesis` still calls `generate_with_tools` bare (no `max_tokens`, no `enable_thinking`), so the end-of-run synthesis ignores `[agent] max_tokens` and follows `[llm] disable_reasoning`; on this Mac that means a 150-token cap. Three p2 reviewers flagged it; kept out by the locked decision that the fallback is unchanged. Worth routing through `_step(tools=[])` as a follow-up.
+- Reasoning lines are persisted whole to memory.db and the file log while tool results are capped at 240 chars before logging (`agent.py _truncate`). Operator signed off on untruncated display and persistence; a size cap on the persisted copy only is the open question if memory.db growth becomes visible.
 - `tokenpal/tools/train_voice.py:68-85 _thinking_controls` re-derives the per-engine thinking body shape with thinking hardcoded off (a second copy of `HttpBackend._apply_thinking_controls`). Surfaced by the p1 simplify pass. Useful to unify; not required because the trainer builds raw request bodies and never needs effort or reasoning.
 - `tests/test_brain/test_eod_summary.py:15-40 FakeLLM` and `tests/test_brain/test_session_summarizer.py:25-60 FakeLLM` enumerate every `generate` keyword and had to be touched for the new one; `tests/_helpers.py ScriptedLLM` absorbs kwargs. Their `raise_next` and prompt-capture semantics differ, so replacing them is a small test refactor, not a rename. Surfaced by the p1 simplify pass.
 - `AgentBridge.log_callback` (`orchestrator.py:221`) and `LogFn` (`agent.py:41`) are typed `Callable[[str], None]` while the real callback accepts `markup=` and `url=` (`app.py:232`). Harmless today; tighten when a caller needs markup from the runner.

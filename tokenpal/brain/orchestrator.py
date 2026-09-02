@@ -1848,6 +1848,9 @@ class Brain:
             max_steps=self._agent.config.max_steps,
             token_budget=self._agent.config.token_budget,
             per_step_timeout_s=self._agent.config.per_step_timeout_s,
+            thinking=self._agent.config.thinking,
+            thinking_effort=self._agent.config.thinking_effort,
+            max_tokens=self._agent.config.max_tokens,
             invoker=self._build_invoker(),
         )
 
