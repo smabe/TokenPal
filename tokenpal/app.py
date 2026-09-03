@@ -17,6 +17,7 @@ from typing import Any
 
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.registry import discover_actions, resolve_actions
+from tokenpal.brain.agent import LogFn
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import AgentBridge, Brain, ResearchBridge
 from tokenpal.brain.personality import PersonalityEngine
@@ -69,6 +70,33 @@ from tokenpal.ui.registry import discover_overlays, resolve_overlay
 from tokenpal.util.logging import setup_logging
 
 log = logging.getLogger(__name__)
+
+
+def make_agent_log(overlay: AbstractOverlay) -> LogFn:
+    """Agent trace sink. The ``persist=False`` branch is the last hop that keeps
+    desktop content out of the chat log and the log file, so it is built here
+    rather than inline: a closure inside the wiring function cannot be tested.
+    """
+    def _agent_log(
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
+    ) -> None:
+        if not persist:
+            log.info("ui: [unpersisted, %d chars]", len(text))
+        elif url is not None:
+            log.info("ui: %s (url=%s)", text, url)
+        else:
+            log.info("ui: %s", text)
+
+        def _emit() -> None:
+            overlay.log_buddy_message(text, markup=markup, url=url, persist=persist)
+
+        overlay.schedule_callback(_emit)
+
+    return _agent_log
 
 
 def _apply_font_change(
@@ -223,18 +251,7 @@ def main() -> None:
 
         overlay.set_ui_state_persist_callback(_persist_ui_state)
 
-    def _agent_log(
-        text: str, *, markup: bool = False, url: str | None = None,
-    ) -> None:
-        if url is not None:
-            log.info("ui: %s (url=%s)", text, url)
-        else:
-            log.info("ui: %s", text)
-
-        def _emit() -> None:
-            overlay.log_buddy_message(text, markup=markup, url=url)
-
-        overlay.schedule_callback(_emit)
+    _agent_log = make_agent_log(overlay)
 
     async def _agent_confirm(tool_name: str, args: dict[str, Any]) -> bool:
         from tokenpal.brain.agent import fmt_args

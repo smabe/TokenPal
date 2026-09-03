@@ -661,11 +661,16 @@ class QtOverlay(AbstractOverlay):
         self._post(lambda: self._do_update_status(text))
 
     def log_buddy_message(
-        self, text: str, *, markup: bool = False, url: str | None = None,
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
     ) -> None:
         ts = time.time()
         speaker = self._voice_name or self._buddy_name
-        self._post(lambda: self._do_log(ts, speaker, text, url, persist=True))
+        self._post(lambda: self._do_log(ts, speaker, text, url, persist=persist))
 
     def log_user_message(self, text: str) -> None:
         ts = time.time()

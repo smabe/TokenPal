@@ -88,10 +88,18 @@ class UpdateStatus(Message):
 
 
 class LogBuddyMessage(Message):
-    def __init__(self, text: str, *, markup: bool = False, url: str | None = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
+    ) -> None:
         self.text = text
         self.markup = markup
         self.url = url
+        self.persist = persist
         super().__init__()
 
 
@@ -1369,7 +1377,13 @@ class TokenPalApp(App[None]):
         self._link_urls = new_urls
 
     def _append_log(
-        self, name: str, text: str, *, markup: bool = False, url: str | None = None,
+        self,
+        name: str,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
     ) -> None:
         today = datetime.now().strftime("%Y%m%d")
         ts_label = self._format_chat_ts(datetime.now().timestamp(), today)
@@ -1381,7 +1395,7 @@ class TokenPalApp(App[None]):
         self._chat_log_widget.update("\n".join(self._chat_log_lines))
         self._chat_log_scroll.scroll_end(animate=False)
         cb = self._overlay._chat_persist_callback
-        if cb is not None:
+        if persist and cb is not None:
             try:
                 cb(name, text, url)
             except Exception as exc:
@@ -1395,9 +1409,16 @@ class TokenPalApp(App[None]):
     def _log_user(self, text: str) -> None:
         self._append_log("You", text)
 
-    def _log_buddy(self, text: str, *, markup: bool = False, url: str | None = None) -> None:
+    def _log_buddy(
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
+    ) -> None:
         name = (self._overlay._voice_name or self._overlay._buddy_name).capitalize()
-        self._append_log(name, text, markup=markup, url=url)
+        self._append_log(name, text, markup=markup, url=url, persist=persist)
 
     # --- Message handlers (all run on app thread) ---
 
@@ -1476,7 +1497,12 @@ class TokenPalApp(App[None]):
         self.query_one(StatusBarWidget).set_text(message.text)
 
     def on_log_buddy_message(self, message: LogBuddyMessage) -> None:
-        self._log_buddy(message.text, markup=message.markup, url=message.url)
+        self._log_buddy(
+            message.text,
+            markup=message.markup,
+            url=message.url,
+            persist=message.persist,
+        )
 
     def on_log_user_message(self, message: LogUserMessage) -> None:
         self._log_user(message.text)
@@ -1704,9 +1730,14 @@ class TextualOverlay(AbstractOverlay):
         self._post(SetMood(mood))
 
     def log_buddy_message(
-        self, text: str, *, markup: bool = False, url: str | None = None,
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
     ) -> None:
-        self._post(LogBuddyMessage(text, markup=markup, url=url))
+        self._post(LogBuddyMessage(text, markup=markup, url=url, persist=persist))
 
     def log_user_message(self, text: str) -> None:
         self._post(LogUserMessage(text))

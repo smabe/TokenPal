@@ -66,9 +66,18 @@ class AbstractOverlay(abc.ABC):
         """Append a user message to the chat log. Optional."""
 
     def log_buddy_message(
-        self, text: str, *, markup: bool = False, url: str | None = None,
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
     ) -> None:
-        """Append a buddy message to the chat log. Optional."""
+        """Append a buddy message to the chat log. Optional.
+
+        ``persist=False`` shows the line in the pane but keeps it out of the
+        persisted chat log.
+        """
 
     def clear_log(self) -> None:
         """Clear the chat log. Optional."""

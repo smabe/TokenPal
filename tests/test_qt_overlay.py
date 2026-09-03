@@ -108,6 +108,33 @@ def test_qt_overlay_full_adapter_surface(qapp: QApplication) -> None:
         _pump(qapp, ms=20)
 
 
+def test_unpersisted_buddy_message_skips_persist_callback(
+    qapp: QApplication,
+) -> None:
+    """persist=False still renders in the history pane but must not reach
+    the chat-log persister."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        persisted: list[str] = []
+        overlay.set_chat_persist_callback(
+            persist=lambda _s, text, _u: persisted.append(text),
+            clear=lambda: None,
+        )
+        overlay.log_buddy_message("kept out", persist=False)
+        overlay.log_buddy_message("kept in")
+        _pump(qapp, ms=30)
+
+        assert overlay._history is not None
+        pane = overlay._history._log.toPlainText()
+        assert "kept out" in pane
+        assert "kept in" in pane
+        assert persisted == ["kept in"]
+    finally:
+        overlay.teardown()
+        _pump(qapp, ms=20)
+
+
 def test_qt_overlay_buffers_calls_before_setup(qapp: QApplication) -> None:
     """Brain may call adapter methods before setup() runs. The overlay
     stashes state into _pending_* buffers and drains on mount."""
