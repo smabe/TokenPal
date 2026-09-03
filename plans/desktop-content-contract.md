@@ -15,7 +15,7 @@ Tracks GitHub issue #51, first sub-issue of epic #59.
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p2.md`
 
-**Phase p3 — `--validate` permission rows, registry invariants test, docs** — NEXT
+**Phase p3 — `--validate` permission rows, registry invariants test, docs** — SHIPPED `7a21a7a`
 - Enters when: p2 committed (done, `711845e`)
 - Done signal: `tokenpal --validate` on the Mac prints Accessibility and Screen Recording rows without triggering a system prompt, and the registry-invariants test passes with zero marked tools (see shard)
 - If it fails: no gate — fix-forward
@@ -34,11 +34,17 @@ p1 shipped 2026-09-02 as `660e8c3`, preceded by `b3c383d` which cleared the ruff
 p2 shipped 2026-09-02 as `3a6f1e4` (UI persist channel) + `711845e` (enforcement), split per the shard's over-cap rule. **Spec check at p2** — 13/13 Work items evidenced · no unclaimed hunks. Review: peer still unavailable (Codex limit until 2026-09-06), so host-native again — five angles, then two verification rounds over the repaired diff, 26 mutations tested. Findings applied: two real leaks into `chat_log` + logs, four broken invariants, three vacuous tests. Root cause of both leaks was one design choice the shard specified: keying redaction on the action rather than the session. Files added to Work during the phase: `tokenpal/brain/research.py` and `tokenpal/actions/research/research_action.py` (deduplicating `LogFn` surfaced three call sites that never satisfied it) — planning miss, recorded.
 **Sweep after p2** — opened `p3`; it gained four carried-in items (registry/catalog parity, the second spec builder in `idle_tools_m3`, `make_agent_log` coverage now closed, console/tkinter having no chat log). `p1` is shipped and was not reopened. Nothing p2 renamed appears in `p3`'s Work.
 
-NEXT: p3 — read `plans/desktop-content-contract-p3.md` FIRST. Binding decisions for p3:
-- `--validate` reports a missing Screen Recording grant as a warning, not a problem; no shipped tool needs it until #55.
-- The contract test pins static invariants plus consent-first ordering only; refusal and no-leak over a real OS read are each tool's own tests.
-- The Windows no-grants-needed row is an inference, verified on the Windows box before `/plan ship`; p3 may commit on the strength of its test with that row marked pending.
-- p2 left four items in p3's `## Carried in from the p2 review` — read them before writing the invariants test.
+p3 shipped 2026-09-03 as `7a21a7a`. **Spec check at p3** — 6/6 Work items evidenced · 2 unclaimed files (`tokenpal/desktop/content.py`, `tokenpal/brain/personality.py`), both docstring corrections the new docs page depends on; added to Work with the planning miss recorded. Review: peer still unavailable (Codex limit to 2026-09-06), host-native again — one correctness/docs-truth angle plus one adversarial angle that constructed violating tools, then one verification round over the repairs.
+
+**Observable met (macOS).** `tokenpal --validate` on this Mac, no system dialog appeared:
+```
+  desktop tools (permissions checked for /Users/smabe/projects/windoze/.venv/bin/python3)
+  ✓ Accessibility: granted
+  ✓ Screen Recording: granted
+```
+**Observable PENDING (Windows).** `.\run.ps1 --validate` on the AMD desktop must print `no OS permission grants needed`. p3 committed on the strength of `tests/test_desktop/test_validate.py`, which covers the branch; the row is verified on the box before `/plan ship`, per the author-on-target-host rule. **This is the only outstanding Done criterion in the plan.**
+
+All three phases shipped: p1 `660e8c3`, p2 `3a6f1e4` + `711845e`, p3 `7a21a7a`; plus `b3c383d` clearing the ruff/mypy baseline to zero at the operator's direction.
 
 ## Goal
 Before any tool reads text from another desktop app (selection, document, OCR), land the consent category, a read-only permission preflight in `tokenpal --validate`, and a code-level privacy contract with tests, so every later content tool in epic #59 inherits "prompt-only, never persisted, never logged, refused in sensitive apps" instead of re-deriving it.
@@ -89,6 +95,8 @@ Before any tool reads text from another desktop app (selection, document, OCR), 
 - `tests/test_brain/test_tool_loop.py` — p2 — `_make_brain` gains `agent_bridge`; conversation excludes and refuses marked action; flagged agent run delivers unpersisted
 - `tests/test_desktop/test_validate.py` — p3 — new
 - `tests/test_desktop/test_privacy_contract.py` — p3 — new: registry invariants
+- `tokenpal/desktop/content.py` — p3 — two docstrings corrected (module + `refuse_if_sensitive`)
+- `tokenpal/brain/personality.py` — p3 — `contains_sensitive_content_term` docstring direction corrected
 - `docs/claude/actions.md` — p3 — "Desktop content tools" section
 - `CLAUDE.md` — p3 — Privacy bullet for the desktop-content tier
 
@@ -126,6 +134,11 @@ Research 2026-09-02 at 1de1d43. Sinks a user turn or tool result reaches today, 
 - `pytest`, `ruff check tokenpal/`, `mypy tokenpal/ --ignore-missing-imports` green at the end of each phase. Operator decision 2026-09-02: the pre-existing baseline (10 ruff `N802`, 38 mypy) is cleaned in its own commit ahead of p1 rather than the criterion being relaxed, so "green" means zero from p1 onward.
 
 ## Parking lot
+- **`discover_actions` swallows `ImportError`, so the contract test fails open per host** (`tokenpal/actions/registry.py:33-34`). A marked tool whose module imports `AppKit`/`Quartz` at module scope is silently unregistered on Linux/Windows CI — `_MARKED` is empty and all parametrized cases report "skipped (empty parameter set)", visually identical to a healthy run. #52's selection reader will have exactly that import shape. Fix belongs with #52: either assert `_MARKED` is non-empty once the first tool ships, or have the registry record import failures and assert none.
+- **`action_name` collisions are silent** (`tokenpal/actions/registry.py:20`, a plain dict assignment). Two modules registering the same name — a plausible `darwin_impl`/`windows_impl` split, matching the sense convention — means only the last-imported one is ever contract-tested. Cheap fix: raise on duplicate registration.
+- **`--validate`'s desktop header names `sys.executable`, but macOS TCC attributes grants to the responsible parent process.** The audio block in the same file names `TERM_PROGRAM` for that reason. Both grants read `True` here for a bare `python -c`, consistent with inheritance from the terminal rather than a grant on `python3`. A user who reads "granted for .../python3" and later launches from a different terminal can get a different answer. Operator decision before #52 ships; the row was specified verbatim by the p3 shard so it was not changed unilaterally.
+- **`permissions.py` reports `unknown (pyobjc unavailable)` when the bindings are present but the call raises.** Both functions collapse `ImportError` and `Exception` into `None`, and `cli.py` renders one message. A user on a macOS release where `CGPreflightScreenCaptureAccess` throws is told to install something already installed.
+- **`_imported_modules` fails open** on an unimportable submodule, a module with no `__file__`, or a C extension — the module is treated as importing nothing. Bounded by the fact that everything under `tokenpal/actions/` is plain in-tree Python today.
 - **Three untrusted-text envelopes.** `wrap_result` (`tokenpal/actions/network/_http.py:130-132`), `/ask`'s `<search_result>` (`tokenpal/app.py:993-1020`), `fetch_url` (`tokenpal/actions/research/fetch_url.py:75`). Useful to unify; not required because `DesktopContent.to_prompt_block` reuses `scrub_body` and needs its own tag.
 - **CLAUDE.md `/ask` claims are stale.** "shows an explicit first-use consent warning" has no code behind it (`tokenpal/app.py:956-959`), and "queries never persisted to disk" is false when `[chat_log] persist` is on: `/ask` logs 500 chars of the result with `persist=True` and injects `[User ran /ask: query]` as a user turn (`tokenpal/app.py:1005-1023`), which then reaches `conversation_summaries`. Fix belongs with an `/ask` change, not here.
 - **`http_backend.py:448` logs raw tool-call arguments at WARNING on JSON failure.** Once a content tool exists, an argument could carry content. Confirmed at the p2 review: this sits *below* the agent layer, so no session flag can reach it, and it bypasses the 80-char `fmt_args` cap that bounds the trace. Long unescaped strings are exactly when a local model's tool-call JSON malforms, so the trigger and the payload correlate. Pre-existing and unreachable until a marked tool ships; revisit in #52.
