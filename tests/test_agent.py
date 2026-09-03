@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 import pytest
 
-from tests._helpers import ScriptedLLM
+from tests._helpers import ScriptedLLM, assert_no_leak
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner, AgentSession
 from tokenpal.config.schema import AgentConfig
@@ -83,6 +84,16 @@ def _echo_actions() -> dict[str, AbstractAction]:
     return {"echo": _Echo({})}
 
 
+def _list_log(logs: list[str] | None):
+    """LogFn over a plain list, tagging unpersisted lines like capture_logs."""
+    def _log(
+        text: str, *, markup: bool = False, url: str | None = None, persist: bool = True,
+    ) -> None:
+        if logs is not None:
+            logs.append(text if persist else f"{text} [unpersisted]")
+    return _log
+
+
 def _runner(
     llm: ScriptedLLM,
     actions: dict[str, AbstractAction] | None = None,
@@ -98,7 +109,7 @@ def _runner(
     return AgentRunner(
         llm=llm,
         actions=actions if actions is not None else _echo_actions(),
-        log_callback=(logs.append if logs is not None else (lambda _s: None)),
+        log_callback=_list_log(logs),
         confirm_callback=confirm,
         is_sensitive=is_sensitive,
         max_steps=max_steps,
@@ -149,7 +160,7 @@ async def test_status_callback_reports_tool_name() -> None:
     runner = AgentRunner(
         llm=llm,
         actions=_echo_actions(),
-        log_callback=lambda _s: None,
+        log_callback=_list_log(None),
         confirm_callback=_always_allow,
         is_sensitive=_no_sensitive,
         status_callback=statuses.append,
@@ -669,3 +680,188 @@ async def test_truncation_without_thinking_does_not_retry() -> None:
     assert len(llm.call_kwargs) == 1
     assert session.final_text == "cut off"
     assert session.stopped_reason == "complete"
+
+
+# ---------------------------------------------------------------------------
+# Desktop-content marker: trace redaction, no cache, tool drop
+# ---------------------------------------------------------------------------
+
+FIXTURE = "SECRET-FIXTURE-7731"
+
+
+class _Reads(AbstractAction):
+    action_name = "reads"
+    description = "Reads text off the screen."
+    parameters = {"type": "object", "properties": {}}
+    safe = True
+    requires_confirm = False
+    reads_desktop_content = True
+    calls = 0
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        _Reads.calls += 1
+        return ActionResult(output=FIXTURE)
+
+
+class _Fact(AbstractAction):
+    """Named after a real catalog entry so `_needs_consent` sees its
+    `web_fetches` category."""
+
+    action_name = "random_fact"
+    description = "Fetches a fact."
+    parameters = {"type": "object", "properties": {}}
+    safe = True
+    requires_confirm = False
+    calls = 0
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        _Fact.calls += 1
+        return ActionResult(output="a fact")
+
+
+def _marked_actions() -> dict[str, AbstractAction]:
+    return {"reads": _Reads({}), "random_fact": _Fact({}), "echo": _Echo({})}
+
+
+def _tool_call_response(*calls: ToolCall) -> LLMResponse:
+    return LLMResponse(
+        text="", tokens_used=0, model_name="t", latency_ms=0,
+        tool_calls=list(calls),
+    )
+
+
+@pytest.mark.asyncio
+async def test_marked_tool_result_is_redacted_in_trace(caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    _Reads.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(_call("reads", {}, "c1")),
+        LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    logs: list[str] = []
+    session = await _runner(llm, actions=_marked_actions(), logs=logs).run("read it")
+
+    assert f"← [desktop content: {len(FIXTURE)} chars, not shown] [unpersisted]" in logs
+    assert session.desktop_content is True
+    # The step still carries the text so the model can use it.
+    assert session.steps[0].result == FIXTURE
+    assert_no_leak(FIXTURE, lines=logs, caplog_text=caplog.text)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_is_hidden_after_a_marked_tool(caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    _Reads.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(_call("reads", {}, "c1")),
+        LLMResponse(
+            text="all done", tokens_used=0, model_name="t", latency_ms=0,
+            reasoning=f"mentions {FIXTURE}",
+        ),
+    ])
+    logs: list[str] = []
+    await _runner(llm, actions=_marked_actions(), logs=logs).run("read it")
+
+    assert "… (reasoning hidden: desktop content in context) [unpersisted]" in logs
+    assert_no_leak(FIXTURE, lines=logs, caplog_text=caplog.text)
+
+
+@pytest.mark.asyncio
+async def test_consent_gated_tools_are_dropped_after_a_marked_tool() -> None:
+    _Reads.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(_call("reads", {}, "c1")),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    await _runner(llm, actions=_marked_actions()).run("read it")
+
+    first_tools = [t["function"]["name"] for t in llm.calls[0][1]]
+    second_tools = [t["function"]["name"] for t in llm.calls[1][1]]
+    assert "random_fact" in first_tools
+    assert "echo" in second_tools
+    assert "random_fact" not in second_tools
+    assert "reads" in second_tools
+
+
+@pytest.mark.asyncio
+async def test_marked_tool_is_never_cached() -> None:
+    _Reads.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(_call("reads", {}, "c1")),
+        _tool_call_response(_call("reads", {}, "c2")),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    session = await _runner(llm, actions=_marked_actions()).run("read twice")
+
+    assert [s.cached for s in session.steps] == [False, False]
+    assert _Reads.calls == 2
+
+
+@pytest.mark.asyncio
+async def test_gated_tool_in_the_same_batch_is_skipped() -> None:
+    _Reads.calls = 0
+    _Fact.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(
+            _call("reads", {}, "c1"), _call("random_fact", {}, "c2"),
+        ),
+        LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    logs: list[str] = []
+    session = await _runner(llm, actions=_marked_actions(), logs=logs).run("both")
+
+    assert session.steps[1].result == "skipped: desktop content is in context"
+    assert _Fact.calls == 0
+    assert "← skipped random_fact: desktop content is in context [unpersisted]" in logs
+
+
+class _Raises(AbstractAction):
+    """Marked tool that reads content, then throws with it in the message."""
+    action_name = "raises"
+    description = "raises"
+    parameters = {"type": "object", "properties": {}}
+    safe = True
+    requires_confirm = False
+    reads_desktop_content = True
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        raise ValueError(f"could not parse screen text: {FIXTURE}")
+
+
+@pytest.mark.asyncio
+async def test_later_tool_arguments_are_never_persisted(caplog) -> None:
+    """The model can copy screen text into a LATER tool's arguments. Those
+    tools are local, so the consent-gated drop does not catch them; the trace
+    must be unpersisted for the rest of the run instead."""
+    caplog.set_level(logging.DEBUG)
+    _Reads.calls = 0
+    llm = ScriptedLLM([
+        _tool_call_response(_call("reads", {}, "c1")),
+        _tool_call_response(_call("echo", {"text": FIXTURE}, "c2")),
+        LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    logs: list[str] = []
+    await _runner(llm, actions=_marked_actions(), logs=logs).run("read it")
+
+    leaked = [ln for ln in logs if FIXTURE in ln and "[unpersisted]" not in ln]
+    assert leaked == [], f"content reached a persisted trace line: {leaked}"
+    assert any(FIXTURE in ln for ln in logs), "echo args should still be traced"
+    assert_no_leak(FIXTURE, lines=logs, caplog_text=caplog.text)
+
+
+@pytest.mark.asyncio
+async def test_marked_tool_that_raises_redacts_and_still_sets_the_flag(caplog) -> None:
+    """An exception can quote the text the tool just read. If that branch
+    leaked, it would also leave the flag off and disable every other guard."""
+    caplog.set_level(logging.DEBUG)
+    llm = ScriptedLLM([
+        _tool_call_response(_call("raises", {}, "c1")),
+        LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
+    ])
+    logs: list[str] = []
+    actions: dict[str, AbstractAction] = {"raises": _Raises({}), "echo": _Echo({})}
+    session = await _runner(llm, actions=actions, logs=logs).run("read it")
+
+    assert session.desktop_content is True
+    assert_no_leak(FIXTURE, lines=logs, caplog_text=caplog.text)
+    assert any("ValueError (details hidden)" in ln for ln in logs)

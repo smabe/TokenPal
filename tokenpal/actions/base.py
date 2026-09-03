@@ -69,6 +69,10 @@ class AbstractAction(abc.ABC):
     # When False, the agent in-run result cache skips this tool (e.g. because
     # the output is time-sensitive or carries side effects worth re-running).
     cacheable: ClassVar[bool] = True
+    # Output is text read from another desktop app. The agent runner redacts
+    # the trace, never caches the result, and drops network tools for the rest
+    # of the run; the conversation path never exposes this tool at all.
+    reads_desktop_content: ClassVar[bool] = False
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

@@ -11,8 +11,10 @@ its script shape (text + finish_reason tuples) is structurally distinct.
 
 from __future__ import annotations
 
+import sqlite3
 from typing import Any
 
+from tokenpal.brain.memory import MemoryStore
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
 from tokenpal.senses.web_search.client import SearchResult
 
@@ -99,7 +101,45 @@ def capture_logs() -> tuple[list[str], Any]:
     """Returns (buffer, log_callback) so tests can assert on log output."""
     buf: list[str] = []
 
-    def _cb(msg: str, *, url: str | None = None) -> None:
-        buf.append(f"{msg} <{url}>" if url else msg)
+    def _cb(
+        msg: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
+    ) -> None:
+        line = f"{msg} <{url}>" if url else msg
+        buf.append(line if persist else f"{line} [unpersisted]")
 
     return buf, _cb
+
+
+def assert_no_leak(
+    fixture: str,
+    *,
+    lines: list[str],
+    caplog_text: str,
+    memory: MemoryStore | None = None,
+) -> None:
+    """Assert *fixture* reached no sink: not a persisted trace line, not the
+    captured log text, not the persisted chat/conversation tables.
+
+    Lines tagged ``[unpersisted]`` are exempt by construction: that tag is
+    written only on the branch that skips the persist callback, so such a line
+    was shown in the pane and stored nowhere. Showing the user what was read is
+    the point; storing it is what the contract forbids."""
+    for line in lines:
+        if line.endswith("[unpersisted]"):
+            continue
+        assert fixture not in line, f"fixture leaked into persisted trace line: {line!r}"
+    assert fixture not in caplog_text, "fixture leaked into log output"
+    if memory is None:
+        return
+    conn = sqlite3.connect(str(memory._db_path))
+    try:
+        for table in ("chat_log", "conversation_summaries"):
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            for row in rows:
+                assert fixture not in str(row), f"fixture leaked into {table}: {row!r}"
+    finally:
+        conn.close()

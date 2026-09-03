@@ -18,9 +18,10 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
 from tokenpal.actions.base import AbstractAction
+from tokenpal.actions.catalog import find_entry
 from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.stop_reason import AgentStopReason
 from tokenpal.config.schema import AgentConfig
@@ -41,7 +42,30 @@ _SESSION_RESULT_CAP = 4096
 
 ConfirmFn = Callable[[str, dict[str, Any]], Awaitable[bool]]
 SensitiveFn = Callable[[], bool]
-LogFn = Callable[[str], None]
+
+
+class LogFn(Protocol):
+    """Trace sink. ``persist=False`` keeps the line out of the chat log."""
+
+    def __call__(
+        self,
+        text: str,
+        *,
+        markup: bool = False,
+        url: str | None = None,
+        persist: bool = True,
+    ) -> None: ...
+
+
+def noop_log(
+    text: str, *, markup: bool = False, url: str | None = None, persist: bool = True,
+) -> None:
+    """LogFn that discards. Typed so it satisfies the Protocol at a join."""
+    return None
+
+
+_DESKTOP_CONTEXT_REASON = "desktop content is in context"
+_SKIPPED_RESULT = f"skipped: {_DESKTOP_CONTEXT_REASON}"
 
 
 @dataclass
@@ -66,6 +90,7 @@ class AgentSession:
     tokens_used: int = 0
     stopped_reason: AgentStopReason | str = ""
     started_at: float = field(default_factory=time.monotonic)
+    desktop_content: bool = False
 
     @property
     def is_complete(self) -> bool:
@@ -119,10 +144,27 @@ class AgentRunner:
         self._max_tokens = max_tokens
         self._system_prompt = system_prompt or _DEFAULT_SYSTEM_PROMPT
         self._invoker = invoker or ToolInvoker()
+        self._session: AgentSession | None = None
+
+    @property
+    def read_desktop_content(self) -> bool:
+        """True once this run has executed a desktop-content tool. Survives a
+        crash that discards the session object."""
+        return self._session is not None and self._session.desktop_content
+
+    def _trace(self, text: str) -> None:
+        """Trace sink. Redaction is a property of the SESSION, not of the tool
+        being called: once desktop content is in ``messages`` the model can
+        copy it into any later call's arguments, so every line after the flag
+        goes out unpersisted."""
+        persist = not (self._session is not None and self._session.desktop_content)
+        self._log(text, persist=persist)
 
     async def run(self, goal: str) -> AgentSession:
         session = AgentSession(goal=goal)
+        self._session = session
         self._cache: dict[tuple[str, str], str] = {}
+        self._gated_free_specs: list[dict[str, Any]] | None = None
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt},
             {"role": "user", "content": goal},
@@ -149,8 +191,11 @@ class AgentRunner:
                 )
                 return session
 
+            tools = self._tools_for(session)
             try:
-                response = await self._step(session, messages, thinking=thinking)
+                response = await self._step(
+                    session, messages, thinking=thinking, tools=tools,
+                )
                 if (
                     thinking
                     and response.finish_reason == "length"
@@ -158,8 +203,10 @@ class AgentRunner:
                     and not response.text.strip()
                 ):
                     thinking = False
-                    self._log("(step truncated while thinking; continuing without thinking)")
-                    response = await self._step(session, messages, thinking=False)
+                    self._trace("(step truncated while thinking; continuing without thinking)")
+                    response = await self._step(
+                        session, messages, thinking=False, tools=tools,
+                    )
             except TimeoutError:
                 session.stopped_reason = AgentStopReason.TIMEOUT
                 log.warning("Agent step %d timed out", step)
@@ -176,12 +223,20 @@ class AgentRunner:
             denied = False
             for i, tc in enumerate(response.tool_calls):
                 normalized = _normalize_tool_call(tc, i)
-                if self._status is not None:
-                    try:
-                        self._status(f"using {normalized.name}...")
-                    except Exception:
-                        log.exception("agent status_callback raised")
-                step_record = await self._execute_one(normalized)
+                if session.desktop_content and _needs_consent(normalized.name):
+                    self._trace(
+                        f"\u2190 skipped {normalized.name}: {_DESKTOP_CONTEXT_REASON}"
+                    )
+                    step_record = AgentStep(
+                        normalized.name, normalized.arguments, _SKIPPED_RESULT, 0.0,
+                    )
+                else:
+                    if self._status is not None:
+                        try:
+                            self._status(f"using {normalized.name}...")
+                        except Exception:
+                            log.exception("agent status_callback raised")
+                    step_record = await self._execute_one(normalized)
                 session.steps.append(step_record)
                 messages.append({
                     "role": "tool",
@@ -227,33 +282,55 @@ class AgentRunner:
         )
         session.tokens_used += response.tokens_used
         if response.reasoning:
-            self._log(f"\u2026 {response.reasoning}")
+            if session.desktop_content:
+                self._trace("\u2026 (reasoning hidden: desktop content in context)")
+            else:
+                self._trace(f"\u2026 {response.reasoning}")
         return response
+
+    def _tools_for(self, session: AgentSession) -> list[dict[str, Any]] | None:
+        """Tool list for the next step: ``None`` means the unfiltered set.
+        Once desktop content is in context, every consent-gated (network)
+        tool is dropped for the rest of the run."""
+        if not session.desktop_content:
+            return None
+        if self._gated_free_specs is None:
+            self._gated_free_specs = [
+                spec for spec in self._tool_specs
+                if not _needs_consent(spec["function"]["name"])
+            ]
+        return self._gated_free_specs
 
     async def _execute_one(self, tc: ToolCall) -> AgentStep:
         action = self._actions.get(tc.name)
         if action is None:
             msg = f"Unknown tool '{tc.name}'."
-            self._log(f"\u2190 {msg}")
+            self._trace(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, 0.0)
 
-        cache_eligible = action.cacheable and not action.requires_confirm
+        redacted = action.reads_desktop_content
+        if redacted and self._session is not None:
+            # Set before the first trace line for this call, so even the tool's
+            # own arguments go out unpersisted. This is the only writer: a
+            # denied confirm still flags the session, which fails closed.
+            self._session.desktop_content = True
+        cache_eligible = action.cacheable and not action.requires_confirm and not redacted
         cache_key: tuple[str, str] | None = None
         if cache_eligible:
             cache_key = (tc.name, _stable_args_key(tc.arguments))
             hit = self._cache.get(cache_key)
             if hit is not None:
-                self._log(f"\u2190 (cached) {_truncate(hit, 240)}")
+                self._trace(f"\u2190 (cached) {_truncate(hit, 240)}")
                 return AgentStep(tc.name, tc.arguments, hit, 0.0, cached=True)
 
         if action.requires_confirm:
             allowed = await self._confirm(tc.name, tc.arguments)
             if not allowed:
                 msg = f"User denied {tc.name}."
-                self._log(f"\u2190 {msg}")
+                self._trace(f"\u2190 {msg}")
                 return AgentStep(tc.name, tc.arguments, msg, 0.0, denied=True)
 
-        self._log(f"\u2192 {tc.name}({fmt_args(tc.arguments)})")
+        self._trace(f"\u2192 {tc.name}({fmt_args(tc.arguments)})")
         start = time.monotonic()
         try:
             result = await asyncio.wait_for(
@@ -263,20 +340,31 @@ class AgentRunner:
             duration_ms = (time.monotonic() - start) * 1000
             output = result.output if result.success else f"error: {result.output}"
             stored = _truncate(output, _SESSION_RESULT_CAP)
-            self._log(f"\u2190 {_truncate(stored, 240)}")
+            if redacted:
+                self._trace(f"\u2190 [desktop content: {len(stored)} chars, not shown]")
+            else:
+                self._trace(f"\u2190 {_truncate(stored, 240)}")
             if cache_key is not None and result.success:
                 self._cache[cache_key] = stored
-            return AgentStep(tc.name, tc.arguments, stored, duration_ms)
+            return AgentStep(
+                tc.name, tc.arguments, stored, duration_ms,
+            )
         except TimeoutError:
             duration_ms = (time.monotonic() - start) * 1000
             msg = f"{tc.name} timed out after {self._per_step_timeout_s:.0f}s"
-            self._log(f"\u2190 {msg}")
+            self._trace(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, duration_ms)
         except Exception as e:  # noqa: BLE001
-            log.exception("Agent tool '%s' raised", tc.name)
             duration_ms = (time.monotonic() - start) * 1000
-            msg = f"{tc.name} raised: {e}"
-            self._log(f"\u2190 {msg}")
+            if redacted:
+                # The exception may quote the text the tool just read, so
+                # neither the message nor the traceback may be logged.
+                log.error("Agent tool '%s' raised %s", tc.name, type(e).__name__)
+                msg = f"{tc.name} raised: {type(e).__name__} (details hidden)"
+            else:
+                log.exception("Agent tool '%s' raised", tc.name)
+                msg = f"{tc.name} raised: {e}"
+            self._trace(f"\u2190 {msg}")
             return AgentStep(tc.name, tc.arguments, msg, duration_ms)
 
     async def _force_synthesis(
@@ -290,6 +378,13 @@ class AgentRunner:
         except Exception:
             log.exception("Forced synthesis failed")
             return ""
+
+
+def _needs_consent(name: str) -> bool:
+    """True when the catalog gates *name* behind a consent category, i.e.
+    it reaches the network. Tools with no catalog entry are not gated."""
+    found = find_entry(name)
+    return bool(found is not None and found[0].consent_category)
 
 
 def _normalize_tool_call(tc: ToolCall, index: int) -> ToolCall:

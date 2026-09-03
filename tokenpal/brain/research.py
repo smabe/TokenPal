@@ -17,6 +17,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
+from tokenpal.brain.agent import LogFn
 from tokenpal.brain.personality import contains_sensitive_content_term
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.config.schema import CloudSearchConfig
@@ -30,7 +31,6 @@ from tokenpal.senses.web_search.client import (
 
 log = logging.getLogger(__name__)
 
-LogFn = Callable[..., None]
 FetchFn = Callable[[str], "asyncio.Future[str | None]"] | Callable[[str], Any]
 
 

@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult, RateLimit
 from tokenpal.actions.registry import register_action
 from tokenpal.actions.research.fetch_url import fetch_and_extract
+from tokenpal.brain.agent import LogFn
 from tokenpal.brain.research import ResearchRunner, ResearchSession
 from tokenpal.brain.stop_reason import ResearchStopReason
 from tokenpal.config.consent import Category, has_consent
@@ -26,6 +27,19 @@ from tokenpal.llm.cloud_backend import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _research_log(cloud_mode: str) -> LogFn:
+    def _log(
+        text: str, *, markup: bool = False, url: str | None = None, persist: bool = True,
+    ) -> None:
+        log.info(
+            "research%s: %s%s",
+            f" ({cloud_mode})" if cloud_mode else "",
+            text,
+            f" ({url})" if url else "",
+        )
+    return _log
 
 
 @register_action
@@ -110,12 +124,7 @@ class ResearchAction(AbstractAction):
         runner = ResearchRunner(
             llm=self._llm,
             fetch_url=fetch_and_extract,
-            log_callback=lambda s, *, url=None: log.info(
-                "research%s: %s%s",
-                f" ({cloud_mode})" if cloud_mode else "",
-                s,
-                f" ({url})" if url else "",
-            ),
+            log_callback=_research_log(cloud_mode),
             max_queries=cfg.max_queries,
             max_fetches=cfg.max_fetches,
             token_budget=cfg.token_budget,

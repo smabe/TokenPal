@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 from tokenpal.actions.base import AbstractAction
 from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.audio.types import InputSource
-from tokenpal.brain.agent import AgentRunner, AgentSession, fmt_args
+from tokenpal.brain.agent import AgentRunner, AgentSession, LogFn, fmt_args, noop_log
 from tokenpal.brain.app_enricher import AppEnricher
 from tokenpal.brain.context import ContextWindowBuilder
 from tokenpal.brain.eod_summary import EODSummary, today_str, yesterday_str
@@ -197,6 +197,11 @@ _CONTEXT_LOG_HEARTBEAT_S = 30.0
 # observations don't poison the conv suppression check (and vice versa).
 _CONV_RECENT_OUTPUTS_MAX = 5
 
+# Shown instead of the agent's answer when the run touched desktop content and
+# the persona line was filtered out or failed to generate.
+_DESKTOP_DONE_FALLBACK = "Done. The answer is in the chat log and was not saved."
+_DESKTOP_ABORTED_LINE = "Nothing came back that time — and nothing was saved."
+
 # Appended to the conversation system message when retrying after a near-dup
 # trip. Observation context is stripped on the retry to break the lock.
 _RETRY_NEAR_DUP_INSTRUCTION = (
@@ -218,7 +223,7 @@ class AgentBridge:
     """Config + host callbacks needed to run /agent."""
 
     config: AgentConfig
-    log_callback: Callable[[str], None] | None = None
+    log_callback: LogFn | None = None
     confirm_callback: Callable[[str, dict[str, Any]], Awaitable[bool]] | None = None
 
 
@@ -349,7 +354,13 @@ class Brain:
 
         # Actions (LLM-callable tools)
         self._actions: dict[str, AbstractAction] = {a.action_name: a for a in (actions or [])}
-        self._tool_specs = [a.to_tool_spec() for a in self._actions.values()]
+        # Desktop-content tools are agent-only: their output must never reach
+        # ConversationSession.history, which feeds the summarizer and the log.
+        self._tool_specs = self._build_conversation_specs()
+        # Tracked separately from the spec lists: an empty conversation list
+        # also means "every enabled action is desktop-content", which must not
+        # disable the agent.
+        self._tool_calling_enabled = True
 
         # Per-sense scheduling
         self._sense_intervals: dict[str, float] = sense_intervals or {}
@@ -1576,8 +1587,13 @@ class Brain:
             if filtered:
                 log.info("TokenPal says: %s (%.0fms)", filtered, response.latency_ms)
                 # Re-enable tool specs if they were disabled due to failures
-                if self._consecutive_failures > 0 and self._actions and not self._tool_specs:
-                    self._tool_specs = [a.to_tool_spec() for a in self._actions.values()]
+                if (
+                    self._consecutive_failures > 0
+                    and self._actions
+                    and not self._tool_calling_enabled
+                ):
+                    self._tool_calling_enabled = True
+                    self._tool_specs = self._build_conversation_specs()
                     log.info("Re-enabled tool-calling after successful generation")
                 self._consecutive_failures = 0
                 self._emit_comment(filtered, acknowledge=True)
@@ -1605,6 +1621,7 @@ class Brain:
             # If tool-calling keeps failing, disable it and fall back to plain generation
             if self._consecutive_failures == 3 and self._actions:
                 log.warning("Disabling tool-calling — model may not support tools")
+                self._tool_calling_enabled = False
                 self._tool_specs = []
 
             if self._consecutive_failures == 1:
@@ -1754,6 +1771,9 @@ class Brain:
         if action is None:
             log.warning("LLM called unknown action: %s", tc.name)
             return f"Unknown tool '{tc.name}'."
+        if action.reads_desktop_content:
+            log.warning("Conversation path refused desktop-content tool: %s", tc.name)
+            return f"Tool '{tc.name}' is only available in /agent."
         try:
             result = await action.execute(**tc.arguments)
             if log.isEnabledFor(logging.DEBUG):
@@ -1822,6 +1842,18 @@ class Brain:
     def research_running(self) -> bool:
         return self._mode is BrainMode.RESEARCH
 
+    def _build_conversation_specs(self) -> list[dict[str, Any]]:
+        return [
+            a.to_tool_spec()
+            for a in self._actions.values()
+            if not a.reads_desktop_content
+        ]
+
+    def _build_agent_specs(self) -> list[dict[str, Any]]:
+        if not self._tool_calling_enabled:
+            return []
+        return [a.to_tool_spec() for a in self._actions.values()]
+
     async def _handle_agent_goal(self, goal: str) -> AgentSession:
         """Run one agent session from start to finish. Suppresses
         observations + freeform for the duration and swaps to the agent
@@ -1840,7 +1872,7 @@ class Brain:
         runner = AgentRunner(
             llm=self._llm,
             actions=self._actions,
-            tool_specs=self._tool_specs,
+            tool_specs=self._build_agent_specs(),
             log_callback=self._agent.log_callback,
             confirm_callback=self._agent.confirm_callback,
             is_sensitive=self._sensitive_check,
@@ -1873,7 +1905,11 @@ class Brain:
             session = await runner.run(goal)
         except Exception:
             log.exception("Agent run crashed")
-            session = AgentSession(goal=goal, stopped_reason=AgentStopReason.CRASHED)
+            crashed = AgentSession(goal=goal, stopped_reason=AgentStopReason.CRASHED)
+            # Keep the marker: the runner may already have read desktop content
+            # before it crashed, and the delivery branch below keys on it.
+            crashed.desktop_content = runner.read_desktop_content
+            session = crashed
         finally:
             self._mode = BrainMode.IDLE
             if swapped:
@@ -1886,9 +1922,35 @@ class Brain:
         summary = _format_agent_summary(session)
         final = session.final_text.strip() or summary
         self._agent.log_callback(f"= {summary}")
-        self._ui_callback(final)
+        if session.desktop_content:
+            if session.final_text.strip():
+                self._agent.log_callback(final, persist=False)
+                self._ui_callback(await self._desktop_done_line())
+            else:
+                # No answer was produced — aborted, or the model returned an
+                # empty final turn. The summary is already on screen, so
+                # promising an answer in the chat log would be a lie.
+                self._ui_callback(_DESKTOP_ABORTED_LINE)
+        else:
+            self._ui_callback(final)
         self._last_comment_time = time.monotonic()
         return session
+
+    async def _desktop_done_line(self) -> str:
+        """Persona line announcing a finished desktop-content run. The prompt
+        carries no goal, trace, or tool output, so the bubble cannot leak what
+        was read."""
+        try:
+            response = await self._llm.generate(
+                self._personality.build_desktop_done_prompt(),
+                target_latency_s=self._budgets.freeform,
+                min_tokens=self._min_tokens.freeform,
+            )
+            filtered = self._personality.filter_response(response.text)
+        except Exception:
+            log.exception("Desktop-done line generation failed")
+            return _DESKTOP_DONE_FALLBACK
+        return filtered or _DESKTOP_DONE_FALLBACK
 
     def _sensitive_check(self) -> bool:
         """Runner-facing predicate — re-check on every agent step."""
@@ -1908,7 +1970,7 @@ class Brain:
     async def _handle_research(self, question: str) -> ResearchSession:
         """Run one /research pipeline. Log callback routes to chat log via
         the agent log sink (same stream — trace lines, not speech bubbles)."""
-        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
+        log_cb = self._agent.log_callback or noop_log
 
         snapshot = self._context.snapshot()
         if self._personality.check_sensitive_app(snapshot):
@@ -2094,7 +2156,7 @@ class Brain:
         (refine is explicitly a cloud-powered deeper look). Falls back with
         a clear error if no recent research is available or cloud isn't
         configured."""
-        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
+        log_cb = self._agent.log_callback or noop_log
 
         if self._memory is None or not self._memory.enabled:
             self._ui_callback(
@@ -2298,7 +2360,7 @@ class Brain:
         cloud-key gating — we just unwrap the <answer>...</answer> from its
         tool_result XML for display.
         """
-        log_cb = self._agent.log_callback or (lambda _s, **_kw: None)
+        log_cb = self._agent.log_callback or noop_log
         action = self._actions.get("research_followup")
         if action is None:
             self._ui_callback(

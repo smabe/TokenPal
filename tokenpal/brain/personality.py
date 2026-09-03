@@ -546,6 +546,35 @@ Rules:
 Your line:"""
 
 
+_DESKTOP_DONE_TEMPLATE = """\
+{identity}
+
+You just finished a task that involved reading text from the user's screen or
+from a file for them. The full answer is already in the chat log and was not
+saved anywhere. Say ONE short in-character line pointing them at it. Do NOT
+guess at or describe what the text was — you are not telling them the answer,
+only that it is waiting for them.
+
+{mood_line}
+
+Examples of your voice:
+{examples}
+
+{voice_reminder}Your line:"""
+
+
+_FINETUNED_DESKTOP_DONE_TEMPLATE = """\
+Rules:
+1. ONE short in-character line.
+2. You just finished reading text off the user's screen or out of a file for
+   them; the full answer is in the chat log and was not saved.
+3. Point them at the chat log. Do NOT guess at or describe what the text was.
+
+{mood_line}
+
+Your line:"""
+
+
 _GIT_NUDGE_TEMPLATE = """\
 {identity}
 
@@ -990,6 +1019,22 @@ class PersonalityEngine:
         return _RAGE_CHECK_TEMPLATE.format(
             identity=self._identity_block(),
             app_name=app_name,
+            mood_line=self._mood_line(),
+            examples=self._sample_examples(),
+            voice_reminder=self._voice_reminder(),
+        )
+
+    def build_desktop_done_prompt(self) -> str:
+        """Prompt for the completion line after an agent run that read desktop
+        content. Carries identity and mood only — no goal, no trace, no tool
+        output — so the reply cannot echo what was read.
+        """
+        if self.is_finetuned:
+            return _FINETUNED_DESKTOP_DONE_TEMPLATE.format(
+                mood_line=self._mood_line(),
+            )
+        return _DESKTOP_DONE_TEMPLATE.format(
+            identity=self._identity_block(),
             mood_line=self._mood_line(),
             examples=self._sample_examples(),
             voice_reminder=self._voice_reminder(),
