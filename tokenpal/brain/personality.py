@@ -295,7 +295,10 @@ def contains_sensitive_content_term(text: str | None) -> bool:
 
     Use this for filtering untrusted external content where wellness-app
     mentions are benign but banking/password/messaging app names should
-    still trigger the scrub. Broader-scoped than contains_sensitive_term.
+    still trigger the scrub. Narrower than contains_sensitive_term: what
+    drops out is every term that is also an ordinary English word, which
+    includes two banks (chase, fidelity) and keychain/keeper — so this is
+    NOT a superset of banking coverage, it is a false-positive tradeoff.
     """
     if not text:
         return False

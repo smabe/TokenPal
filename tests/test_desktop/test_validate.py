@@ -1,0 +1,77 @@
+"""--validate rows for the desktop-content OS grants.
+
+Asserts the rendered rows only, never the header: the header carries
+``sys.executable``, which differs per host. The probes are patched so the
+rows are asserted independently of this machine's real TCC state.
+"""
+
+from __future__ import annotations
+
+from unittest import mock
+
+from tokenpal.cli import _check_desktop_permissions
+
+
+def _rows(capsys) -> str:
+    out = capsys.readouterr().out
+    return "\n".join(
+        line for line in out.splitlines() if "permissions checked for" not in line
+    )
+
+
+def test_darwin_reports_both_grants_present(capsys) -> None:
+    with mock.patch(
+        "tokenpal.desktop.permissions.accessibility_granted", return_value=True,
+    ), mock.patch(
+        "tokenpal.desktop.permissions.screen_recording_granted", return_value=True,
+    ):
+        _check_desktop_permissions("Darwin")
+    rows = _rows(capsys)
+    assert "Accessibility: granted" in rows
+    assert "Screen Recording: granted" in rows
+    assert "missing" not in rows
+
+
+def test_darwin_points_at_settings_when_grants_missing(capsys) -> None:
+    with mock.patch(
+        "tokenpal.desktop.permissions.accessibility_granted", return_value=False,
+    ), mock.patch(
+        "tokenpal.desktop.permissions.screen_recording_granted", return_value=False,
+    ):
+        _check_desktop_permissions("Darwin")
+    rows = _rows(capsys)
+    assert (
+        "Accessibility: missing — System Settings > Privacy & Security > Accessibility"
+        in rows
+    )
+    assert (
+        "Screen Recording: missing — System Settings > Privacy & Security > "
+        "Screen & System Audio Recording" in rows
+    )
+
+
+def test_darwin_reports_unknown_when_pyobjc_is_absent(capsys) -> None:
+    with mock.patch(
+        "tokenpal.desktop.permissions.accessibility_granted", return_value=None,
+    ), mock.patch(
+        "tokenpal.desktop.permissions.screen_recording_granted", return_value=None,
+    ):
+        _check_desktop_permissions("Darwin")
+    rows = _rows(capsys)
+    assert "Accessibility: unknown (pyobjc unavailable)" in rows
+    assert "Screen Recording: unknown (pyobjc unavailable)" in rows
+
+
+def test_non_darwin_reports_a_single_no_grants_row(capsys) -> None:
+    with mock.patch(
+        "tokenpal.desktop.permissions.accessibility_granted",
+        side_effect=AssertionError("probed off macOS"),
+    ), mock.patch(
+        "tokenpal.desktop.permissions.screen_recording_granted",
+        side_effect=AssertionError("probed off macOS"),
+    ):
+        _check_desktop_permissions("Windows")
+    rows = _rows(capsys)
+    assert "no OS permission grants needed" in rows
+    assert "Accessibility" not in rows
+    assert "Screen Recording" not in rows

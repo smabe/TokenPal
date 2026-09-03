@@ -238,6 +238,42 @@ def _check_audio(config: TokenPalConfig) -> int:
     return problems
 
 
+def _check_desktop_permissions(plat: str) -> None:
+    """OS grants the desktop-content tools need to read another app's text.
+
+    Read-only: the probes report the current state and never raise a system
+    dialog. A missing grant is a warning, not a counted problem — no shipped
+    tool needs one yet.
+    """
+    print()
+    print(f"  {_BOLD}desktop tools{_RESET} (permissions checked for {sys.executable})")
+
+    if plat != "Darwin":
+        print(f"  {_CHECK} no OS permission grants needed")
+        return
+
+    from tokenpal.desktop import permissions
+
+    for label, granted, settings_path in (
+        (
+            "Accessibility",
+            permissions.accessibility_granted(),
+            "System Settings > Privacy & Security > Accessibility",
+        ),
+        (
+            "Screen Recording",
+            permissions.screen_recording_granted(),
+            "System Settings > Privacy & Security > Screen & System Audio Recording",
+        ),
+    ):
+        if granted is None:
+            print(f"  {_WARN} {label}: unknown (pyobjc unavailable)")
+        elif granted:
+            print(f"  {_CHECK} {label}: granted")
+        else:
+            print(f"  {_WARN} {label}: missing — {settings_path}")
+
+
 def _check_utility_wedges(config: TokenPalConfig) -> None:
     """Report on the session handoff / intent / EOD / rage / git-nudge
     features. Informational only; none of these raise validation problems.
@@ -405,13 +441,8 @@ async def _validate(config_path: Path | None) -> int:
     # 6d. Audio I/O — only when at least one [audio] toggle is on
     problems += _check_audio(config)
 
-    # 7. macOS Accessibility reminder
-    if plat == "Darwin":
-        print()
-        print(
-            f"  {_WARN} macOS: ensure Accessibility permission is granted in"
-            f" System Settings > Privacy & Security > Accessibility"
-        )
+    # 7. Desktop-content OS grants (read-only probes; never prompt)
+    _check_desktop_permissions(plat)
 
     _print_summary(problems)
     return 1 if problems else 0

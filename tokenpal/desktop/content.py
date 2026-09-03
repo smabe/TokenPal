@@ -14,13 +14,14 @@ else. A tool that reads it must, in this order:
 Never log ``DesktopContent.text`` and never assign it (or anything derived
 from it) to ``ActionResult.display_text``: that field is persisted to the
 chat log. ``ActionResult.output`` carries the envelope to the model, and the
-conversation path DEBUG-logs 200 chars of it twice
-(``tokenpal/brain/orchestrator.py:1694`` and ``:1759``).
+conversation path DEBUG-logs 200 chars of a tool result — which is why marked
+tools are kept off that path entirely rather than relying on the log level.
 
-Two mechanisms this module does NOT yet implement, landing with the marked-
-action work: content tools must be kept off the conversation path rather than
-relying on the log level, and neither desktop content nor replies derived from
-it may enter ``ConversationSession.history``, which feeds the summarizer.
+Both halves of that are enforced as of the marked-action work: the
+conversation tool specs exclude actions declaring ``reads_desktop_content``
+and ``_execute_tool_call`` refuses one by name anyway, so neither desktop
+content nor a reply derived from it can enter ``ConversationSession.history``,
+which feeds the summarizer. See ``docs/claude/actions.md``.
 """
 
 from __future__ import annotations
@@ -88,8 +89,11 @@ class DesktopContent:
 def refuse_if_sensitive(source_app: str) -> ActionResult | None:
     """Error result when *source_app* matches SENSITIVE_APPS, else None.
 
-    The message never names the app: the result is returned to the model and
-    DEBUG-logged, so naming it would leak the thing the refusal protects.
+    The message never names the app: the result is returned to the model as
+    the tool result, and the repo substitutes a generic label wherever a
+    sensitive app name could reach a sink (``list_processes``,
+    ``senses/process_heat``). For a marked tool the trace line is already
+    unpersisted, so this is defence in depth.
     """
     if not contains_sensitive_term(source_app):
         return None
