@@ -9,14 +9,14 @@ Tracks GitHub issue #51, first sub-issue of epic #59.
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p1.md`
 
-**Phase p2 — unpersisted chat channel and agent/conversation gating** — NEXT
+**Phase p2 — unpersisted chat channel and agent/conversation gating** — SHIPPED `3a6f1e4` + `711845e`
 - Enters when: p1 committed (done, `660e8c3`)
 - Done signal: a marked test action run through `AgentRunner` leaves no fixture text in the trace, and `log_buddy_message(..., persist=False)` reaches the pane but not the persist callback (see shard)
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p2.md`
 
-**Phase p3 — `--validate` permission rows, registry invariants test, docs**
-- Enters when: p2 committed
+**Phase p3 — `--validate` permission rows, registry invariants test, docs** — NEXT
+- Enters when: p2 committed (done, `711845e`)
 - Done signal: `tokenpal --validate` on the Mac prints Accessibility and Screen Recording rows without triggering a system prompt, and the registry-invariants test passes with zero marked tools (see shard)
 - If it fails: no gate — fix-forward
 - Shard: `plans/desktop-content-contract-p3.md`
@@ -31,11 +31,14 @@ Re-audit of the persona-bubble delta 2026-09-02 — 8/8 claims ok; fixed: Non-go
 p1 shipped 2026-09-02 as `660e8c3`, preceded by `b3c383d` which cleared the ruff/mypy baseline to zero per the operator's decision. **Spec check at p1** — 10/10 Work items evidenced · 2 unclaimed hunks (`test_http.py`, `test_tools.py`), both required by the described work and added to Work with the planning miss recorded. Review: external peer unavailable (Codex usage limit until 2026-09-06), so the host-native fan-out ran instead — five angles plus two verifiers, then a separate single review for the baseline commit. No receipt-backed stamp exists for either commit; the fan-out is the record. Findings applied: two prompt-injection holes in `to_prompt_block`, a `load_consent` crash path, a dropped docstring rationale, a stale `_http` docstring, a relocated regression pin, and a de-hardcoded assertion. Operator decisions at review: clean the lint baseline rather than relax the criterion; scrub desktop bodies with the content-term list; make the sensitive-app refusal generic.
 **Sweep after p1** — opened `p2` and `p3`. Neither references `scrub_body`, `consent_error`, or the refusal copy, so nothing was falsified by the rename or the copy change; `p3`'s docs bullet gained the three new contract facts (envelope neutralization, content-term scrub, generic refusal). The `ruff`/`mypy` clean criteria in both shards are now literally achievable and were left as written.
 
-NEXT: p2 — read `plans/desktop-content-contract-p2.md` FIRST. Binding decisions for p2:
-- Marked actions are excluded from the conversation path's tool specs AND refused by name in `_execute_tool_call`; they are reachable only from `/agent` and from slash commands that call the LLM directly.
-- The unpersisted channel is `log_buddy_message(text, persist=False)`; Qt already has `persist` on `_do_log`, Textual gains the same gate.
-- A flagged agent session delivers its answer through that channel plus one persona bubble generated from a content-free prompt, with the fixed fallback "Done. The answer is in the chat log and was not saved."
-- p1 shipped two helpers p2 builds on: `scrub_content_body` (content-term list, for prose) alongside `scrub_body` (app-name list, for the network tools), and `neutralize_envelope_tags(text, tag)`.
+p2 shipped 2026-09-02 as `3a6f1e4` (UI persist channel) + `711845e` (enforcement), split per the shard's over-cap rule. **Spec check at p2** — 13/13 Work items evidenced · no unclaimed hunks. Review: peer still unavailable (Codex limit until 2026-09-06), so host-native again — five angles, then two verification rounds over the repaired diff, 26 mutations tested. Findings applied: two real leaks into `chat_log` + logs, four broken invariants, three vacuous tests. Root cause of both leaks was one design choice the shard specified: keying redaction on the action rather than the session. Files added to Work during the phase: `tokenpal/brain/research.py` and `tokenpal/actions/research/research_action.py` (deduplicating `LogFn` surfaced three call sites that never satisfied it) — planning miss, recorded.
+**Sweep after p2** — opened `p3`; it gained four carried-in items (registry/catalog parity, the second spec builder in `idle_tools_m3`, `make_agent_log` coverage now closed, console/tkinter having no chat log). `p1` is shipped and was not reopened. Nothing p2 renamed appears in `p3`'s Work.
+
+NEXT: p3 — read `plans/desktop-content-contract-p3.md` FIRST. Binding decisions for p3:
+- `--validate` reports a missing Screen Recording grant as a warning, not a problem; no shipped tool needs it until #55.
+- The contract test pins static invariants plus consent-first ordering only; refusal and no-leak over a real OS read are each tool's own tests.
+- The Windows no-grants-needed row is an inference, verified on the Windows box before `/plan ship`; p3 may commit on the strength of its test with that row marked pending.
+- p2 left four items in p3's `## Carried in from the p2 review` — read them before writing the invariants test.
 
 ## Goal
 Before any tool reads text from another desktop app (selection, document, OCR), land the consent category, a read-only permission preflight in `tokenpal --validate`, and a code-level privacy contract with tests, so every later content tool in epic #59 inherits "prompt-only, never persisted, never logged, refused in sensitive apps" instead of re-deriving it.
