@@ -24,9 +24,9 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
   ```
   `execute` order, each refusal a one-line `ActionResult(success=False)` naming the reason and never naming a sensitive app:
   1. `roots = await allowed_roots(load_config().paths.allowed_dirs)`; empty → refuse naming `[paths] allowed_dirs`.
-  2. `pair = resolve_inside(path, roots)`; `None` → "outside [paths] allowed_dirs"; else `resolved, root = pair`.
+  2. `pair = resolve_inside(path, roots)`; `None` → "outside [paths] allowed_dirs"; else `resolved, root, rel = pair`.
   3. `not resolved.exists()` → "no such file"; `resolved.is_dir()` → "open_path opens files, not folders".
-  4. `is_hidden_or_protected(resolved, root)` or `path_is_sensitive(str(resolved.relative_to(root)))` → "path is protected".
+  4. `is_hidden_or_protected(resolved, root)` or `path_is_sensitive(rel)` → "path is protected". Use the `rel` from step 2; do not call `relative_to` again.
   5. type policy: suffix (lowercased) in `_DENIED` → refuse "open_path does not open scripts, programs, or installers". `_DENIED` = {.app .exe .sh .command .bat .ps1 .py .terminal .jar .workflow .pkg .mpkg .dmg .scpt .applescript .webloc .url .lnk .vbs .vbe .msi .msc .scr .cmd .com .pif .js .jse .wsf .wsh .hta .reg .rb .pl .php .zsh .fish}. Then `os.access(resolved, os.X_OK)` on a regular file → refuse "file is executable"; any ancestor component ending in `.app`, `.workflow`, `.action`, `.bundle` → refuse "inside an app bundle". Everything else opens.
   6. open: `darwin` → `subprocess.Popen(["open", str(resolved)], stdout/stderr DEVNULL)`; `windows` → `os.startfile(str(resolved))` (CPython docs name `NotImplementedError` when ShellExecute is unavailable; catch `OSError` as well for the launch failure path); `linux` → `Popen(["xdg-open", str(resolved)])`, `FileNotFoundError` → refuse "xdg-open not installed". Return `ActionResult(output=f"Opening {resolved.name}.")`.
 - `tokenpal/brain/orchestrator.py` — in `Brain.__init__` add `self._confirm_lock = asyncio.Lock()` next to the other per-brain state; in `_execute_tool_call` (`:1747-1773`), after the `reads_desktop_content` refusal and before the `try`:

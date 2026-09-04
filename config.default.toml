@@ -275,6 +275,10 @@ enabled_tools = []
 
 [paths]
 data_dir = "~/.tokenpal"
+# Roots the file tools (find_files, open_path) may search and open.
+# The current git repo is always included on top of these.
+# On macOS/Linux an entry must match the folder's on-disk case.
+allowed_dirs = ["~/Documents", "~/Desktop", "~/Downloads"]
 
 [plugins]
 extra_packages = []

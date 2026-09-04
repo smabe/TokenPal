@@ -227,6 +227,10 @@ class ToolsConfig:
 @dataclass
 class PathsConfig:
     data_dir: str = "~/.tokenpal"
+    # Roots the file tools (find_files, open_path) may search and open.
+    allowed_dirs: list[str] = field(
+        default_factory=lambda: ["~/Documents", "~/Desktop", "~/Downloads"]
+    )
 
 
 @dataclass

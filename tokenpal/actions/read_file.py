@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from pathlib import Path
 from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.util.paths import REJECT_PATH, git_root
 
 _MAX_BYTES = 200 * 1024
-_REJECT_PATH = re.compile(r"\.env|credentials|secrets|\.key$|\.pem$", re.IGNORECASE)
 
 
 async def _git_ls_files_contains(repo_root: Path, rel: str) -> bool:
@@ -28,23 +27,6 @@ async def _git_ls_files_contains(repo_root: Path, rel: str) -> bool:
     )
     rc = await proc.wait()
     return rc == 0
-
-
-async def _git_root(start: Path) -> Path | None:
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-C",
-        str(start),
-        "rev-parse",
-        "--show-toplevel",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-    out = stdout.decode("utf-8", errors="replace").strip()
-    return Path(out) if out else None
 
 
 @register_action
@@ -69,13 +51,13 @@ class ReadFileAction(AbstractAction):
         if not isinstance(path_arg, str) or not path_arg.strip():
             return ActionResult(output="Path is required.", success=False)
 
-        if _REJECT_PATH.search(path_arg):
+        if REJECT_PATH.search(path_arg):
             return ActionResult(output="Path matches a denied pattern.", success=False)
 
         if contains_sensitive_term(path_arg):
             return ActionResult(output="Path references a sensitive app.", success=False)
 
-        root = await _git_root(Path.cwd())
+        root = await git_root(Path.cwd())
         if root is None:
             return ActionResult(output="Not inside a git repository.", success=False)
 

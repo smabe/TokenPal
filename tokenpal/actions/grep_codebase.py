@@ -10,26 +10,10 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.util.paths import git_root
 
 _MAX_MATCHES = 100
 _TIMEOUT_S = 10.0
-
-
-async def _git_root(start: Path) -> Path | None:
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-C",
-        str(start),
-        "rev-parse",
-        "--show-toplevel",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    stdout, _ = await proc.communicate()
-    if proc.returncode != 0:
-        return None
-    out = stdout.decode("utf-8", errors="replace").strip()
-    return Path(out) if out else None
 
 
 @register_action
@@ -65,7 +49,7 @@ class GrepCodebaseAction(AbstractAction):
         if rg is None:
             return ActionResult(output="ripgrep (rg) is not installed.", success=False)
 
-        root = await _git_root(Path.cwd()) or Path.cwd()
+        root = await git_root(Path.cwd()) or Path.cwd()
 
         target: Path
         path_arg = kwargs.get("path")
