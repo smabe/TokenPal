@@ -13,6 +13,11 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
 
 ## Work
 - Scope trace: DIRECT — the requested outcome's first tool.
+- Scope trace: ADJACENT, **admitted by explicit operator expansion 2026-09-04** (found at the p1 review, in a file p1 touched). Not required by `find_files`; it rides here because it is the same `rg` surface.
+- `tokenpal/actions/grep_codebase.py` — fix two defects in `execute`:
+  - the argv builds both `--max-count=5` (`:68-71`) and `-m str(_MAX_MATCHES)`; they are the same ripgrep option, the later wins, so the per-file cap is 100, not 5, and one noisy file (a lockfile, a generated module) consumes the whole 100-line budget and starves every other file out. Demonstrated with real `rg` 15.2.0: same argv order as the action builds → 50 lines from one file; with the flags swapped → 5. Keep the intended per-file cap of 5 and the total cap of 100; do not simply delete one flag without deciding which cap each is meant to express.
+  - `:94` appends `"... [capped at 100 matches]"` under `if len(kept) >= _MAX_MATCHES`, so it claims truncation when exactly 100 lines survived and nothing was dropped. Should be `>`.
+  - Add regression tests to the existing `tests/test_actions/test_grep_codebase.py` covering both: the argv contains exactly one per-file-cap flag with the intended value, and a result of exactly `_MAX_MATCHES` lines carries no "capped" suffix.
 - `tokenpal/actions/find_files.py` — new. Shape (proposal):
   ```python
   @register_action
@@ -71,6 +76,7 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
 - `current_platform` is `lru_cache`d (`tokenpal/util/platform.py:9-14`): tests patch `tokenpal.actions.find_files.current_platform`, not `platform.system`.
 
 ## Done criteria
+- `grep_codebase` emits exactly one per-file-cap flag, and a 100-line result carries no "capped" suffix; both pinned by tests in `tests/test_actions/test_grep_codebase.py`.
 - The seven tests above run and pass; `pytest` green; `ruff` and `mypy` clean.
 - Live on this Mac after enabling `find_files` in the `/tools` picker: in `/agent`, "what pdfs did I download in the last week" produces a `find_files` call whose result lists paths under `~/Downloads` with dates, newest first, and no path under a hidden directory or `~/Library`.
 - `grep -n "open(" tokenpal/actions/find_files.py` shows no file read (the tool never opens a result).

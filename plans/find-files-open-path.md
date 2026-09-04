@@ -65,6 +65,7 @@ Two opt-in tools so "find that PDF from this week and open it" works in `/agent`
 - `tests/test_util/__init__.py` — p1 (new) — package marker for the new test directory
 - `tests/test_util/test_paths.py` — p1 (new) — containment and filter tests
 - `tokenpal/actions/find_files.py` — p2 (new), p4 (windows branch calls `windows_search`)
+- `tokenpal/actions/grep_codebase.py` — p1 (import `git_root`), p2 (fix the duplicated per-file-cap flag and the `>=` off-by-one; operator-expanded 2026-09-04)
 - `tokenpal/actions/catalog.py` — p2, p3 — two `LOCAL_SECTION` entries
 - `tests/test_actions/test_catalog.py` — p2, p3 — pinned `LOCAL_SECTION` name set
 - `tests/test_actions/test_find_files.py` — p2 (new), p4 (fallback-on-com_error test)
@@ -101,7 +102,7 @@ Two opt-in tools so "find that PDF from this week and open it" works in `/agent`
 - `ruff check tokenpal/` clean, `mypy tokenpal/ --ignore-missing-imports` zero errors, `pytest` green.
 
 ## Parking lot
-- ADJACENT (found at p1 review, confirmed with real `rg` 15.2.0, NOT filed — awaiting operator disposition): `grep_codebase.py:68-71` passes both `--max-count=5` and `-m 100`; the later wins, so the per-file cap is 100, not 5, and one noisy file starves the result set. Off-by-one at `:94` reports "capped" when exactly 100 survived.
+- ~~ADJACENT: `grep_codebase` duplicated per-file-cap flag + `>=` off-by-one~~ → **admitted into p2 by operator 2026-09-04**; see the p2 shard's Work.
 - ADJACENT (p1 review): `REJECT_PATH` is unanchored for `.env`/`credentials`/`secrets` but end-anchored for `.key`/`.pem`, so under `~/Documents` it false-positives on `Trade Secrets (novel).pdf` and `My Credentials CV.pdf` and blanks their subtree from `find_files` with no explanation. Decide in p2.
 - OPEN QUESTION (p1 review, deferred by the dispatching session): `[paths] allowed_dirs` and `filesystem_pulse.roots` are two user-editable folder lists with the same three defaults (`tokenpal/config/paths.py:28` `default_watch_roots()`). Should `/watch add ~/Projects` make `find_files` see that folder? Kept separate for now — merging couples a watchdog noise knob to a security boundary.
 - ADJACENT: `read_file.py:75` applies the broad `contains_sensitive_term` to paths (same false positives). Out of scope: `read_file` policy is a non-goal.

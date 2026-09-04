@@ -86,7 +86,6 @@ Run these checks before each commit. The simplify skill catches what slips throu
 - **Don't add state nothing reads.** Write the consumer first; if a field has no reader, it's speculative — delete it. Same for action variants in enums (e.g. an `OPEN_MIC` action whose dispatcher branch is empty).
 - **No narrative comments.** Stories about how the code got here ("stage 7 owns ...", "X uses the same number", "we deferred this for the modularity test") belong in the commit message, not the source. Comments only earn space for hidden constraints, surprising invariants, or workarounds for a specific bug a future reader would otherwise undo.
 - **Re-read the diff before commit.** `git diff --staged`, ask "would I write this today?" — delete what fails. Stale TODOs, dead branches, narrative comments, half-finished abstractions all show up here.
-- **Cap stage commits at ~150 lines.** Above that, surface gets too big to hold in head and abstractions written earlier in the same change get reinvented. Split.
 
 Examples killed by the say-what phase 3 simplify pass (commit `909a4e9`): `last_action` field on `VoiceSession`, `OPEN_MIC`/`CLOSE_MIC`/`RUN_ASR` action variants nothing read, three duplicated `register_X_backend` triples (collapsed to `_BackendRegistry[B]`), four duplicated `int16→float32` conversions (collapsed to `pcm_int16_to_float32`), narrative comments referencing stages and external codebases. All of it would have been caught at write time by the rules above.
 
