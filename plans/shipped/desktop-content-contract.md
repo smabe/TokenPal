@@ -38,11 +38,13 @@ p3 shipped 2026-09-03 as `7a21a7a`. **Spec check at p3** — 6/6 Work items evid
 
 **Observable met (macOS).** `tokenpal --validate` on this Mac, no system dialog appeared:
 ```
-  desktop tools (permissions checked for /Users/smabe/projects/windoze/.venv/bin/python3)
+  desktop tools (permissions granted to Orca)
   ✓ Accessibility: granted
   ✓ Screen Recording: granted
 ```
-**Observable PENDING (Windows).** `.\run.ps1 --validate` on the AMD desktop must print `no OS permission grants needed`. p3 committed on the strength of `tests/test_desktop/test_validate.py`, which covers the branch; the row is verified on the box before `/plan ship`, per the author-on-target-host rule. **This is the only outstanding Done criterion in the plan.**
+**Observable WAIVED (Windows).** Operator sign-off 2026-09-03: shipped without it. `tests/test_desktop/test_validate.py` covers the branch and pins that the probes are never called off Darwin; the real row is carried into #52 (comment on that issue) for whenever the tool gets a Windows path. Original criterion follows.
+
+**~~Observable PENDING (Windows)~~.** `.\run.ps1 --validate` on the AMD desktop must print `no OS permission grants needed`. p3 committed on the strength of `tests/test_desktop/test_validate.py`, which covers the branch; the row is verified on the box before `/plan ship`, per the author-on-target-host rule. **This is the only outstanding Done criterion in the plan.**
 
 All three phases shipped: p1 `660e8c3`, p2 `3a6f1e4` + `711845e`, p3 `7a21a7a`; plus `b3c383d` clearing the ruff/mypy baseline to zero at the operator's direction.
 
@@ -134,6 +136,23 @@ Research 2026-09-02 at 1de1d43. Sinks a user turn or tool result reaches today, 
 - `pytest`, `ruff check tokenpal/`, `mypy tokenpal/ --ignore-missing-imports` green at the end of each phase. Operator decision 2026-09-02: the pre-existing baseline (10 ruff `N802`, 38 mypy) is cleaned in its own commit ahead of p1 rather than the criterion being relaxed, so "green" means zero from p1 onward.
 
 ## Parking lot
+
+**Dispositioned at ship 2026-09-03.** Filed as issues:
+- **#60** — `register_action` silently overwrites on duplicate `action_name`.
+- **#61** — CLAUDE.md's `/ask` privacy claims are false (no first-use warning; queries *are* persisted when `[chat_log] persist` is on).
+- **#62** — `/idle_tools roll` raises `AttributeError` on `Brain._generate_tool_riff`, left by `9cefbc3`. The repo's only remaining mypy error; operator deprioritised the fix, filed so it is not mistaken for new breakage.
+
+Carried into **#52** as a comment (each goes live with the first marked tool): `discover_actions` swallowing `ImportError` so the contract test fails open per host; `_imported_modules` failing open the same way; `http_backend.py:448` logging raw tool-call arguments below the agent layer; `permissions.py` conflating a missing pyobjc with a raising probe; and the unverified Windows `--validate` row.
+
+Resolved at ship: the `--validate` header naming `sys.executable` rather than the responsible parent process — fixed in `f20ab24`, now names `TERM_PROGRAM` like the microphone row.
+
+Dropped, with reason:
+- **Unify the three untrusted-text envelopes.** They now differ in tag *and* in scrub predicate (`scrub_body` vs `scrub_content_body`); a shared helper would need three shapes for no correctness gain.
+- **`_keyboard_bus` reusing `desktop.permissions.accessibility_granted`.** Same call, different purpose (warmup vs status); two lines of duplication.
+- **Research tools forwarding conversation text to the cloud.** Pre-existing, consented, and an explicit Non-goal of this plan.
+
+### Original entries
+
 - **`discover_actions` swallows `ImportError`, so the contract test fails open per host** (`tokenpal/actions/registry.py:33-34`). A marked tool whose module imports `AppKit`/`Quartz` at module scope is silently unregistered on Linux/Windows CI — `_MARKED` is empty and all parametrized cases report "skipped (empty parameter set)", visually identical to a healthy run. #52's selection reader will have exactly that import shape. Fix belongs with #52: either assert `_MARKED` is non-empty once the first tool ships, or have the registry record import failures and assert none.
 - **`action_name` collisions are silent** (`tokenpal/actions/registry.py:20`, a plain dict assignment). Two modules registering the same name — a plausible `darwin_impl`/`windows_impl` split, matching the sense convention — means only the last-imported one is ever contract-tested. Cheap fix: raise on duplicate registration.
 - **`--validate`'s desktop header names `sys.executable`, but macOS TCC attributes grants to the responsible parent process.** The audio block in the same file names `TERM_PROGRAM` for that reason. Both grants read `True` here for a bare `python -c`, consistent with inheritance from the terminal rather than a grant on `python3`. A user who reads "granted for .../python3" and later launches from a different terminal can get a different answer. Operator decision before #52 ships; the row was specified verbatim by the p3 shard so it was not changed unilaterally.
