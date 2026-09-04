@@ -5,10 +5,10 @@ raise a system dialog. ``CGRequestScreenCaptureAccess`` — the prompting
 sibling of the preflight call below — is deliberately never called from
 this process.
 
-The grant attaches to the *host binary*, which is the running interpreter
-(or the app bundle), not "tokenpal". Callers that surface these answers to a
-user should name ``sys.executable`` so the user knows which entry to look
-for in System Settings.
+The grant attaches to the *responsible* process, which under a terminal is
+the terminal app rather than the interpreter. Callers that surface these
+answers to a user should name ``responsible_host()`` so the user knows which
+entry to look for in System Settings.
 
 pyobjc is imported inside each function: the bindings cost real time to load
 and normal startup must not pay for a check only ``--validate`` and failed
@@ -18,9 +18,23 @@ content reads need.
 from __future__ import annotations
 
 import logging
+import os
 import platform
+import sys
 
 log = logging.getLogger(__name__)
+
+
+def responsible_host() -> str:
+    """Name of the process a user must grant these permissions to.
+
+    macOS attributes the grants to the responsible parent process
+    (Terminal.app, iTerm2, Cursor, ...), not the python interpreter, so
+    naming "tokenpal" sends the user hunting in the wrong place.
+    """
+    if platform.system() == "Darwin":
+        return os.environ.get("TERM_PROGRAM") or sys.executable
+    return sys.executable
 
 
 def accessibility_granted() -> bool | None:

@@ -246,20 +246,14 @@ def _check_desktop_permissions(plat: str) -> None:
     tool needs one yet.
     """
     print()
-    if plat == "Darwin":
-        # Same reason as the microphone row above: macOS attributes these
-        # grants to the responsible parent process, not the interpreter, so
-        # naming python sends the user hunting in the wrong place.
-        host = os.environ.get("TERM_PROGRAM") or sys.executable
-    else:
-        host = sys.executable
+    from tokenpal.desktop import permissions
+
+    host = permissions.responsible_host()
     print(f"  {_BOLD}desktop tools{_RESET} (permissions granted to {host})")
 
     if plat != "Darwin":
         print(f"  {_CHECK} no OS permission grants needed")
         return
-
-    from tokenpal.desktop import permissions
 
     for label, granted, settings_path in (
         (

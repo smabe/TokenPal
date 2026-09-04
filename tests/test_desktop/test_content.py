@@ -156,3 +156,12 @@ def test_to_prompt_block_neutralizes_an_obfuscated_closing_tag() -> None:
     block = content.to_prompt_block()
     assert block.count("</desktop_content>") == 1
     assert block.endswith("</desktop_content>")
+
+
+def test_refuse_if_sensitive_reads_the_window_title_for_browsers() -> None:
+    """"Safari" never matches the app list; a banking page in it must."""
+    result = refuse_if_sensitive("Safari", "Log in - Venmo")
+    assert result is not None
+    assert "Venmo" not in result.output
+    assert refuse_if_sensitive("Safari", "Apple") is None
+    assert refuse_if_sensitive("Safari", "Keep calm and carry on") is None

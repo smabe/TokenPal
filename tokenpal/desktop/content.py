@@ -5,9 +5,10 @@ else. A tool that reads it must, in this order:
 
 1. call ``require_consent()`` first, before any argument validation, and
    return its ``ActionResult`` when it is not ``None``;
-2. read from the OS;
-3. call ``refuse_if_sensitive(source_app)`` and return its result when it is
-   not ``None``;
+2. call ``refuse_if_sensitive(source_app, window_title)`` as soon as the app
+   name is known — before the OS read when the window list gives it, after
+   otherwise — and return its result when it is not ``None``;
+3. read from the OS;
 4. wrap the text with ``DesktopContent.to_prompt_block()`` and put only that
    into the prompt.
 
@@ -32,7 +33,10 @@ from pathlib import Path
 from typing import Literal
 
 from tokenpal.actions.base import ActionResult, consent_error
-from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.brain.personality import (
+    contains_sensitive_content_term,
+    contains_sensitive_term,
+)
 from tokenpal.config.consent import Category, has_consent
 from tokenpal.util.text_guards import neutralize_envelope_tags
 from tokenpal.util.untrusted_text import scrub_content_body
@@ -86,8 +90,13 @@ class DesktopContent:
         )
 
 
-def refuse_if_sensitive(source_app: str) -> ActionResult | None:
-    """Error result when *source_app* matches SENSITIVE_APPS, else None.
+def refuse_if_sensitive(source_app: str, window_title: str = "") -> ActionResult | None:
+    """Error result when *source_app* matches SENSITIVE_APPS, or
+    *window_title* names an identity-critical service, else None.
+
+    The title check exists for browsers: "Safari" is never a sensitive app,
+    but a banking or password-manager page in it is, and the title is the only
+    signal. It uses the narrower content-term list because titles are prose.
 
     The message never names the app: the result is returned to the model as
     the tool result, and the repo substitutes a generic label wherever a
@@ -95,7 +104,9 @@ def refuse_if_sensitive(source_app: str) -> ActionResult | None:
     ``senses/process_heat``). For a marked tool the trace line is already
     unpersisted, so this is defence in depth.
     """
-    if not contains_sensitive_term(source_app):
+    if not (
+        contains_sensitive_term(source_app) or contains_sensitive_content_term(window_title)
+    ):
         return None
     return ActionResult(
         output="Won't read from that app: it's on the sensitive-app list.",

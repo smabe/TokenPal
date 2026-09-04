@@ -8,6 +8,7 @@ from typing import Any
 from tokenpal.senses.app_awareness._common import sanitize_browser_title
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
+from tokenpal.util.macos_windows import layer0_windows
 
 log = logging.getLogger(__name__)
 
@@ -42,32 +43,14 @@ class MacOSAppAwareness(AbstractSense):
         if not self.enabled:
             return None
 
-        import Quartz
-
-        # Use Quartz window list instead of NSWorkspace.frontmostApplication()
-        # — NSWorkspace is unreliable from background threads and can get stuck
-        # returning the host terminal's app.  The Quartz list is ordered
-        # front-to-back, so the first normal-level window is the foreground app.
+        # The Quartz window list rather than NSWorkspace.frontmostApplication():
+        # NSWorkspace is unreliable from background threads and can get stuck
+        # returning the host terminal's app.
         app_name = "Unknown"
         window_title = ""
-
-        windows = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID,
-        )
-        if windows:
-            for w in windows:
-                # Skip windows that aren't normal app windows (menus, panels, etc.)
-                layer = w.get("kCGWindowLayer", 999)
-                if layer != 0:
-                    continue
-                owner = w.get("kCGWindowOwnerName", "")
-                if not owner or owner in ("Window Server", "Dock"):
-                    continue
-                app_name = owner
-                raw_title = w.get("kCGWindowName", "") or ""
-                window_title = sanitize_browser_title(app_name, raw_title, _BROWSERS)
-                break
+        for _pid, owner, raw_title, _layer in layer0_windows()[:1]:
+            app_name = owner
+            window_title = sanitize_browser_title(app_name, raw_title, _BROWSERS)
 
         if window_title:
             summary = f'App: {app_name}, window title: "{window_title}"'

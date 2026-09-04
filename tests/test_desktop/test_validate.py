@@ -87,6 +87,8 @@ def test_darwin_header_names_the_responsible_process(capsys, monkeypatch) -> Non
         "tokenpal.desktop.permissions.accessibility_granted", return_value=True
     ), mock.patch(
         "tokenpal.desktop.permissions.screen_recording_granted", return_value=True
+    ), mock.patch(
+        "tokenpal.desktop.permissions.platform.system", return_value="Darwin"
     ):
         _check_desktop_permissions("Darwin")
     header = capsys.readouterr().out.splitlines()[1]
@@ -102,6 +104,8 @@ def test_darwin_header_falls_back_when_term_program_is_unset(
         "tokenpal.desktop.permissions.accessibility_granted", return_value=True
     ), mock.patch(
         "tokenpal.desktop.permissions.screen_recording_granted", return_value=True
+    ), mock.patch(
+        "tokenpal.desktop.permissions.platform.system", return_value="Darwin"
     ):
         _check_desktop_permissions("Darwin")
     assert sys.executable in capsys.readouterr().out.splitlines()[1]
