@@ -58,6 +58,7 @@ from tokenpal.config.senses_writer import (
 )
 from tokenpal.config.tools_writer import set_enabled_tools
 from tokenpal.config.ui_state import UiState, load_ui_state, save_ui_state
+from tokenpal.desktop.tasks import DesktopTask
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.cloud_backend import ALLOWED_MODELS
 from tokenpal.llm.registry import backend_config, discover_backends, resolve_backend
@@ -97,6 +98,19 @@ def make_agent_log(overlay: AbstractOverlay) -> LogFn:
         overlay.schedule_callback(_emit)
 
     return _agent_log
+
+
+def make_desktop_task_command(
+    brain: Brain, task: DesktopTask,
+) -> Callable[[str], CommandResult]:
+    """Handler for /proofread and /explain: enqueue and say nothing. The reply
+    reaches the pane through the brain, not through a bubble — every bubble is
+    persisted."""
+    def _cmd(args: str) -> CommandResult:
+        brain.submit_desktop_task(task, args.strip() or None)
+        return CommandResult("")
+
+    return _cmd
 
 
 def _apply_font_change(
@@ -1724,6 +1738,8 @@ def main() -> None:
     dispatcher.register("tools", _cmd_tools)
     dispatcher.register("consent", _cmd_consent)
     dispatcher.register("agent", _cmd_agent)
+    dispatcher.register("proofread", make_desktop_task_command(brain, "proofread"))
+    dispatcher.register("explain", make_desktop_task_command(brain, "explain"))
     dispatcher.register("research", _cmd_research)
     dispatcher.register("refine", _cmd_refine)
     dispatcher.register("followup", _cmd_followup)

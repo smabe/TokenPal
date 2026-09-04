@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     from tokenpal.audio.pipeline import AudioPipeline
     from tokenpal.ui.buddy_environment import EnvironmentSnapshot
 
-from tokenpal.actions.base import AbstractAction
+from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.audio.types import InputSource
 from tokenpal.brain.agent import AgentRunner, AgentSession, LogFn, fmt_args, noop_log
@@ -74,6 +74,9 @@ from tokenpal.config.schema import (
     SessionSummaryConfig,
     TargetLatencyConfig,
 )
+from tokenpal.desktop.content import DesktopContent, require_consent
+from tokenpal.desktop.selected_text import capture_selection
+from tokenpal.desktop.tasks import DesktopTask, build_task_prompt, task_max_tokens
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.util.timefmt import format_age
@@ -312,6 +315,10 @@ class Brain:
         self._research_queue: asyncio.Queue[str] = asyncio.Queue()
         self._refine_queue: asyncio.Queue[str] = asyncio.Queue()
         self._followup_queue: asyncio.Queue[str] = asyncio.Queue()
+        # (task, inline text); None = read the source app's selection.
+        self._desktop_task_queue: asyncio.Queue[tuple[DesktopTask, str | None]] = (
+            asyncio.Queue()
+        )
         # Physical-reaction events (overlay → brain). Items are "poke"/"shake".
         self._buddy_event_queue: asyncio.Queue[str] = asyncio.Queue()
         # Last time a buddy-reaction bubble was emitted — 5s cooldown so
@@ -725,42 +732,14 @@ class Brain:
                 self._sync_audio_sensitive_state(snapshot)
 
                 # Process any pending user input
-                while not self._user_input_queue.empty():
-                    try:
-                        user_msg, user_src = self._user_input_queue.get_nowait()
-                        await self._handle_user_input(user_msg, user_src)
-                    except asyncio.QueueEmpty:
-                        break
-
-                # Process any pending agent goals (one at a time — agent runs
-                # are long-lived and suppress observations while in flight).
-                while not self._agent_goal_queue.empty():
-                    try:
-                        goal = self._agent_goal_queue.get_nowait()
-                        await self._handle_agent_goal(goal)
-                    except asyncio.QueueEmpty:
-                        break
-
-                while not self._research_queue.empty():
-                    try:
-                        question = self._research_queue.get_nowait()
-                        await self._handle_research(question)
-                    except asyncio.QueueEmpty:
-                        break
-
-                while not self._refine_queue.empty():
-                    try:
-                        follow_up = self._refine_queue.get_nowait()
-                        await self._handle_refine(follow_up)
-                    except asyncio.QueueEmpty:
-                        break
-
-                while not self._followup_queue.empty():
-                    try:
-                        followup_q = self._followup_queue.get_nowait()
-                        await self._handle_followup(followup_q)
-                    except asyncio.QueueEmpty:
-                        break
+                await self._drain(self._user_input_queue, lambda i: self._handle_user_input(*i))
+                # Agent goals run one at a time — they are long-lived and
+                # suppress observations while in flight.
+                await self._drain(self._agent_goal_queue, self._handle_agent_goal)
+                await self._drain(self._desktop_task_queue, lambda i: self._handle_desktop_task(*i))
+                await self._drain(self._research_queue, self._handle_research)
+                await self._drain(self._refine_queue, self._handle_refine)
+                await self._drain(self._followup_queue, self._handle_followup)
 
                 # Drain physical-reaction events (click/shake). Coalesce so
                 # a rapid click-burst produces at most one bubble per tick —
@@ -1793,6 +1772,18 @@ class Brain:
             log.warning("Action '%s' failed: %s", tc.name, e)
             return f"Error: {e}"
 
+    @staticmethod
+    async def _drain(
+        queue: asyncio.Queue[_QT], handler: Callable[[_QT], Awaitable[object]],
+    ) -> None:
+        """Handle every item already queued, in order, and stop."""
+        while not queue.empty():
+            try:
+                item = queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            await handler(item)
+
     def _post_threadsafe(
         self, queue: asyncio.Queue[_QT], item: _QT, label: str,
     ) -> None:
@@ -1810,6 +1801,11 @@ class Brain:
 
     def submit_agent_goal(self, goal: str) -> None:
         self._post_threadsafe(self._agent_goal_queue, goal, "agent goal")
+
+    def submit_desktop_task(self, task: DesktopTask, text: str | None) -> None:
+        self._post_threadsafe(
+            self._desktop_task_queue, (task, text), "desktop task",
+        )
 
     def submit_research_question(self, question: str) -> None:
         self._post_threadsafe(self._research_queue, question, "research question")
@@ -1864,9 +1860,7 @@ class Brain:
             )
             return AgentSession(goal=goal, stopped_reason=AgentStopReason.UNAVAILABLE)
 
-        snapshot = self._context.snapshot()
-        if self._personality.check_sensitive_app(snapshot):
-            self._ui_callback("Not now — sensitive window is open.")
+        if self._refuse_if_sensitive_window():
             return AgentSession(goal=goal, stopped_reason=AgentStopReason.SENSITIVE)
 
         runner = AgentRunner(
@@ -1923,18 +1917,72 @@ class Brain:
         final = session.final_text.strip() or summary
         self._agent.log_callback(f"= {summary}")
         if session.desktop_content:
-            if session.final_text.strip():
-                self._agent.log_callback(final, persist=False)
-                self._ui_callback(await self._desktop_done_line())
-            else:
-                # No answer was produced — aborted, or the model returned an
-                # empty final turn. The summary is already on screen, so
-                # promising an answer in the chat log would be a lie.
-                self._ui_callback(_DESKTOP_ABORTED_LINE)
+            await self._deliver_desktop_reply(session.final_text, self._agent.log_callback)
         else:
             self._ui_callback(final)
         self._last_comment_time = time.monotonic()
         return session
+
+    async def _deliver_desktop_reply(self, reply: str, log: Callable[..., None]) -> None:
+        """Unpersisted reply into the chat pane, then the persona bubble. An
+        empty *reply* (aborted run, empty final turn) gets the aborted line
+        instead — promising an answer in the chat log would be a lie."""
+        reply = reply.strip()
+        if not reply:
+            self._ui_callback(_DESKTOP_ABORTED_LINE)
+            return
+        log(reply, persist=False)
+        self._ui_callback(await self._desktop_done_line())
+
+    async def _handle_desktop_task(
+        self, task: DesktopTask, text: str | None,
+    ) -> None:
+        """Run one /proofread or /explain: read (or take the inline text),
+        prompt the LLM, deliver the reply to the chat pane unpersisted."""
+        if self._log_callback is None:
+            self._ui_callback("No chat log on this overlay — nothing to deliver into.")
+            return
+
+        if self._refuse_if_sensitive_window():
+            return
+
+        if text is None:
+            refusal = require_consent()
+            if refusal is not None:
+                self._ui_callback(refusal.output)
+                return
+            captured = await asyncio.to_thread(capture_selection)
+            if isinstance(captured, ActionResult):
+                self._ui_callback(captured.output)
+                return
+            content = captured.content
+            status = f"> {task}: {len(content.text)} chars from {content.source_app}"
+            if captured.whole_field:
+                status += " (whole field — nothing was selected)"
+            if captured.truncated:
+                status += " (truncated)"
+        else:
+            content = DesktopContent(text, "TokenPal", "typed")
+            status = f"> {task}: {len(text)} chars typed"
+
+        self._log_callback(status)
+
+        prompt = build_task_prompt(task, content.to_prompt_block())
+        reply = ""
+        try:
+            response = await self._llm.generate(
+                prompt, max_tokens=task_max_tokens(len(content.text)),
+            )
+            reply = response.text
+            if reply.strip() and response.finish_reason == "length":
+                reply += "\n… (cut off at the reply limit)"
+        except Exception:
+            log.exception("Desktop task %s failed", task)
+        # The generate call can take tens of seconds; a sensitive window
+        # opened meanwhile must not have the reply landed next to it.
+        if not self._refuse_if_sensitive_window():
+            await self._deliver_desktop_reply(reply, self._log_callback)
+        self._last_comment_time = time.monotonic()
 
     async def _desktop_done_line(self) -> str:
         """Persona line announcing a finished desktop-content run. The prompt
@@ -1951,6 +1999,14 @@ class Brain:
             log.exception("Desktop-done line generation failed")
             return _DESKTOP_DONE_FALLBACK
         return filtered or _DESKTOP_DONE_FALLBACK
+
+    def _refuse_if_sensitive_window(self) -> bool:
+        """Bubble the standing refusal and report True when a sensitive app is
+        in the foreground; the explicit-command handlers check this first."""
+        if not self._sensitive_check():
+            return False
+        self._ui_callback("Not now — sensitive window is open.")
+        return True
 
     def _sensitive_check(self) -> bool:
         """Runner-facing predicate — re-check on every agent step."""
@@ -1972,9 +2028,7 @@ class Brain:
         the agent log sink (same stream — trace lines, not speech bubbles)."""
         log_cb = self._agent.log_callback or noop_log
 
-        snapshot = self._context.snapshot()
-        if self._personality.check_sensitive_app(snapshot):
-            self._ui_callback("Not now — sensitive window is open.")
+        if self._refuse_if_sensitive_window():
             return ResearchSession(
                 question=question, stopped_reason=ResearchStopReason.UNAVAILABLE
             )

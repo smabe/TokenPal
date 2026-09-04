@@ -21,6 +21,8 @@ from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import AgentBridge, Brain
 from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.config.schema import AgentConfig
+from tokenpal.desktop.content import DesktopContent
+from tokenpal.desktop.selected_text import SelectedText
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.web_search.client import SearchResult
 
@@ -182,10 +184,11 @@ async def allow_confirm(_name: str, _args: dict[str, Any]) -> bool:
 def agent_brain(
     llm: AbstractLLMBackend, actions: list[AbstractAction], memory: MemoryStore,
 ) -> tuple[Brain, list[str]]:
-    """A Brain wired for ``_handle_agent_goal`` whose trace sink mirrors the
-    real one: every ``persist=True`` line lands in *memory*'s chat log, so
-    ``assert_no_leak(..., memory=memory)`` measures the same table the app
-    writes. Returns the brain and the captured trace buffer."""
+    """A Brain whose trace sink mirrors the real one: every ``persist=True``
+    line lands in *memory*'s chat log, so ``assert_no_leak(..., memory=memory)``
+    measures the same table the app writes. The same sink is both the agent
+    bridge's log and ``Brain(log_callback=...)``, as ``app.py`` wires it.
+    Returns the brain and the captured trace buffer."""
     buf, capture = capture_logs()
 
     def _log(text: str, *, markup: bool = False, url: str | None = None,
@@ -203,5 +206,17 @@ def agent_brain(
         agent_bridge=AgentBridge(
             config=AgentConfig(), log_callback=_log, confirm_callback=allow_confirm,
         ),
+        log_callback=_log,
     )
     return brain, buf
+
+
+def selected_text(
+    text: str, *, whole_field: bool = False, truncated: bool = False,
+) -> SelectedText:
+    """A successful read of *text* from TextEdit."""
+    return SelectedText(
+        content=DesktopContent(text, "TextEdit", "selection"),
+        whole_field=whole_field,
+        truncated=truncated,
+    )

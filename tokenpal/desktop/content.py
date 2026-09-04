@@ -41,7 +41,8 @@ from tokenpal.config.consent import Category, has_consent
 from tokenpal.util.text_guards import neutralize_envelope_tags
 from tokenpal.util.untrusted_text import scrub_content_body
 
-ContentKind = Literal["selection", "document", "ocr"]
+# "typed": inline text given after a slash command.
+ContentKind = Literal["selection", "document", "ocr", "typed"]
 
 _ENVELOPE_TAG = "desktop_content"
 # source_app is an OS-supplied window-owner name and kind may reach us from a

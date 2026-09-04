@@ -21,6 +21,7 @@ from tests._helpers import (
     agent_brain,
     assert_no_leak,
     ok_response,
+    selected_text,
     tool_call,
     tool_call_response,
 )
@@ -28,20 +29,11 @@ from tokenpal.actions.read_selection import _MAX_CHARS, ReadSelectionAction
 from tokenpal.brain.agent import _MESSAGE_RESULT_CAP
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.personality import SENSITIVE_CONTENT_TERMS
-from tokenpal.desktop.content import DesktopContent, refuse_if_sensitive
-from tokenpal.desktop.selected_text import SelectedText
+from tokenpal.desktop.content import refuse_if_sensitive
 
 FIXTURE = "SECRET-FIXTURE-7731 and the rest of the paragraph"
 GOAL = "tell me what I selected"
 PERSONA_LINE = "Peeked and stashed it in the log for you."
-
-
-def _selected(text: str) -> SelectedText:
-    return SelectedText(
-        content=DesktopContent(text, "TextEdit", "selection"),
-        whole_field=False,
-        truncated=False,
-    )
 
 
 @pytest.fixture(autouse=True)
@@ -73,7 +65,7 @@ async def test_a_sensitive_source_app_refusal_is_returned_unchanged(
 async def test_a_successful_read_becomes_the_envelope_and_nothing_else(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_capture(monkeypatch, _selected(FIXTURE))
+    _stub_capture(monkeypatch, selected_text(FIXTURE))
 
     result = await ReadSelectionAction({}).execute()
 
@@ -91,7 +83,7 @@ async def test_the_worst_case_envelope_fits_the_runners_result_cap(
     still fit under the runner's cap. Derived from the live term list so a
     shorter term added later fails here instead of in the runner."""
     shortest = min(SENSITIVE_CONTENT_TERMS, key=len)
-    _stub_capture(monkeypatch, _selected((f"{shortest}\n" * 400)[:_MAX_CHARS]))
+    _stub_capture(monkeypatch, selected_text((f"{shortest}\n" * 400)[:_MAX_CHARS]))
 
     result = await ReadSelectionAction({}).execute()
 
@@ -103,7 +95,7 @@ async def test_an_agent_run_delivers_the_selection_without_persisting_it(
     tmp_path: Path, caplog: Any, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     caplog.set_level(logging.DEBUG)
-    _stub_capture(monkeypatch, _selected(FIXTURE))
+    _stub_capture(monkeypatch, selected_text(FIXTURE))
     memory = MemoryStore(tmp_path / "m.db")
     memory.setup()
     memory.set_chat_log_max_persisted(50)
@@ -118,7 +110,7 @@ async def test_an_agent_run_delivers_the_selection_without_persisting_it(
         session = await brain._handle_agent_goal(GOAL)
 
         assert session.desktop_content is True
-        envelope_chars = len(_selected(FIXTURE).content.to_prompt_block())
+        envelope_chars = len(selected_text(FIXTURE).content.to_prompt_block())
         assert f"← [desktop content: {envelope_chars} chars, not shown] [unpersisted]" in buf
         assert f"You selected {FIXTURE}. [unpersisted]" in buf
         assert_no_leak(FIXTURE, lines=buf, caplog_text=caplog.text, memory=memory)
