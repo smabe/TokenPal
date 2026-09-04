@@ -17,6 +17,7 @@ def test_default_section_has_four_entries() -> None:
 def test_local_section_lists_all_phase1_tools() -> None:
     assert {e.name for e in LOCAL_SECTION.entries} == {
         "read_file",
+        "find_files",
         "grep_codebase",
         "git_log",
         "git_diff",

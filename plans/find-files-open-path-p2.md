@@ -18,6 +18,12 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
   - the argv builds both `--max-count=5` (`:68-71`) and `-m str(_MAX_MATCHES)`; they are the same ripgrep option, the later wins, so the per-file cap is 100, not 5, and one noisy file (a lockfile, a generated module) consumes the whole 100-line budget and starves every other file out. Demonstrated with real `rg` 15.2.0: same argv order as the action builds → 50 lines from one file; with the flags swapped → 5. Keep the intended per-file cap of 5 and the total cap of 100; do not simply delete one flag without deciding which cap each is meant to express.
   - `:94` appends `"... [capped at 100 matches]"` under `if len(kept) >= _MAX_MATCHES`, so it claims truncation when exactly 100 lines survived and nothing was dropped. Should be `>`.
   - Add regression tests to the existing `tests/test_actions/test_grep_codebase.py` covering both: the argv contains exactly one per-file-cap flag with the intended value, and a result of exactly `_MAX_MATCHES` lines carries no "capped" suffix.
+- Scope trace: ADJACENT, **admitted by explicit operator expansion 2026-09-04** at the p2 review gate. The subprocess-with-timeout pattern reached five copies; the repo rule says refactor once duplication has two concrete consumers.
+- `tokenpal/util/proc.py` — new. `async def run_capture(argv: Sequence[str], *, timeout_s: float) -> tuple[int, bytes, bytes]`. Raises `TimeoutError` after killing **and reaping** the child; lets spawn failures propagate as `OSError`.
+- `tokenpal/brain/git_nudge.py` — `_git`/`_git_exit_code` call `run_capture`; drop the local proc plumbing and the comment claiming the duplication was deliberate.
+- `tokenpal/senses/git/git_sense.py` — `_git`/`_is_dirty` call `run_capture`.
+- `tokenpal/actions/git_log.py` — `_run_git` calls `run_capture`, keeping its `(124, b"", b"timeout")` contract.
+- `tests/test_util/test_proc.py` — new. Streams and returncode, non-zero exit reported not raised, missing binary raises `OSError`, timeout raises after kill+reap.
 - `tokenpal/actions/find_files.py` — new. Shape (proposal):
   ```python
   @register_action
@@ -56,6 +62,28 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
   7. registration: `find_files` is absent from `DEFAULT_TOOLS` and present in `LOCAL_SECTION` (the privacy-contract test already asserts catalog parity, `tests/test_desktop/test_privacy_contract.py:314-319`; this case just names the opt-in intent).
 
 ## Decisions & findings
+
+### Shipped at 2026-09-04. Worker + review findings
+
+**Worker deviations (all reported, all accepted):** `_run_backend`'s 6th parameter is the result `limit`, not a candidate cap; the plan's `plat: str` Locked decision was kept over the conflicting "only place `current_platform()` is consulted" Done criterion, so platform is read once in `execute` and branched on only in `_run_backend`; single-clause Spotlight kind predicates are parenthesised uniformly (verified to parse).
+
+**Defects found by review and fixed here, each confirmed by probe:**
+- **The two backends disagreed on what a kind IS.** `public.text` is the UTI ancestor of `public.source-code`, so `kind="document"` returned `.py`/`.json` on macOS while `_KIND_EXTS` filed those under `code` — a per-platform behavioural split with no observer, since each test fakes one backend. `_KIND_EXTS` is now the authority, applied in `_post_filter` for both backends; `_KIND_TREES` is demoted to an index-side prefilter and says so.
+- **"Newest first" was false on a broad query.** Both backends emit in index/walk order, so sorting after truncation ranks an arbitrary slice; `query="report"` returns 3,914 Spotlight hits against a real `~/Downloads`. `_walk` now keeps a bounded min-heap (`limit * _WALK_RANK_SLACK`, slack because `_post_filter` drops after ranking) and ranks globally; the cap moved into `_spotlight` as `_SPOTLIGHT_CANDIDATE_CAP`, documented as mdfind's limitation rather than a shared property.
+- **The kind gate read the wrong path.** It tested the unresolved candidate's suffix while the tool emits the resolved target, so a `report.pdf` symlink to a `.md` answered a `kind="pdf"` search with the `.md` path. Now gated on `resolved.suffix`.
+- **An mdfind failure read as "no matches".** `proc.returncode` was never checked and only `FileNotFoundError` fell back to the walk. A non-zero exit now raises and drops to the walk. Note `TimeoutError` subclasses `OSError`, so it is re-raised explicitly ahead of the fallback — broadening the catch without that silently swallowed timeouts (the existing test caught it).
+- **A huge first root hid every later root.** `entries` and the deadline were global across the `for root in roots` loop, so exhausting the budget in `~/Documents` meant `~/Desktop` and `~/Downloads` were never opened. The entry budget is now per root; the wall-clock deadline stays global.
+- **Wildcards meant different things per backend.** mdfind globs `*`/`?`; the walk compares them literally. Both now search the wildcard-stripped literal.
+- **`limit: null` was the only optional argument that refused.** `kind` and `modified_within` tolerated an explicit JSON null; a local model emitting `{"limit": null}` got a refusal. Fixed.
+
+**Operator decisions at the p2 review gate (2026-09-04):**
+1. **Content oracle accepted.** The Spotlight predicate's `kMDItemTextContent` clause means a query can match a file by its *contents* and return the path — probed: a file named `notes.txt` containing `zqxwvunique` is returned by `query="zqxwvunique"`. The tool keeps no `reads_desktop_content` marker and its results persist. Recorded in `CLAUDE.md`'s Privacy section so the contract stops reading as if the marked tier is the only content path.
+2. **Empty `allowed_dirs` disables the tools** (see the p1 shard).
+3. **The subprocess-with-timeout duplication was extracted across all five sites**, not filed: `tokenpal/util/proc.py::run_capture`, now used by `git_log`, `grep_codebase`, `git_nudge`, `git_sense` and `find_files`. It fixed a latent bug on the way — `git_log._run_git` killed on timeout without reaping, leaking a zombie.
+
+**Unresolved flake, observed once:** `tests/test_brain/test_tool_loop.py::test_reenabling_tool_calling_keeps_desktop_tools_out_of_conversation` failed once during a full-suite run at this phase's tip (`assert brain._tool_calling_enabled is True` → False), then passed in isolation and in **15 consecutive full-suite runs** afterwards. It also passes at HEAD in a clean worktree, and the suite has no order randomiser, so the same order both failed and passed. Not reproduced, cause unknown, not demonstrably caused by this diff — recorded so the next person who sees it knows it is the second sighting, not the first.
+
+**Known and accepted, not defects of this phase:** a case-mismatched `allowed_dirs` entry (`~/documents`) makes the Spotlight backend return nothing on macOS while the walk works, because mdfind emits canonically-cased paths and POSIX containment is strict — this is p1's locked case policy and `config.default.toml` warns about it. `GitSense` has no test coverage in the suite (`grep -rn GitSense tests/` is empty), so its migration was verified by a live probe instead: `_git` returns branch and subject, a bogus subcommand returns `""`, `_is_dirty` is True on a dirty tree, `poll()` reads "On branch main, uncommitted changes".
 ### Decision: one escaped predicate over `-name`  *(status: active)*
 - **Rationale:** `-name` is injection-safe (argv) but cannot express `name OR content`; the escaped predicate was probed against a literal `"` in the query and matched only the target.
 - **Alternatives considered:** two `mdfind` invocations merged in Python — double the subprocess cost for no gain.

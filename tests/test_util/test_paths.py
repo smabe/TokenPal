@@ -219,3 +219,14 @@ def test_path_is_sensitive_rejects_key_material_and_password_managers(rel: str) 
 @pytest.mark.parametrize("rel", ["notes.keynote", "monkey-photos/a.jpg", "hockey.pdf"])
 def test_path_is_sensitive_does_not_false_match_ordinary_extensions(rel: str) -> None:
     assert path_is_sensitive(rel) is False
+
+
+async def test_empty_allowed_dirs_is_opt_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Emptying the config list must disable the tools, not fall back to the repo."""
+
+    async def real_looking_git_root(_start: Path) -> Path | None:
+        return Path.cwd()
+
+    monkeypatch.setattr(paths, "git_root", real_looking_git_root)
+
+    assert await allowed_roots([]) == []

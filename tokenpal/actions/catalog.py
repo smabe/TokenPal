@@ -54,6 +54,11 @@ LOCAL_SECTION = CatalogSection(
     description="Power-user tools that read local state (no network).",
     entries=(
         CatalogEntry("read_file", "Read a git-tracked file, capped at 200KB.", kind="local"),
+        CatalogEntry(
+            "find_files",
+            "Find files under [paths] allowed_dirs by name; newest first, never contents.",
+            kind="local",
+        ),
         CatalogEntry("grep_codebase", "Search the current repo with ripgrep.", kind="local"),
         CatalogEntry("git_log", "Show recent commits.", kind="local"),
         CatalogEntry("git_diff", "Show the current diff, capped at 50KB.", kind="local"),

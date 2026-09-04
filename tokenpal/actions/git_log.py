@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
+from tokenpal.util.proc import run_capture
 
 _LOG_LIMIT_CAP = 50
 _DIFF_MAX_BYTES = 50 * 1024
@@ -16,20 +16,10 @@ _TIMEOUT_S = 10.0
 
 
 async def _run_git(args: list[str]) -> tuple[int, bytes, bytes]:
-    proc = await asyncio.create_subprocess_exec(
-        "git",
-        "-C",
-        str(Path.cwd()),
-        *args,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_S)
+        return await run_capture(["git", "-C", str(Path.cwd()), *args], timeout_s=_TIMEOUT_S)
     except TimeoutError:
-        proc.kill()
         return 124, b"", b"timeout"
-    return proc.returncode or 0, stdout, stderr
 
 
 def _filter_sensitive(text: str) -> str:

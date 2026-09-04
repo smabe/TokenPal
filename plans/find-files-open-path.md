@@ -7,13 +7,13 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/find-files-open-path-p1.md`
 
-**Phase p2 — `find_files` action (Spotlight on macOS, bounded walk elsewhere)** — NEXT
+**Phase p2 — `find_files` action (Spotlight on macOS, bounded walk elsewhere)** — SHIPPED
 - Enters when: p1 shipped
 - Done signal: the shard's temp-tree test shows protected and sensitive paths absent from results, and a live `find_files` in `/agent` on this Mac returns newest-first paths from `~/Downloads`
 - If it fails: no gate — fix-forward
 - Shard: `plans/find-files-open-path-p2.md`
 
-**Phase p3 — `open_path` action + confirm gate on the conversation path**
+**Phase p3 — `open_path` action + confirm gate on the conversation path** — NEXT
 - Enters when: p2 shipped
 - Done signal: the issue's scenario runs end to end in `/agent` on this Mac with the confirm modal showing the path; plain chat "open it" and `open_app` both prompt
 - If it fails: no gate — fix-forward
@@ -37,7 +37,14 @@ p1 shipped 2026-09-04. Simplify: 4 applied, 6 rejected with evidence, 4 parked. 
 
 Operator decisions at the p1 review gate (2026-09-04): **(1)** widen `path_is_sensitive` to key material + password managers, leaving `signal`/`health` allowed; **(2)** do NOT fix `read_file`'s relative-path symlink escape here — filed as **#66**; **(3)** change `resolve_inside` to the 3-tuple `(resolved, root, rel)` — p2/p3 shard text swept to match.
 
-NEXT: p2 — read `plans/find-files-open-path-p2.md` FIRST. Binding decisions: containment is `resolve()` + `is_relative_to` against resolved roots, strict case on POSIX and `os.path.normcase` on Windows, returning **`(resolved, root, rel)`** — take `rel` from the match, never re-derive it; `allowed_dirs` defaults to Documents/Desktop/Downloads plus the cwd git root and is read at execute time through `load_config()`; `path_is_sensitive` now covers `_SENSITIVE_PATH_TERMS` + `_SENSITIVE_EXTS` on top of the narrow content list. Patch `tokenpal.util.paths.git_root`, not the importing module's namespace.
+**Spec check at p2** — 6/6 Work items evidenced · none unclaimed.
+p2 shipped 2026-09-04. Simplify: 4 angles, ~10 applied. Review: Codex peer still out of quota (re-probed; resets 2026-09-06 22:26), so `/auto-review` ran its host-native fan-out — **no external-peer receipt, no commit-gate stamp**. Seven confirmed defects fixed, including two that made the tool behave differently per platform: the UTI kind tables disagreed with `_KIND_EXTS` (macOS answered `kind="document"` with `.py`/`.json`), and "newest first" ranked an arbitrary slice on any query broader than the candidate cap. Full list in the p2 shard.
+
+Operator decisions at the p2 review gate (2026-09-04): **(1)** the macOS Spotlight predicate's content clause makes `find_files` a content oracle — **accepted as-is**, recorded in `CLAUDE.md`'s Privacy section; **(2)** an explicitly empty `[paths] allowed_dirs` now disables the file tools (changes p1's `allowed_roots`); **(3)** the subprocess-with-timeout duplication was **extracted across all five call sites** into `tokenpal/util/proc.py::run_capture`, not filed as a follow-up.
+
+Carried into p3: `open_path` gets the same widened root set, so the empty-list opt-out and the always-appended git root both apply to what the confirm modal will offer. `resolve_inside` returns `(resolved, root, rel)` — take `rel` from the match. Gate `kind`/type checks on the RESOLVED path, never the candidate: a `report.pdf` symlink to a `.md` is the case that bit p2.
+
+NEXT: p3 — read `plans/find-files-open-path-p3.md` FIRST.
 
 ## Goal
 Two opt-in tools so "find that PDF from this week and open it" works in `/agent` and in plain chat: `find_files` returns paths under user-allowlisted roots, newest first, never contents; `open_path` opens a document with the OS default app after a confirm modal, and refuses anything that would run a program. Plain chat gains the confirm gate `/agent` already has, which also stops `open_app` launching unprompted from chat.
@@ -76,6 +83,12 @@ Two opt-in tools so "find that PDF from this week and open it" works in `/agent`
 - `tests/test_brain/test_tool_loop.py` — p3 — confirm-gate tests on the conversation path
 - `docs/claude/actions.md` — p3 — the two tools, the chat confirm gate, the persistence note
 - `CLAUDE.md` — p3 — one Privacy line on `[paths] allowed_dirs` and path persistence
+- `tokenpal/util/proc.py` — p2 (new) — `run_capture`, the shared subprocess-with-timeout runner (operator-expanded 2026-09-04; also migrated `git_log`, `git_nudge`, `git_sense`)
+- `tokenpal/brain/git_nudge.py` — p2 — `_git`/`_git_exit_code` migrated onto `run_capture`
+- `tokenpal/senses/git/git_sense.py` — p2 — `_git`/`_is_dirty` migrated onto `run_capture`
+- `tokenpal/actions/git_log.py` — p2 — `_run_git` migrated onto `run_capture` (also fixes a kill-without-reap zombie leak)
+- `tests/test_util/test_proc.py` — p2 (new) — streams, non-zero exit, missing binary, timeout kills and reaps
+- `CLAUDE.md` — p2 — Privacy line recording the accepted content-oracle exception (p3 adds its own)
 - `tokenpal/util/windows_search.py` — p4 (new)
 - `tests/test_util/test_windows_search.py` — p4 (new)
 

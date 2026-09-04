@@ -27,8 +27,11 @@ from dataclasses import dataclass
 
 from tokenpal.config.schema import GitNudgeConfig
 from tokenpal.senses.base import SenseReading
+from tokenpal.util.proc import run_capture
 
 log = logging.getLogger(__name__)
+
+_GIT_TIMEOUT_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -129,44 +132,17 @@ class GitNudgeDetector:
         return any(m.lower() in lower for m in self._config.wip_markers)
 
 
-# ---------------------------------------------------------------------------
-# Helpers — small async git CLI wrappers local to this module. Duplicates
-# the pattern in tokenpal/senses/git/git_sense.py to keep the dependency
-# surface small and avoid a circular import.
-# ---------------------------------------------------------------------------
-
-
 async def _git(*args: str) -> str:
-    proc: asyncio.subprocess.Process | None = None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-        return stdout.decode().strip() if proc.returncode == 0 else ""
-    except TimeoutError:
-        if proc:
-            proc.kill()
-        return ""
+        returncode, stdout, _ = await run_capture(["git", *args], timeout_s=_GIT_TIMEOUT_S)
     except Exception:
         return ""
+    return stdout.decode().strip() if returncode == 0 else ""
 
 
 async def _git_exit_code(*args: str) -> int:
-    proc: asyncio.subprocess.Process | None = None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "git", *args,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-        )
-        await asyncio.wait_for(proc.wait(), timeout=5)
-        return int(proc.returncode or 0)
-    except TimeoutError:
-        if proc:
-            proc.kill()
-        return 0
+        returncode, _, _ = await run_capture(["git", *args], timeout_s=_GIT_TIMEOUT_S)
     except Exception:
         return 0
+    return returncode

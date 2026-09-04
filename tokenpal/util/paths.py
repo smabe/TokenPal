@@ -37,8 +37,15 @@ async def git_root(start: Path) -> Path | None:
 
 
 async def allowed_roots(configured: Sequence[str]) -> list[Path]:
-    """Resolve configured roots that exist, plus the cwd's git root."""
-    entries = [configured] if isinstance(configured, str) else configured
+    """Resolve configured roots that exist, plus the cwd's git root.
+
+    An explicitly empty ``configured`` is opt-out: it returns no roots at all,
+    so emptying ``[paths] allowed_dirs`` turns the file tools off rather than
+    silently leaving them the repo the buddy happened to launch from.
+    """
+    entries = [configured] if isinstance(configured, str) else list(configured)
+    if not entries:
+        return []
     roots: list[Path] = []
     for entry in entries:
         if not entry.strip():

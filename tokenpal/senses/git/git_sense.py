@@ -10,8 +10,11 @@ from typing import Any
 
 from tokenpal.senses.base import AbstractSense, SenseReading
 from tokenpal.senses.registry import register_sense
+from tokenpal.util.proc import run_capture
 
 log = logging.getLogger(__name__)
+
+_GIT_TIMEOUT_S = 5.0
 
 
 @register_sense
@@ -123,35 +126,17 @@ class GitSense(AbstractSense):
         pass
 
     async def _git(self, *args: str) -> str:
-        proc: asyncio.subprocess.Process | None = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
-            return stdout.decode().strip() if proc.returncode == 0 else ""
-        except TimeoutError:
-            if proc:
-                proc.kill()
-            return ""
+            returncode, stdout, _ = await run_capture(["git", *args], timeout_s=_GIT_TIMEOUT_S)
         except Exception:
             return ""
+        return stdout.decode().strip() if returncode == 0 else ""
 
     async def _is_dirty(self) -> bool:
-        proc: asyncio.subprocess.Process | None = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "diff", "--quiet", "HEAD",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            returncode, _, _ = await run_capture(
+                ["git", "diff", "--quiet", "HEAD"], timeout_s=_GIT_TIMEOUT_S
             )
-            await asyncio.wait_for(proc.wait(), timeout=5)
-            return proc.returncode != 0
-        except TimeoutError:
-            if proc:
-                proc.kill()
-            return False
         except Exception:
             return False
+        return returncode != 0

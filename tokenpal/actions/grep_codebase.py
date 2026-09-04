@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import shutil
 from pathlib import Path
 from typing import Any, ClassVar
@@ -11,8 +10,12 @@ from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
 from tokenpal.util.paths import git_root
+from tokenpal.util.proc import run_capture
 
+# Total lines returned to the caller, enforced in Python: ripgrep has no
+# whole-run match cap, only the per-file --max-count below.
 _MAX_MATCHES = 100
+_MAX_PER_FILE = 5
 _TIMEOUT_S = 10.0
 
 
@@ -66,32 +69,25 @@ class GrepCodebaseAction(AbstractAction):
             "--line-number",
             "--no-heading",
             "--color=never",
-            "--max-count=5",
-            "-m",
-            str(_MAX_MATCHES),
+            f"--max-count={_MAX_PER_FILE}",
             "--",
             pattern,
             str(target),
         ]
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_TIMEOUT_S)
+            returncode, stdout, _ = await run_capture(cmd, timeout_s=_TIMEOUT_S)
         except TimeoutError:
             return ActionResult(output="Search timed out.", success=False)
         except OSError as e:
             return ActionResult(output=f"Failed to run ripgrep: {e}", success=False)
 
-        if proc.returncode not in (0, 1):
+        if returncode not in (0, 1):
             return ActionResult(output="ripgrep reported an error.", success=False)
 
         text = stdout.decode("utf-8", errors="replace")
         lines = text.splitlines()
         kept = [ln for ln in lines if not contains_sensitive_term(ln)]
-        if len(kept) >= _MAX_MATCHES:
+        if len(kept) > _MAX_MATCHES:
             kept = kept[:_MAX_MATCHES]
             kept.append(f"... [capped at {_MAX_MATCHES} matches]")
 
