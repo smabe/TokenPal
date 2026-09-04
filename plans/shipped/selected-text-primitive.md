@@ -119,12 +119,13 @@ Research 2026-09-03 at 813f8c7.
 - `pytest`, `ruff check tokenpal/`, `mypy tokenpal/ --ignore-missing-imports` green at the end of each phase (mypy: zero errors beyond the pre-existing #62 error).
 
 ## Parking lot
-- **Windows UI Automation implementation** (`TextPattern.GetSelection()` via `comtypes`/`pywinauto`) — issue #52 calls it phase 2; excluded by the author-on-target-host rule. File as its own issue at ship, carrying the Windows `--validate` row from #51.
-- **Inactive-Chromium selection via `AXSelectedTextRange` + `AXStringForRange` on the web area** — the API specialist found the range readable on an inactive Edge window (`(0,0)` with no selection) but never verified it with a live selection. Adjacent: would extend coverage to Chrome/VS Code/Slack; not required for the requested outcome.
-- **`AXEnhancedUserInterface` side effects** — Electron PR #10305 documents window-positioning changes when an AX client enables it. Evidence for the Non-goal above; nothing to do.
-- **`_instantiate` skip masking** (`tests/test_desktop/test_privacy_contract.py:239-243`) — a marked tool whose constructor raises off-Mac silently skips every parametrized case. `read_selection`'s constructor stores config only, so it does not trigger this; the general fix (fail instead of skip when the class is platform-eligible) is adjacent.
-- **`_imported_modules` fails open** (`:64-79`) — carried-in item 2; not triggered by this plan's function-scope imports. Adjacent.
-- **`httpx`/`anthropic` DEBUG loggers** — the privacy specialist could not verify whether third-party loggers at DEBUG could echo request bodies into the always-DEBUG file handler. Adjacent to this plan (the same exposure exists for `/agent` today); worth a separate probe.
-- **`permissions.py` conflates missing pyobjc with a raising probe** — carried-in item 4; unchanged here.
-- **`/tools` picker ignores `consent_category`** (`tokenpal/app.py:1124-1137`) — cosmetic; adjacent.
-- **Microphone `--validate` row inlines the host lookup** (`tokenpal/cli.py:228-232`) with a different fallback ("your terminal app") from `permissions.responsible_host()`. Surfaced at p1's simplify pass; changing its fallback is a copy change outside the phase. Adjacent.
+
+**Dispositioned at ship 2026-09-04.** Filed as issues:
+- **#63** — Windows selected-text read via UI Automation (carries the unverified Windows `--validate` row and the consent-before-platform ordering on the bare `/proofread`).
+- **#64** — inactive Chromium/Electron selection via `AXSelectedTextRange` + `AXStringForRange` on the web area.
+- **#65** — hardening bundle: contract test fails open (`_instantiate` skip, `_imported_modules` empty set), third-party DEBUG loggers probe, `permissions.py` pyobjc-vs-raise conflation, the microphone row's inline host lookup, an overlay chat-log capability flag for console/tkinter, the `/tools` picker ignoring `consent_category`.
+
+Dropped, with reason:
+- **`AXEnhancedUserInterface` side effects** (Electron PR #10305) — evidence for the Chromium non-goal, now cited in #64; nothing to do.
+
+All three phases shipped: p1 `eb20f7b`, p2 `d5172ca`, p3 `750a164`; live checks closed by the operator 2026-09-04 (recorded in the shards).
