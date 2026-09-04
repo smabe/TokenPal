@@ -13,6 +13,8 @@ its script shape (text + finish_reason tuples) is structurally distinct.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -220,3 +222,23 @@ def selected_text(
         whole_field=whole_field,
         truncated=truncated,
     )
+
+
+async def _no_git_root(_start: Path) -> Path | None:
+    return None
+
+
+def stub_allowed_root(
+    monkeypatch: Any, module: ModuleType, root: Path
+) -> None:
+    """Point *module*'s ``[paths] allowed_dirs`` at *root* and nothing else.
+
+    Also sets HOME to *root* (``is_hidden_or_protected`` special-cases
+    ``~/Library``) and stubs the git-root append, which would otherwise add the
+    real repo and let its files match. Patch ``git_root`` where ``allowed_roots``
+    looks it up, not in the importing module.
+    """
+    monkeypatch.setenv("HOME", str(root))
+    cfg = SimpleNamespace(paths=SimpleNamespace(allowed_dirs=[str(root)]))
+    monkeypatch.setattr(module, "load_config", lambda: cfg)
+    monkeypatch.setattr("tokenpal.util.paths.git_root", _no_git_root)

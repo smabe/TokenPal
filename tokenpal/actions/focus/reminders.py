@@ -4,8 +4,11 @@ All four enroll a recurring nudge with the brain's ProactiveScheduler.
 The scheduler handles the pause-during-conversation and pause-during-
 sensitive-app gates, so the actions themselves stay dumb.
 
-requires_confirm=True: the LLM can't silently turn these on behind the
-user's back. Flip off by calling with action="off".
+These are opt-in tools: `resolve_actions` never instantiates one unless its
+name is in `[tools] enabled_tools`, so enabling it in the /tools picker IS the
+user's consent. `requires_confirm` stays False -- a second modal would ask
+again for permission already granted, and would also prompt on action="off",
+which is a dialog to stop being nagged. Flip off by calling with action="off".
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ class _ReminderBase(AbstractAction):
     default_message: str = ""
 
     safe = False
-    requires_confirm = True
+    requires_confirm = False
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)

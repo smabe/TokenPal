@@ -59,6 +59,11 @@ LOCAL_SECTION = CatalogSection(
             "Find files under [paths] allowed_dirs by name; newest first, never contents.",
             kind="local",
         ),
+        CatalogEntry(
+            "open_path",
+            "Open a document from [paths] allowed_dirs with its default app (asks first).",
+            kind="local",
+        ),
         CatalogEntry("grep_codebase", "Search the current repo with ripgrep.", kind="local"),
         CatalogEntry("git_log", "Show recent commits.", kind="local"),
         CatalogEntry("git_diff", "Show the current diff, capped at 50KB.", kind="local"),

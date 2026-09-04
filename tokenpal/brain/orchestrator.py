@@ -408,6 +408,9 @@ class Brain:
         self._active_followup_session: FollowupSession | None = None
 
         self._agent = agent_bridge or AgentBridge(config=AgentConfig())
+        # One modal at a time: tool calls in a round run under asyncio.gather,
+        # and two confirm prompts would stack on top of each other.
+        self._confirm_lock = asyncio.Lock()
         self._research = research_bridge or ResearchBridge(config=ResearchConfig())
         self._mode: BrainMode = BrainMode.IDLE
 
@@ -1545,6 +1548,7 @@ class Brain:
                     prompt,
                     target_latency_s=self._budgets.tools,
                     min_tokens=self._min_tokens.tools,
+                    tool_specs=self._build_ambient_specs(),
                 )
             else:
                 response = await self._llm.generate(
@@ -1633,6 +1637,7 @@ class Brain:
         max_tokens: int | None = None,
         target_latency_s: float | None = None,
         min_tokens: int | None = None,
+        tool_specs: list[dict[str, Any]] | None = None,
     ) -> LLMResponse:
         """Multi-turn tool-calling loop. Sends prompt (or pre-built messages)
         with tool defs, executes tool calls, feeds results back, and repeats
@@ -1647,6 +1652,7 @@ class Brain:
         if messages is None:
             assert prompt is not None
             messages = [{"role": "user", "content": prompt}]
+        specs = self._tool_specs if tool_specs is None else tool_specs
 
         deadline = (
             time.monotonic() + target_latency_s
@@ -1660,7 +1666,7 @@ class Brain:
         for _round in range(self._MAX_TOOL_ROUNDS):
             response = await self._llm.generate_with_tools(
                 messages=messages,
-                tools=self._tool_specs,
+                tools=specs,
                 max_tokens=max_tokens,
                 target_latency_s=_remaining(),
                 min_tokens=min_tokens,
@@ -1753,6 +1759,15 @@ class Brain:
         if action.reads_desktop_content:
             log.warning("Conversation path refused desktop-content tool: %s", tc.name)
             return f"Tool '{tc.name}' is only available in /agent."
+        if action.requires_confirm:
+            confirm = self._agent.confirm_callback
+            if confirm is None:
+                log.warning("No confirm callback wired — refusing %s from chat", tc.name)
+                return f"Tool '{tc.name}' needs a confirmation prompt this overlay cannot show."
+            async with self._confirm_lock:
+                allowed = await confirm(tc.name, tc.arguments)
+            if not allowed:
+                return f"User denied {tc.name}."
         try:
             result = await action.execute(**tc.arguments)
             if log.isEnabledFor(logging.DEBUG):
@@ -1843,6 +1858,20 @@ class Brain:
             a.to_tool_spec()
             for a in self._actions.values()
             if not a.reads_desktop_content
+        ]
+
+    def _build_ambient_specs(self) -> list[dict[str, Any]]:
+        """Conversation specs minus anything that would raise a confirm modal.
+
+        `_run_loop` awaits `_generate_comment` inline and the confirm future has
+        no timeout, so a modal raised on an unattended tick — the user is in
+        another app, which is what "ambient" means — would stall the brain loop
+        until someone answered it.
+        """
+        return [
+            a.to_tool_spec()
+            for a in self._actions.values()
+            if not a.reads_desktop_content and not a.requires_confirm
         ]
 
     def _build_agent_specs(self) -> list[dict[str, Any]]:

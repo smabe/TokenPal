@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from tests._helpers import agent_brain, assert_no_leak, tool_call, tool_call_response
+import pytest
+
+from tests._helpers import (
+    agent_brain,
+    assert_no_leak,
+    ok_response,
+    tool_call,
+    tool_call_response,
+)
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import AgentBridge, Brain
 from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.config.schema import AgentConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 
 
@@ -21,6 +31,7 @@ class _StubAction(AbstractAction):
     action_name = "stub"
     description = "Returns a fixed string."
     parameters = {"type": "object", "properties": {}}
+    requires_confirm = False
 
     def __init__(self) -> None:
         super().__init__({})
@@ -35,6 +46,7 @@ class _FailAction(AbstractAction):
     action_name = "fail"
     description = "Always fails."
     parameters = {"type": "object", "properties": {}}
+    requires_confirm = False
 
     def __init__(self) -> None:
         super().__init__({})
@@ -530,7 +542,9 @@ async def test_aborted_desktop_run_does_not_promise_an_answer(
         memory.teardown()
 
 
-async def test_reenabling_tool_calling_keeps_desktop_tools_out_of_conversation() -> None:
+async def test_reenabling_tool_calling_keeps_desktop_tools_out_of_conversation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Drives the real recovery branch in _generate_comment, not the builder.
 
     The circuit breaker empties the spec list after three failures; the
@@ -539,6 +553,10 @@ async def test_reenabling_tool_calling_keeps_desktop_tools_out_of_conversation()
     """
     llm = _MockLLM([])
     brain = _make_brain(llm, actions=[_ReadsAction(), _EchoAction()])
+    # Easter eggs return before the LLM call, so the recovery branch never runs
+    # and this test fails on the wall clock alone -- at 03:33, 11:11, 12:00,
+    # 16:20, and every Friday 17:00-17:59 (personality.check_easter_egg).
+    monkeypatch.setattr(brain._personality, "check_easter_egg", lambda _s: None)
     assert [s["function"]["name"] for s in brain._tool_specs] == ["echo"]
 
     # Trip the breaker exactly as three failed generations would.
@@ -598,3 +616,160 @@ def test_agent_still_gets_tools_when_every_action_is_desktop_content() -> None:
 
     brain._tool_calling_enabled = False
     assert brain._build_agent_specs() == []
+
+
+# ---------------------------------------------------------------------------
+# Confirm gate on the conversation path
+# ---------------------------------------------------------------------------
+
+
+class _GatedAction(AbstractAction):
+    """A tool the host must prompt for, like open_path and open_app."""
+
+    action_name = "gated"
+    description = "Does something with a side effect."
+    parameters = {"type": "object", "properties": {}}
+    safe = False
+    requires_confirm = True
+
+    def __init__(self, name: str = "gated") -> None:
+        super().__init__({})
+        self.action_name = name
+        self.call_count = 0
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        self.call_count += 1
+        return ActionResult(output=f"{self.action_name} ran")
+
+
+def _bridge(confirm: Any) -> AgentBridge:
+    return AgentBridge(config=AgentConfig(), confirm_callback=confirm)
+
+
+async def test_chat_confirm_allows_a_gated_tool() -> None:
+    llm = _MockLLM([tool_call_response(tool_call("gated")), ok_response("done")])
+    gated = _GatedAction()
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    async def confirm(name: str, args: dict[str, Any]) -> bool:
+        seen.append((name, args))
+        return True
+
+    brain = _make_brain(llm, actions=[gated], agent_bridge=_bridge(confirm))
+
+    await brain._generate_with_tools("test")
+
+    assert gated.call_count == 1
+    assert seen == [("gated", {})]
+    tool_msgs = [m for m in llm.calls[1]["messages"] if m["role"] == "tool"]
+    assert tool_msgs[0]["content"] == "gated ran"
+
+
+async def test_chat_confirm_denial_never_executes() -> None:
+    llm = _MockLLM([tool_call_response(tool_call("gated")), ok_response("done")])
+    gated = _GatedAction()
+
+    async def deny(_name: str, _args: dict[str, Any]) -> bool:
+        return False
+
+    brain = _make_brain(llm, actions=[gated], agent_bridge=_bridge(deny))
+
+    await brain._generate_with_tools("test")
+
+    assert gated.call_count == 0
+    tool_msgs = [m for m in llm.calls[1]["messages"] if m["role"] == "tool"]
+    assert tool_msgs[0]["content"] == "User denied gated."
+
+
+async def test_chat_refuses_a_gated_tool_with_no_confirm_callback() -> None:
+    """A console/headless overlay has no modal, so the tool must not run."""
+    llm = _MockLLM([tool_call_response(tool_call("gated")), ok_response("done")])
+    gated = _GatedAction()
+    brain = _make_brain(llm, actions=[gated], agent_bridge=_bridge(None))
+
+    await brain._generate_with_tools("test")
+
+    assert gated.call_count == 0
+    tool_msgs = [m for m in llm.calls[1]["messages"] if m["role"] == "tool"]
+    assert tool_msgs[0]["content"] == (
+        "Tool 'gated' needs a confirmation prompt this overlay cannot show."
+    )
+
+
+async def test_chat_confirm_prompts_never_overlap() -> None:
+    """Tool calls in a round run under gather; two stacked modals would be
+    unanswerable, so the lock must serialize them."""
+    llm = _MockLLM([
+        tool_call_response(
+            tool_call("gated_a", call_id="c1"), tool_call("gated_b", call_id="c2"),
+        ),
+        ok_response("done"),
+    ])
+    a, b = _GatedAction("gated_a"), _GatedAction("gated_b")
+    events: list[tuple[str, str]] = []
+
+    async def confirm(name: str, _args: dict[str, Any]) -> bool:
+        events.append(("enter", name))
+        await asyncio.sleep(0.02)
+        events.append(("exit", name))
+        return True
+
+    brain = _make_brain(llm, actions=[a, b], agent_bridge=_bridge(confirm))
+
+    await brain._generate_with_tools("test")
+
+    assert a.call_count == 1 and b.call_count == 1
+    assert [phase for phase, _ in events] == ["enter", "exit", "enter", "exit"]
+    assert events[0][1] == events[1][1]
+    assert events[2][1] == events[3][1]
+
+
+async def test_chat_never_prompts_for_an_unconfirmed_tool() -> None:
+    llm = _MockLLM([tool_call_response(tool_call("stub")), ok_response("done")])
+    stub = _StubAction()
+    calls: list[str] = []
+
+    async def confirm(name: str, _args: dict[str, Any]) -> bool:
+        calls.append(name)
+        return True
+
+    brain = _make_brain(llm, actions=[stub], agent_bridge=_bridge(confirm))
+
+    await brain._generate_with_tools("test")
+
+    assert stub.call_count == 1
+    assert calls == []
+
+
+async def test_ambient_comments_never_offer_a_tool_that_would_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """_run_loop awaits _generate_comment inline and the confirm future has no
+    timeout, so a modal raised on an unattended tick would stall the brain."""
+    llm = _MockLLM([])
+    brain = _make_brain(llm, actions=[_GatedAction(), _EchoAction()])
+    monkeypatch.setattr(brain._personality, "check_easter_egg", lambda _s: None)
+
+    conversation = [s["function"]["name"] for s in brain._build_conversation_specs()]
+    ambient = [s["function"]["name"] for s in brain._build_ambient_specs()]
+
+    assert "gated" in conversation
+    assert ambient == ["echo"]
+
+
+async def test_ambient_generation_passes_the_narrowed_spec_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = _MockLLM([ok_response("done")])
+    brain = _make_brain(llm, actions=[_GatedAction(), _EchoAction()])
+    monkeypatch.setattr(brain._personality, "check_easter_egg", lambda _s: None)
+    seen: list[list[str]] = []
+
+    async def capture(*_a: Any, **kw: Any) -> LLMResponse:
+        seen.append([s["function"]["name"] for s in (kw.get("tool_specs") or [])])
+        return ok_response("a comment long enough to survive the response filter")
+
+    monkeypatch.setattr(brain, "_generate_with_tools", capture)
+    await brain._generate_comment("snapshot")
+
+    assert seen == [["echo"]]

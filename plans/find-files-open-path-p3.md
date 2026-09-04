@@ -60,6 +60,54 @@ See the master `plans/find-files-open-path.md`. The decisions binding this phase
 - `CLAUDE.md` — Privacy section: one line: "`find_files`/`open_path` (#53) are confined to `[paths] allowed_dirs` plus the current git root; they return and persist file paths, never contents; `open_path` opens documents, images, and media only and asks first."
 
 ## Decisions & findings
+
+### Shipped at 2026-09-04. Worker + review findings
+
+**Defect this phase introduced, caught at review and fixed here:** the gate went into
+`_execute_tool_call`, which serves BOTH the chat reply loop and `_generate_comment` — the
+unprompted ambient tick. `_run_loop:785` awaits `_generate_comment` inline and
+`app.py:_agent_confirm` ends in a `return await fut` with no timeout, so a modal raised on an
+unattended tick would stall the whole brain loop (sense polling, input draining, nudges, idle
+rolls, the summariser) until someone noticed and answered it. Fixed by narrowing what the
+ambient path offers: `_build_ambient_specs()` drops every `requires_confirm` action, so the
+modal cannot be raised there at all. The `_execute_tool_call` gate stays as defence in depth
+for the attended path. Two tests pin it.
+
+**The four focus reminders were flipped to `requires_confirm = False`** (operator, 2026-09-04).
+`resolve_actions` (`registry.py:63-65`) never instantiates them unless the name is in
+`[tools] enabled_tools`, and `DEFAULT_TOOLS` is only `timer, system_info, open_app, do_math` —
+so the /tools picker already IS the arming, and the modal asked a second time for permission
+already granted. It also gated `action="off"`, i.e. a dialog to stop being nagged. `open_app`
+and `open_path` stay gated: both have a side effect outside the buddy, and `open_app` is on by
+default for every user.
+
+**Pre-existing time-bomb test fixed here** because the commit gate is "never commit red":
+`test_reenabling_tool_calling_keeps_desktop_tools_out_of_conversation` failed on the wall clock
+alone. `_generate_comment` returns early through `check_easter_egg`, which fires at 03:33,
+11:11, 12:00, 16:20 and every Friday 17:00-17:59. That is the cause of the flake recorded as
+"unknown" in the p2 shard — one failure landed in the 16:20 minute, then 15 runs passed.
+Confirmed failing at HEAD in a clean worktree. The test now stubs `check_easter_egg`, mirroring
+`tests/test_orchestrator_idle_path.py:142`.
+
+**Verified by independent probe (not the worker's):** 30 targets through a recorded launcher,
+6 launches, all benign. Every denylist suffix, exec-bit file, bundle interior, hidden/protected/
+sensitive path, out-of-root path and `..` escape refused; `notes-link.txt` pointing at
+`payload.sh` refused as the script it resolves to; the `1password-export.pdf` refusal echoes
+neither the name nor the path.
+
+**Simplify:** `resolved.parent.parts` for the bundle check; `_launch` flattened (`FileNotFoundError`
+is an `OSError` subclass, so the nested try was unnecessary) and its message now names whichever
+opener is missing; `stub_allowed_root` extracted to `tests/_helpers.py` on its second consumer;
+`_final` folded into the existing `ok_response`; `base.py`'s flag comment rewritten — it said
+`requires_confirm` was for "future autonomous tool-calling", which is now actively misleading.
+
+**Parked, not defects of this phase:** the chat path is the only tool-execution site that
+bypasses `ToolInvoker`, so it skips rate limits and telemetry (pre-existing; `idle_tools`,
+`idle_tools_m3` and `agent.py` all use the invoker). `_confirm_lock` lives on `Brain` while the
+invariant it protects belongs to the Qt overlay, whose confirm dialog is not a singleton like
+its siblings. On `--overlay console` and `--overlay tkinter` a chat open request answers
+"User denied ..." with no prompt ever shown — consistent with how `/agent` has always behaved
+there, documented in `docs/claude/actions.md` rather than changed.
 ### Decision: denylist for openable types  *(status: active; operator-chosen 2026-09-04)*
 - **Rationale:** operator: "no scripts .sh .jar etc. — opening a text editing app or a web browser is useful." The denylist is the issue's list extended by the security probe on this Mac (`open` launched Terminal for a no-extension exec-bit file and `.command`, JavaLauncher for `.jar`, Installer for `.pkg`, Automator for `.workflow`) and by Windows `PATHEXT` (`.COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC` [unverified: no authoritative page fetched this session]). The exec-bit and bundle-ancestor checks cover files the list cannot name.
 - **Alternatives considered:** an allowlist of document/image/media suffixes — rejected by the operator as too restrictive for editors and browsers.

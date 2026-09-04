@@ -8,11 +8,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
+from tests._helpers import stub_allowed_root
 from tokenpal.actions import find_files
 from tokenpal.actions.catalog import LOCAL_SECTION
 from tokenpal.actions.find_files import FindFilesAction
@@ -80,14 +80,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     pointing HOME at the root exercises that rule alongside the generic one.
     """
     root = _build_tree(tmp_path)
-    monkeypatch.setenv("HOME", str(root))
-    cfg = SimpleNamespace(paths=SimpleNamespace(allowed_dirs=[str(root)]))
-    monkeypatch.setattr(find_files, "load_config", lambda: cfg)
-
-    async def no_git_root(_start: Path) -> Path | None:
-        return None
-
-    monkeypatch.setattr("tokenpal.util.paths.git_root", no_git_root)
+    stub_allowed_root(monkeypatch, find_files, root)
     return root
 
 

@@ -13,13 +13,13 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/find-files-open-path-p2.md`
 
-**Phase p3 — `open_path` action + confirm gate on the conversation path** — NEXT
+**Phase p3 — `open_path` action + confirm gate on the conversation path** — SHIPPED
 - Enters when: p2 shipped
 - Done signal: the issue's scenario runs end to end in `/agent` on this Mac with the confirm modal showing the path; plain chat "open it" and `open_app` both prompt
 - If it fails: no gate — fix-forward
 - Shard: `plans/find-files-open-path-p3.md`
 
-**Phase p4 — Windows Search index backend for `find_files` (written here, verified on the AMD desktop later)**
+**Phase p4 — Windows Search index backend for `find_files` (written here, verified on the AMD desktop later)** — NEXT
 - Enters when: p2 shipped (independent of p3)
 - Done signal: the SQL builder and its escaping are unit-tested on the Mac; the COM path is guarded so any failure drops to the p2 walk; the module header states it is unverified on Windows (the ship step files the AMD-desktop follow-up)
 - If it fails: no gate — fix-forward
@@ -37,14 +37,12 @@ p1 shipped 2026-09-04. Simplify: 4 applied, 6 rejected with evidence, 4 parked. 
 
 Operator decisions at the p1 review gate (2026-09-04): **(1)** widen `path_is_sensitive` to key material + password managers, leaving `signal`/`health` allowed; **(2)** do NOT fix `read_file`'s relative-path symlink escape here — filed as **#66**; **(3)** change `resolve_inside` to the 3-tuple `(resolved, root, rel)` — p2/p3 shard text swept to match.
 
-**Spec check at p2** — 6/6 Work items evidenced · none unclaimed.
-p2 shipped 2026-09-04. Simplify: 4 angles, ~10 applied. Review: Codex peer still out of quota (re-probed; resets 2026-09-06 22:26), so `/auto-review` ran its host-native fan-out — **no external-peer receipt, no commit-gate stamp**. Seven confirmed defects fixed, including two that made the tool behave differently per platform: the UTI kind tables disagreed with `_KIND_EXTS` (macOS answered `kind="document"` with `.py`/`.json`), and "newest first" ranked an arbitrary slice on any query broader than the candidate cap. Full list in the p2 shard.
+**Spec check at p3** — 9/9 Work items evidenced · none unclaimed. (p1 7/7, p2 6/6.)
+p3 shipped 2026-09-04. Review (host-native fan-out again; Codex still out of quota, no receipt, no stamp) caught a hang this phase introduced: the confirm gate sat where the ambient tick could raise an unanswerable modal and stall the brain loop. Fixed by `_build_ambient_specs()`. It also identified the p2 "unknown flake" as an easter-egg time bomb (03:33, 11:11, 12:00, 16:20, Friday 17:00-17:59) and that is now fixed. The four focus reminders were flipped to `requires_confirm = False` (operator): `[tools] enabled_tools` already arms them. Details in the p3 shard.
 
-Operator decisions at the p2 review gate (2026-09-04): **(1)** the macOS Spotlight predicate's content clause makes `find_files` a content oracle — **accepted as-is**, recorded in `CLAUDE.md`'s Privacy section; **(2)** an explicitly empty `[paths] allowed_dirs` now disables the file tools (changes p1's `allowed_roots`); **(3)** the subprocess-with-timeout duplication was **extracted across all five call sites** into `tokenpal/util/proc.py::run_capture`, not filed as a follow-up.
+**Sweep at p3:** opened `plans/find-files-open-path-p4.md` — clean, it names only `windows_search.py`, `find_files.py`'s windows branch and its own tests, none of which p3 renamed, moved or pinned.
 
-Carried into p3: `open_path` gets the same widened root set, so the empty-list opt-out and the always-appended git root both apply to what the confirm modal will offer. `resolve_inside` returns `(resolved, root, rel)` — take `rel` from the match. Gate `kind`/type checks on the RESOLVED path, never the candidate: a `report.pdf` symlink to a `.md` is the case that bit p2.
-
-NEXT: p3 — read `plans/find-files-open-path-p3.md` FIRST.
+NEXT: p4 — read `plans/find-files-open-path-p4.md` FIRST. It is the Windows Search backend, written on the Mac and deliberately unverified on Windows; the ship step files the AMD-desktop follow-up. Binding: it plugs into `_run_backend`'s existing `plat` branch and must fall back to the p2 walk on any exception. Note `_walk` now ranks globally with a bounded heap and `_post_filter` takes `(candidates, roots, kind, limit)`.
 
 ## Goal
 Two opt-in tools so "find that PDF from this week and open it" works in `/agent` and in plain chat: `find_files` returns paths under user-allowlisted roots, newest first, never contents; `open_path` opens a document with the OS default app after a confirm modal, and refuses anything that would run a program. Plain chat gains the confirm gate `/agent` already has, which also stops `open_app` launching unprompted from chat.

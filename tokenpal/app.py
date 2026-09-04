@@ -283,7 +283,7 @@ def main() -> None:
             f"Allow this call?"
         )
         opened = overlay.open_confirm_modal(
-            title="Agent confirmation",
+            title="Confirm tool call",
             body=body,
             on_result=_resolve,
         )

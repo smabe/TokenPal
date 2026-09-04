@@ -58,9 +58,11 @@ class AbstractAction(abc.ABC):
     description: ClassVar[str]
     parameters: ClassVar[dict[str, Any]]
     platforms: ClassVar[tuple[str, ...]] = ("windows", "darwin", "linux")
-    # Gate flags for future autonomous tool-calling. `safe` = no side effects
-    # beyond reading state; `requires_confirm` = host must prompt the user
-    # before the LLM can invoke this unattended.
+    # `safe` = no side effects beyond reading state (read by `--check` only).
+    # `requires_confirm` is load-bearing: the /agent loop and the plain-chat
+    # tool executor both raise a modal before running the action, and the
+    # ambient observation path drops it from the offered tools entirely.
+    # Setting it True on a new action therefore changes what a user sees.
     safe: ClassVar[bool] = False
     requires_confirm: ClassVar[bool] = True
     # Opt-in throttle. When set, the registry's invoker fails calls that
