@@ -12,8 +12,11 @@ now names loop, M3, and roll) · 1 tightened (test 2 offered a choice → stub `
 outright) · 0 refuted · 0 uncheckable.
 Worker (opus) shipped the phase 2026-09-04; suite 2224 passed, ruff clean, mypy zero.
 **Spec check** — 5/5 Work items evidenced · none unclaimed.
-Code shipped as 6a0d7dd. Live check (Done criterion 3) pending operator; run
-`/plan ship fix-idle-tools-roll-riff` once it passes.
+Code shipped as 6a0d7dd. Live check 2026-09-04 on the Mac: `/idle_tools roll coffee_break`
+posted a word-of-the-day + trivia riff (log 11:58:08). The silent running-bit branch has no
+live rule to exercise it (every running-bit rule sets an opener); covered by the unit test.
+Operator declined a follow-up for the mid-sentence token-cap truncation in idle-tool riffs.
+SHIPPED.
 Simplify pass 2026-09-04 — 5 applied (dead `_ExplodingLLM` stub dropped; `_RecordingPersonality`
 replaced by the real `PersonalityEngine` + `active_running_bits()`; `_fake_riff` hoisted to
 `_capture_riff`; five `IdleFireResult` literals collapsed to `_fire(**overrides)`; running-bit
@@ -173,13 +176,16 @@ context so future context changes land in one place.
 - ADJACENT: `force_fire` burns the rule's cooldown even when delivery later fails
   (`idle_tools.py:252-253` states this is deliberate). Not required here; the
   delivery failure this plan fixes is the only case it was visibly harmful.
+  Disposition at ship: dropped, deliberate per the docstring.
 - ADJACENT (simplify, altitude): the roll body in `app.py` still mirrors the shape of
   `_maybe_fire_deterministic` (build context → fire → None check → deliver) with
   `force_fire` swapped in. An `IdleToolRunner.force_fire(rule_name) -> bool` (~8 lines)
   would collapse the slash command to one public call and keep "what a forced roll does"
   next to the automatic path. Deferred: changes the plan's approved interface; needs
-  operator sign-off as a follow-up.
+  operator sign-off as a follow-up. Disposition at ship: dropped at operator's request
+  (no follow-ups filed).
 - ADJACENT (simplify, altitude): `brain._loop` + `run_coroutine_threadsafe` reach-in at
   five `app.py` sites (`:609, :1189, :1554, :2689, :2698` at 5457a9b); a
   `Brain.run_coroutine(coro, timeout)` wrapper would centralize it. Pre-existing, touches
-  five unrelated commands, out of proportion here.
+  five unrelated commands, out of proportion here. Disposition at ship: dropped at
+  operator's request (no follow-ups filed).
