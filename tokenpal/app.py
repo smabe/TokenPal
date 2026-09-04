@@ -1457,11 +1457,7 @@ def main() -> None:
         return CommandResult("Usage: /senses [list|enable <name>|disable <name>]")
 
     def _cmd_idle_tools(args: str) -> CommandResult:
-        from datetime import datetime
-
         from tokenpal.brain.idle_rules import M1_RULES, rule_by_name
-        from tokenpal.brain.idle_tools import build_context
-        from tokenpal.config.consent import Category, has_consent
 
         parts = args.split(maxsplit=1)
         subcmd = parts[0].lower() if parts else "list"
@@ -1543,30 +1539,33 @@ def main() -> None:
 
             def _run_roll() -> None:
                 async def _go() -> None:
-                    ctx = build_context(
-                        now=datetime.now(),
-                        session_minutes=1,
-                        first_session_of_day=True,
-                        active_readings={},
-                        mood=str(personality.mood),
-                        time_since_last_comment_s=9999.0,
-                        consent_web_fetches=has_consent(Category.WEB_FETCHES),
-                    )
+                    snapshot = brain._context.snapshot()
+                    if brain._personality.check_sensitive_app(snapshot):
+                        overlay.log_buddy_message(
+                            "/idle_tools: sensitive app in front; not rolling."
+                        )
+                        return
+                    ctx = brain._idle_runner.build_context()
                     result = await brain._idle_tools.force_fire(roll_rule.name, ctx)
                     if result is None:
                         overlay.log_buddy_message(
                             f"/idle_tools: {roll_rule.name} fired but tool returned nothing."
                         )
                         return
-                    await brain._generate_tool_riff(
-                        brain._context.snapshot(), result,
-                    )
+                    if not await brain._idle_runner.deliver(snapshot, result):
+                        overlay.log_buddy_message(
+                            f"/idle_tools: {roll_rule.name} fired but nothing was said "
+                            "(silent running bit, filtered, or LLM error; see --verbose)."
+                        )
 
                 try:
                     assert brain._loop is not None, "brain loop not started"
-                    asyncio.run_coroutine_threadsafe(
-                        _go(), brain._loop,
-                    ).result(timeout=30)
+                    fut = asyncio.run_coroutine_threadsafe(_go(), brain._loop)
+                    try:
+                        fut.result(timeout=30)
+                    except TimeoutError:
+                        fut.cancel()
+                        raise TimeoutError("timed out after 30s") from None
                 except Exception as e:
                     overlay.log_buddy_message(f"/idle_tools roll failed: {e}")
 

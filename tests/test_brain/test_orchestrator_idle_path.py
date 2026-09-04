@@ -5,10 +5,14 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from typing import Any
+from unittest.mock import AsyncMock
+
+import pytest
 
 from tokenpal.brain.idle_runner import IdleToolRunner
 from tokenpal.brain.idle_tools import IdleFireResult
 from tokenpal.brain.orchestrator import Brain
+from tokenpal.brain.personality import PersonalityEngine
 from tokenpal.config.schema import IdleToolsConfig
 
 
@@ -25,6 +29,17 @@ def _bare_brain() -> Brain:
     obj._mode = BrainMode.IDLE
     obj._idle_runner = IdleToolRunner(obj)
     return obj
+
+
+_FIRE_DEFAULTS: dict[str, Any] = dict(
+    rule_name="morning_word", tool_name="word_of_the_day",
+    tool_output="oxymoron", framing="announce it",
+    latency_ms=1.0, success=True,
+)
+
+
+def _fire(**overrides: Any) -> IdleFireResult:
+    return IdleFireResult(**{**_FIRE_DEFAULTS, **overrides})
 
 
 def test_idle_tools_eligible_when_config_on() -> None:
@@ -56,10 +71,7 @@ def test_idle_tools_ignore_forced_silence() -> None:
 
 def test_record_idle_fire_noop_without_memory() -> None:
     brain = _bare_brain()
-    fire = IdleFireResult(
-        rule_name="x", tool_name="y", tool_output="z",
-        framing="f", latency_ms=1.0, success=True,
-    )
+    fire = _fire()
     # No crash when memory is None.
     brain._idle_runner.record_fire(fire, emitted=True)
 
@@ -84,12 +96,7 @@ class _RecordingMemory:
 def test_record_idle_fire_writes_telemetry_row() -> None:
     brain = _bare_brain()
     brain._memory = _RecordingMemory()
-    fire = IdleFireResult(
-        rule_name="morning_word", tool_name="word_of_the_day",
-        tool_output="oxymoron: contradictory words",
-        framing="announce it",
-        latency_ms=42.0, success=True,
-    )
+    fire = _fire(tool_output="oxymoron: contradictory words", latency_ms=42.0)
     brain._idle_runner.record_fire(fire, emitted=True)
     assert len(brain._memory.calls) == 1
     row = brain._memory.calls[0]
@@ -107,11 +114,10 @@ def test_record_idle_fire_marks_llm_initiated_source() -> None:
     """M3 fires set rule_name to 'llm_initiated:<tool>'; telemetry distinguishes."""
     brain = _bare_brain()
     brain._memory = _RecordingMemory()
-    fire = IdleFireResult(
-        rule_name="llm_initiated:word_of_the_day", tool_name="word_of_the_day",
+    fire = _fire(
+        rule_name="llm_initiated:word_of_the_day",
         tool_output="serendipity: a happy accident",
-        framing="react to it",
-        latency_ms=80.0, success=True,
+        framing="react to it", latency_ms=80.0,
     )
     brain._idle_runner.record_fire(fire, emitted=True)
     assert brain._memory.calls[0]["data"]["source"] == "llm_initiated"
@@ -164,3 +170,29 @@ def test_build_idle_context_wires_session_minutes(monkeypatch: Any) -> None:
     assert ctx.first_session_of_day is True
     assert ctx.consent_web_fetches is False
     assert ctx.mood == "snarky"
+
+
+async def test_deliver_registers_running_bit_silently_without_opener() -> None:
+    brain = _bare_brain()
+    brain._personality = PersonalityEngine(persona_prompt="test")
+    brain._idle_runner._riff = AsyncMock()  # type: ignore[method-assign]
+    fire = _fire(
+        rule_name="deep_work", tool_output="3h",
+        framing="you have been at it for {output}",
+        running_bit=True, bit_decay_s=900.0,
+    )
+    assert await brain._idle_runner.deliver("snapshot", fire) is False
+    brain._idle_runner._riff.assert_not_awaited()
+    bits = brain._personality.active_running_bits()
+    assert [(b.tag, b.framing, b.payload) for b in bits] == [
+        ("deep_work", "you have been at it for 3h", {"output": "3h"}),
+    ]
+    assert bits[0].decay_at - bits[0].added_at == pytest.approx(900.0)
+
+
+async def test_deliver_riffs_one_shot_fire_without_running_bit() -> None:
+    brain = _bare_brain()
+    brain._idle_runner._riff = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    fire = _fire()
+    assert await brain._idle_runner.deliver("snapshot", fire) is True
+    brain._idle_runner._riff.assert_awaited_once_with("snapshot", fire)

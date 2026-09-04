@@ -95,14 +95,21 @@ class IdleToolRunner:
             return
         if result is None:
             return
-        if result.running_bit:
-            self._register_running_bit(result)
-            if not result.opener_framing:
+        await self.deliver(snapshot, result)
+
+    async def deliver(self, snapshot: str, fire: IdleFireResult) -> bool:
+        """Register a running bit if any, then riff or record silently.
+
+        Returns True iff a line reached the user.
+        """
+        if fire.running_bit:
+            self._register_running_bit(fire)
+            if not fire.opener_framing:
                 # Silent registration — bit rides along future prompts without
                 # announcing itself. Still counts as a fire for telemetry.
-                self.record_fire(result, emitted=True)
-                return
-        await self._riff(snapshot, result)
+                self.record_fire(fire, emitted=True)
+                return False
+        return await self._riff(snapshot, fire)
 
     async def _maybe_fire_llm_initiated(self, snapshot: str) -> bool:
         """M3 (issue #33): let the LLM optionally pick a flavor tool.
@@ -129,7 +136,7 @@ class IdleToolRunner:
             return False
         if result is None:
             return False
-        await self._riff(snapshot, result)
+        await self.deliver(snapshot, result)
         return True
 
     def _register_running_bit(self, fire: IdleFireResult) -> None:
@@ -145,7 +152,7 @@ class IdleToolRunner:
             payload={"output": fire.tool_output},
         )
 
-    async def _riff(self, snapshot: str, fire: IdleFireResult) -> None:
+    async def _riff(self, snapshot: str, fire: IdleFireResult) -> bool:
         """Compose an in-character line that weaves the tool output in."""
         b = self._brain
         # Running-bit opener uses opener_framing; one-shot rules use framing.
@@ -175,7 +182,7 @@ class IdleToolRunner:
             log.exception("Idle-tool riff generation failed")
             b._push_status()
             self.record_fire(fire, emitted=False)
-            return
+            return False
 
         filtered = b._personality.filter_response(response.text)
         filter_reason = b._personality.last_filter_reason.value
@@ -199,7 +206,7 @@ class IdleToolRunner:
             self.record_fire(
                 fire, emitted=False, filter_reason=filter_reason or "empty",
             )
-            return
+            return False
 
         log.info(
             "TokenPal (idle-tool %s -> %s): %s (%.0fms)",
@@ -208,6 +215,7 @@ class IdleToolRunner:
         b._emit_comment(filtered)
         b._recent_outputs.append(filtered)
         self.record_fire(fire, emitted=True)
+        return True
 
     def record_fire(
         self,

@@ -3,7 +3,7 @@
 Layered on top of the deterministic M1+M2 path. During a freeform tick, if
 M3 is enabled, the LLM is offered a curated 9-tool flavor catalog and may
 choose to call one. One tool call max per fire; second turn (the riff) is
-the existing `_generate_tool_riff` path so personality + filter pipeline
+the existing `IdleToolRunner.deliver` path so personality + filter pipeline
 are reused.
 
 Cross-path cooldown is asymmetric on purpose. A deterministic fire of

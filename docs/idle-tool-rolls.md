@@ -37,9 +37,9 @@ into a riff prompt.
 │     5. for chain rules, fan out to extra_tool_names         │
 │     6. return IdleFireResult | None                         │
 │                                                             │
-│   Brain then either:                                        │
-│     a. one-shot:     _generate_tool_riff(fire)              │
-│     b. running-bit:  _register_running_bit(fire) + opener   │
+│   Brain then hands the result to:                           │
+│     IdleToolRunner.deliver(snapshot, fire) - registers a    │
+│     running bit if any, then riffs or stays silent          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -278,7 +278,10 @@ three are invoked from `/idle_tools` subcommands.
   required.
 - `enable` / `disable` — flip a single rule toggle. Restart required.
 - `roll <rule>` — force-fire via `force_fire`, bypassing predicate and
-  cooldown. Useful for tuning framing strings live.
+  cooldown, then `IdleToolRunner.deliver`. Useful for tuning framing
+  strings live. Still honours the sensitive-app gate, and posts a chat
+  note when the fire produced no line (silent running bit, filtered, or
+  LLM error).
 - `llm_on` / `llm_off` — flip `llm_initiated_enabled` for the M3 path
   (issue #33). Restart required. Note: M3 also requires the
   `TOKENPAL_M3=1` env var during dogfood (M3.1-M3.3); env-gate drops
@@ -435,7 +438,7 @@ mirror the tightest deterministic rule cooldown for the same tool
 
 **Single tool turn.** M3 calls `generate_with_tools` once. If the
 response includes a `tool_calls[0]` in the catalog, the action is
-invoked, then `_generate_tool_riff` (the existing deterministic riff
+invoked, then `IdleToolRunner.deliver` (the existing deterministic riff
 path) runs LLM turn 2 to compose the in-character line - the personality
 prompt + filter pipeline are reused unchanged. M3 does NOT round-trip
 the tool call back to the model on turn 2; the personality prompt frames
