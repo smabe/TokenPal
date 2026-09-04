@@ -2,9 +2,10 @@
 
 Registry-driven: it enumerates ``reads_desktop_content`` actions rather than
 naming them, so a tool added by #52-#55 is measured the moment it registers.
-With no marked tool shipped the parametrized cases report as skipped ("got
-empty parameter set"); the unparametrized cases below still run and pin the
-strings and the registry/catalog parity the enforcement depends on.
+The parametrized cases run for ``read_selection``, the first marked tool; one
+unparametrized case names it so a lost registration cannot pass as a green
+"skipped" run. The others pin the strings and the registry/catalog parity the
+enforcement depends on.
 
 What is NOT here, by design: a marked tool's sensitive-source refusal and an
 ``assert_no_leak`` sweep over its real read path. A generic test cannot supply
@@ -243,6 +244,15 @@ def _instantiate(cls: type[AbstractAction]) -> AbstractAction:
         return cls({})
     except Exception as exc:  # platform-gated tool on the wrong host
         pytest.skip(f"{cls.action_name} not constructible here: {exc}")
+
+
+def test_the_first_marked_tool_is_registered_on_every_host() -> None:
+    """``discover_actions`` swallows ImportError, so a marked tool whose module
+    stops importing (a pyobjc import escaping function scope, say) would make
+    every parametrized case above skip. The import comes first so the
+    traceback names the cause. Add the next marked tool to the set."""
+    importlib.import_module("tokenpal.actions.read_selection")
+    assert {"read_selection"} <= {cls.action_name for cls in _MARKED}
 
 
 @pytest.mark.parametrize("cls", _MARKED, ids=lambda c: c.action_name)

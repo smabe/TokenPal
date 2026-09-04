@@ -5,6 +5,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+from tests._helpers import JsonResponse
 from tokenpal.llm.base import AbstractLLMBackend
 from tokenpal.llm.http_backend import HttpBackend
 
@@ -162,19 +163,16 @@ def _fake_backend(message: dict) -> tuple[HttpBackend, dict]:
     })
     captured: dict = {}
 
-    class _FakeResponse:
-        def raise_for_status(self): pass
-        def json(self):
-            return {
-                "choices": [{"message": message, "finish_reason": "stop"}],
-                "usage": {"total_tokens": 1},
-            }
+    payload = {
+        "choices": [{"message": message, "finish_reason": "stop"}],
+        "usage": {"total_tokens": 1},
+    }
 
     class _FakeClient:
         async def post(self, url, json, timeout=None):
             captured["body"] = json
             captured["timeout"] = timeout
-            return _FakeResponse()
+            return JsonResponse(payload)
 
     backend._client = _FakeClient()  # type: ignore[assignment]
     return backend, captured

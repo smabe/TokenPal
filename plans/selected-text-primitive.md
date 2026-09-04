@@ -69,8 +69,15 @@ Let the user select text in another app, switch to TokenPal, type `/proofread` o
 - `tests/test_desktop/test_privacy_contract.py` — p2 — a non-parametrized test asserting `read_selection` is in `_MARKED`
 - `tests/test_desktop/test_read_selection.py` — p2 — new: sensitive refusal, envelope size, agent-run no-leak sweep
 - `tests/test_llm/test_tool_calling.py` — p2 — malformed-argument warning carries no argument text
+- `tests/test_actions/test_catalog.py` — p2 — `LOCAL_SECTION` membership set gains `read_selection`
+- `tests/_helpers.py` — p2 — shared `agent_brain`, `tool_call`, `tool_call_response`, `allow_confirm`, `JsonResponse`
+- `tests/test_brain/test_tool_loop.py` — p2 — delegates its agent harness to `tests/_helpers.py`
+- `tests/test_agent.py` — p2 — uses the shared confirm and tool-call helpers
+- `tests/test_max_tokens_auto_probe.py` — p2 — inline response fakes → `JsonResponse`
+- `tests/test_server/test_llm_backend.py` — p2 — inline response fake → `JsonResponse`
+- `plans/RESUME-selected-text-primitive.md` — p2 — call-order line corrected
 - `docs/claude/actions.md` — p2 — author checklist gains the envelope-size rule and names `read_selection` as the reference implementation
-- `tokenpal/desktop/content.py` — p3 — `ContentKind` gains `"typed"`
+- `tokenpal/desktop/content.py` — p2, p3 — p2: `refuse_if_sensitive` docstring carries the title-gate tradeoff; p3: `ContentKind` gains `"typed"`
 - `tokenpal/desktop/tasks.py` — p3 — new: `DesktopTask`, task instructions, `build_task_prompt`, `task_max_tokens`
 - `tokenpal/brain/orchestrator.py` — p3 — desktop-task queue, `submit_desktop_task`, `_handle_desktop_task`
 - `tokenpal/app.py` — p3 — `make_desktop_task_command` and the two registrations

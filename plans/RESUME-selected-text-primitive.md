@@ -14,7 +14,7 @@ it registers.
 
 Read first:
 - docs/claude/actions.md § "Desktop content tools" — the author checklist. The
-  call order is require_consent() -> OS read -> refuse_if_sensitive(app) ->
+  call order is require_consent() -> refuse_if_sensitive(app, title) as soon as the app is known -> OS read ->
   DesktopContent(...).to_prompt_block(). Set reads_desktop_content = True and
   cacheable = False; everything else (trace redaction, cache bypass, network-tool
   drop, unpersisted delivery, conversation-path refusal) is automatic.

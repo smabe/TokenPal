@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from tests._helpers import JsonResponse
 from tokenpal.llm.http_backend import HttpBackend
 
 
@@ -113,21 +114,16 @@ async def test_probe_parses_ollama_api_show_response() -> None:
     """_probe_context_length parses model_info[*.context_length]."""
     b = _backend()
 
-    class FakeResp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {
-                "model_info": {
-                    "general.architecture": "gemma",
-                    "gemma.context_length": 8192,
-                    "gemma.embedding_length": 2048,
-                }
-            }
+    resp = JsonResponse({
+        "model_info": {
+            "general.architecture": "gemma",
+            "gemma.context_length": 8192,
+            "gemma.embedding_length": 2048,
+        }
+    })
 
     client = AsyncMock()
-    client.post = AsyncMock(return_value=FakeResp())
+    client.post = AsyncMock(return_value=resp)
     b._client = client  # type: ignore[assignment]
     ctx = await b._probe_context_length()
     assert ctx == 8192
@@ -150,15 +146,10 @@ async def test_probe_returns_none_on_http_error() -> None:
 async def test_probe_returns_none_when_model_info_missing() -> None:
     b = _backend()
 
-    class FakeResp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {"details": {}}  # no model_info
+    resp = JsonResponse({"details": {}})  # no model_info
 
     client = AsyncMock()
-    client.post = AsyncMock(return_value=FakeResp())
+    client.post = AsyncMock(return_value=resp)
     b._client = client  # type: ignore[assignment]
     assert await b._probe_context_length() is None
 
@@ -176,21 +167,16 @@ async def test_props_probe_parses_llamacpp_response() -> None:
     """_probe_llamacpp_props reads default_generation_settings.n_ctx."""
     b = _backend(inference_engine="llamacpp")
 
-    class FakeResp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {
-                "default_generation_settings": {
-                    "n_ctx": 8192,
-                    "params": {"n_predict": -1},
-                },
-                "model_path": "/models/qwen3.gguf",
-            }
+    resp = JsonResponse({
+        "default_generation_settings": {
+            "n_ctx": 8192,
+            "params": {"n_predict": -1},
+        },
+        "model_path": "/models/qwen3.gguf",
+    })
 
     client = AsyncMock()
-    client.get = AsyncMock(return_value=FakeResp())
+    client.get = AsyncMock(return_value=resp)
     b._client = client  # type: ignore[assignment]
     ctx = await b._probe_llamacpp_props()
     assert ctx == 8192
@@ -211,15 +197,10 @@ async def test_props_probe_returns_none_on_http_error() -> None:
 async def test_props_probe_returns_none_when_n_ctx_missing() -> None:
     b = _backend(inference_engine="llamacpp")
 
-    class FakeResp:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {"default_generation_settings": {}}
+    resp = JsonResponse({"default_generation_settings": {}})
 
     client = AsyncMock()
-    client.get = AsyncMock(return_value=FakeResp())
+    client.get = AsyncMock(return_value=resp)
     b._client = client  # type: ignore[assignment]
     assert await b._probe_llamacpp_props() is None
 

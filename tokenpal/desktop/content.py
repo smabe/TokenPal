@@ -96,7 +96,9 @@ def refuse_if_sensitive(source_app: str, window_title: str = "") -> ActionResult
 
     The title check exists for browsers: "Safari" is never a sensitive app,
     but a banking or password-manager page in it is, and the title is the only
-    signal. It uses the narrower content-term list because titles are prose.
+    signal. It uses the narrower content-term list because titles are prose,
+    so a bank whose name is an ordinary word (chase, fidelity) passes — the
+    full app list would refuse ordinary page titles ("Keep calm").
 
     The message never names the app: the result is returned to the model as
     the tool result, and the repo substitutes a generic label wherever a

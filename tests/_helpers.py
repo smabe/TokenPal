@@ -2,7 +2,8 @@
 
 Importable from any test:
 
-    from tests._helpers import ScriptedLLM, ok_response
+    from tests._helpers import ScriptedLLM, ok_response, tool_call_response
+    from tests._helpers import JsonResponse, agent_brain, assert_no_leak
 
 Resolves issue #37 - was previously redefined inline in five test
 modules. Reply-continuation tests still hold their own variant because
@@ -13,9 +14,14 @@ from __future__ import annotations
 
 import sqlite3
 from typing import Any
+from unittest.mock import MagicMock
 
+from tokenpal.actions.base import AbstractAction
 from tokenpal.brain.memory import MemoryStore
-from tokenpal.llm.base import AbstractLLMBackend, LLMResponse
+from tokenpal.brain.orchestrator import AgentBridge, Brain
+from tokenpal.brain.personality import PersonalityEngine
+from tokenpal.config.schema import AgentConfig
+from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 from tokenpal.senses.web_search.client import SearchResult
 
 
@@ -143,3 +149,59 @@ def assert_no_leak(
                 assert fixture not in str(row), f"fixture leaked into {table}: {row!r}"
     finally:
         conn.close()
+
+
+def tool_call(name: str, arguments: dict[str, Any] | None = None, call_id: str = "c1") -> ToolCall:
+    return ToolCall(id=call_id, name=name, arguments=arguments or {})
+
+
+def tool_call_response(*calls: ToolCall) -> LLMResponse:
+    """An LLM turn that makes *calls* and says nothing."""
+    return LLMResponse(
+        text="", tokens_used=0, model_name="t", latency_ms=0, tool_calls=list(calls),
+    )
+
+
+class JsonResponse:
+    """The two methods ``HttpBackend`` reads off an httpx response."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+async def allow_confirm(_name: str, _args: dict[str, Any]) -> bool:
+    return True
+
+
+def agent_brain(
+    llm: AbstractLLMBackend, actions: list[AbstractAction], memory: MemoryStore,
+) -> tuple[Brain, list[str]]:
+    """A Brain wired for ``_handle_agent_goal`` whose trace sink mirrors the
+    real one: every ``persist=True`` line lands in *memory*'s chat log, so
+    ``assert_no_leak(..., memory=memory)`` measures the same table the app
+    writes. Returns the brain and the captured trace buffer."""
+    buf, capture = capture_logs()
+
+    def _log(text: str, *, markup: bool = False, url: str | None = None,
+             persist: bool = True) -> None:
+        capture(text, markup=markup, url=url, persist=persist)
+        if persist:
+            memory.record_chat_entry(speaker="buddy", text=text, url=url)
+
+    brain = Brain(
+        senses=[],
+        llm=llm,
+        ui_callback=MagicMock(),
+        personality=PersonalityEngine("You are a test bot. Say 'ok' or [SILENT]."),
+        actions=actions,
+        agent_bridge=AgentBridge(
+            config=AgentConfig(), log_callback=_log, confirm_callback=allow_confirm,
+        ),
+    )
+    return brain, buf

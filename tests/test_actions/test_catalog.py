@@ -23,6 +23,7 @@ def test_local_section_lists_all_phase1_tools() -> None:
         "git_status",
         "list_processes",
         "memory_query",
+        "read_selection",
     }
 
 

@@ -8,13 +8,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-from tests._helpers import assert_no_leak, capture_logs
+from tests._helpers import agent_brain, assert_no_leak, tool_call, tool_call_response
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import AgentBridge, Brain
 from tokenpal.brain.personality import PersonalityEngine
-from tokenpal.config.schema import AgentConfig
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
 
 
@@ -372,18 +371,8 @@ class _EchoAction(AbstractAction):
         return ActionResult(output="echoed")
 
 
-async def _allow(_name: str, _args: dict[str, Any]) -> bool:
-    return True
-
-
 def _reads_call() -> LLMResponse:
-    return LLMResponse(
-        text="",
-        tokens_used=1,
-        model_name="mock",
-        latency_ms=0.0,
-        tool_calls=[ToolCall(id="c1", name="reads", arguments={})],
-    )
+    return tool_call_response(tool_call("reads"))
 
 
 async def test_conversation_specs_exclude_desktop_content_tools() -> None:
@@ -412,23 +401,7 @@ async def test_conversation_executor_refuses_a_desktop_content_tool() -> None:
 def _agent_brain(
     llm: _MockLLM, reads: _ReadsAction, memory: MemoryStore,
 ) -> tuple[Brain, list[str]]:
-    buf, capture = capture_logs()
-
-    def _log(text: str, *, markup: bool = False, url: str | None = None,
-             persist: bool = True) -> None:
-        capture(text, markup=markup, url=url, persist=persist)
-        if persist:
-            memory.record_chat_entry(speaker="buddy", text=text, url=url)
-
-    bridge = AgentBridge(
-        config=AgentConfig(),
-        log_callback=_log,
-        confirm_callback=_allow,
-    )
-    brain = _make_brain(
-        llm, actions=[reads, _EchoAction()], agent_bridge=bridge,
-    )
-    return brain, buf
+    return agent_brain(llm, [reads, _EchoAction()], memory)
 
 
 async def test_agent_run_with_desktop_content_delivers_unpersisted(

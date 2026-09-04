@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
+from unittest.mock import AsyncMock
 
+from tests._helpers import JsonResponse
 from tokenpal.llm.base import AbstractLLMBackend, LLMResponse, ToolCall
+from tokenpal.llm.http_backend import HttpBackend
 
 
 class _MockBackend(AbstractLLMBackend):
@@ -66,3 +70,62 @@ async def test_generate_with_tools_fallback():
     result = await backend.generate_with_tools(messages, tools)
     assert result.text == "hi"
     assert backend._call_log[0]["prompt"] == "What time is it?"
+
+
+async def test_malformed_tool_arguments_are_never_logged(caplog: Any) -> None:
+    """The parse failure sits below the agent layer, where no session flag can
+    redact it — and malformed JSON correlates with long unescaped strings,
+    which is exactly what a desktop-content tool call carries."""
+    secret = "SECRET-FIXTURE-7731"
+    raw_args = '{"text": "' + secret
+
+    payload = {
+        "choices": [{
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "function": {"name": "read_selection", "arguments": raw_args},
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }
+
+    backend = HttpBackend({"api_url": "http://localhost:11434/v1", "model_name": "m"})
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=JsonResponse(payload))
+    backend._client = client  # type: ignore[assignment]
+
+    with caplog.at_level(logging.WARNING):
+        response = await backend.generate_with_tools([{"role": "user", "content": "x"}], [])
+
+    assert response.tool_calls[0].arguments == {}
+    assert secret not in caplog.text
+    assert "read_selection" in caplog.text
+    assert f"{len(raw_args)} chars" in caplog.text
+
+
+async def test_non_object_tool_arguments_become_an_empty_dict() -> None:
+    """``ToolCall.arguments`` is a dict by contract; a server that sends
+    ``"null"`` or ``"[]"`` must not hand the executor a None or a list."""
+    payload = {
+        "choices": [{
+            "message": {
+                "content": "",
+                "tool_calls": [{
+                    "id": "c1",
+                    "function": {"name": "timer", "arguments": "null"},
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }],
+    }
+    backend = HttpBackend({"api_url": "http://localhost:11434/v1", "model_name": "m"})
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=JsonResponse(payload))
+    backend._client = client  # type: ignore[assignment]
+
+    response = await backend.generate_with_tools([{"role": "user", "content": "x"}], [])
+
+    assert response.tool_calls[0].arguments == {}

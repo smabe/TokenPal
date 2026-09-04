@@ -60,6 +60,12 @@ LOCAL_SECTION = CatalogSection(
         CatalogEntry("git_status", "Show working-tree status.", kind="local"),
         CatalogEntry("list_processes", "List top processes by CPU then RSS.", kind="local"),
         CatalogEntry("memory_query", "Query local session history metrics.", kind="local"),
+        CatalogEntry(
+            "read_selection",
+            "Read the selected text of the app you came from (macOS). "
+            "Needs desktop_content consent.",
+            kind="local",
+        ),
     ),
 )
 UTILITIES_SECTION = CatalogSection(

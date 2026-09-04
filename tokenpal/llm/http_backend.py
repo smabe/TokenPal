@@ -445,7 +445,11 @@ class HttpBackend(AbstractLLMBackend):
             try:
                 args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             except json.JSONDecodeError:
-                log.warning("Bad tool call arguments: %s", raw_args)
+                log.warning(
+                    "Bad tool call arguments for %s (%d chars)", fn.get("name", ""), len(raw_args)
+                )
+                args = {}
+            if not isinstance(args, dict):
                 args = {}
             tool_calls.append(ToolCall(
                 id=tc.get("id", ""),

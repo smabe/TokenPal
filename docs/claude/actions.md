@@ -17,16 +17,18 @@ reads_desktop_content: ClassVar[bool] = True
 cacheable: ClassVar[bool] = False
 ```
 
+`tokenpal/actions/read_selection.py` is the reference implementation — the whole tool is the `execute()` this contract prescribes, nothing more.
+
 `reads_desktop_content` is the only switch; everything below keys on it. `cacheable = False` is belt-and-braces — `AgentRunner._execute_one` already excludes a marked action from the in-run cache — and the contract test requires it so the intent survives a refactor of the runner.
 
 ### Call order inside `execute()`
 
 1. `require_consent()` — **first, before any argument validation**, so a missing grant refuses identically however the model called the tool. Returns `None` when the grant exists, otherwise `ActionResult(success=False, output="Tool requires 'desktop content' consent. Open /consent to grant it.")`. Assign it, test for `None`, and return it unchanged when it is not — never `return require_consent()`, which returns `None` on a consented machine.
-2. Read from the OS.
-3. `refuse_if_sensitive(source_app)` — return its result when not `None`.
+2. `refuse_if_sensitive(source_app, window_title)` — as soon as the app name is known: before the OS read when the window list gives it (`capture_selection` refuses on the window owner name and the window title before touching the Accessibility API), after the read otherwise. Return its result when not `None`.
+3. Read from the OS.
 4. `DesktopContent(text, source_app, kind).to_prompt_block()` — put **only** that string into `ActionResult.output`.
 
-Steps 1, 3 and 4 live in `tokenpal/desktop/content.py`; step 2 is yours. `Category.DESKTOP_CONTENT` is `"desktop_content"`; `/consent` lists and revokes it like any other category.
+Steps 1, 2 and 4 live in `tokenpal/desktop/content.py`; step 3 is yours. `Category.DESKTOP_CONTENT` is `"desktop_content"`; `/consent` lists and revokes it like any other category.
 
 Never hand-build the `<desktop_content>` envelope. `to_prompt_block` scrubs the body with `scrub_content_body` (the narrower `contains_sensitive_content_term` list — the full app-name list in `scrub_body` matches ordinary prose like "signal" and "health" and stays with the network tools and `display_text`), runs `neutralize_envelope_tags(..., "desktop_content")` so a forged closing tag in the read text cannot break out, and strips `"`, `<`, `>` and line separators from both interpolated attributes.
 
@@ -63,6 +65,7 @@ Desktop content **is** sent to the configured inference server, which may be a r
 
 - `cacheable: ClassVar[bool] = False` — `AbstractAction.cacheable` defaults to **True**.
 - the `require_consent()` call — nothing calls it on your behalf.
+- a `max_chars` cap so the scrubbed envelope stays under `_MESSAGE_RESULT_CAP` (`tokenpal/brain/agent.py`) — the runner truncates a longer result and the closing tag is lost. `read_selection` passes 1,000; its test pins the worst case.
 
 Three the defaults already satisfy, so the test only guards against a regression: `safe`/`requires_confirm`, absence from `M3_CATALOG` and every `M1_RULES` `tool_name`/`extra_tool_names` (both ambient paths build from hand-written allowlists that consult no marker, and both feed the persisted observation path), and absence from `DEFAULT_TOOLS` (a marked tool is opt-in via `[tools] enabled_tools`, never on by default). The test also refuses a marked tool that reaches any network client, or that hand-builds the envelope string.
 
@@ -70,3 +73,5 @@ Each tool must write for itself, because a generic test cannot supply valid argu
 
 - a sensitive-source refusal test that stubs the OS read to report a sensitive app and asserts the refusal;
 - an `assert_no_leak(fixture, lines=..., caplog_text=..., memory=...)` sweep (`tests/_helpers.py`) over its own path, proving a fixture string reaches no persisted trace line, no log output, and neither `chat_log` nor `conversation_summaries`.
+
+Add your tool's name to `test_the_first_marked_tool_is_registered_on_every_host` in that file; the parametrized cases skip silently when a marked module fails to import.

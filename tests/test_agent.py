@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from tests._helpers import ScriptedLLM, assert_no_leak
+from tests._helpers import ScriptedLLM, allow_confirm, assert_no_leak, tool_call_response
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.brain.agent import AgentRunner, AgentSession
 from tokenpal.config.schema import AgentConfig
@@ -68,10 +68,6 @@ class _Boom(AbstractAction):
         raise RuntimeError("kaboom")
 
 
-async def _always_allow(_name: str, _args: dict[str, Any]) -> bool:
-    return True
-
-
 async def _always_deny(_name: str, _args: dict[str, Any]) -> bool:
     return False
 
@@ -98,7 +94,7 @@ def _runner(
     llm: ScriptedLLM,
     actions: dict[str, AbstractAction] | None = None,
     *,
-    confirm=_always_allow,
+    confirm=allow_confirm,
     is_sensitive=_no_sensitive,
     max_steps: int = 8,
     token_budget: int = 12000,
@@ -161,7 +157,7 @@ async def test_status_callback_reports_tool_name() -> None:
         llm=llm,
         actions=_echo_actions(),
         log_callback=_list_log(None),
-        confirm_callback=_always_allow,
+        confirm_callback=allow_confirm,
         is_sensitive=_no_sensitive,
         status_callback=statuses.append,
     )
@@ -723,19 +719,12 @@ def _marked_actions() -> dict[str, AbstractAction]:
     return {"reads": _Reads({}), "random_fact": _Fact({}), "echo": _Echo({})}
 
 
-def _tool_call_response(*calls: ToolCall) -> LLMResponse:
-    return LLMResponse(
-        text="", tokens_used=0, model_name="t", latency_ms=0,
-        tool_calls=list(calls),
-    )
-
-
 @pytest.mark.asyncio
 async def test_marked_tool_result_is_redacted_in_trace(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     _Reads.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(_call("reads", {}, "c1")),
+        tool_call_response(_call("reads", {}, "c1")),
         LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
     ])
     logs: list[str] = []
@@ -753,7 +742,7 @@ async def test_reasoning_is_hidden_after_a_marked_tool(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     _Reads.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(_call("reads", {}, "c1")),
+        tool_call_response(_call("reads", {}, "c1")),
         LLMResponse(
             text="all done", tokens_used=0, model_name="t", latency_ms=0,
             reasoning=f"mentions {FIXTURE}",
@@ -770,7 +759,7 @@ async def test_reasoning_is_hidden_after_a_marked_tool(caplog) -> None:
 async def test_consent_gated_tools_are_dropped_after_a_marked_tool() -> None:
     _Reads.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(_call("reads", {}, "c1")),
+        tool_call_response(_call("reads", {}, "c1")),
         LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
     ])
     await _runner(llm, actions=_marked_actions()).run("read it")
@@ -787,8 +776,8 @@ async def test_consent_gated_tools_are_dropped_after_a_marked_tool() -> None:
 async def test_marked_tool_is_never_cached() -> None:
     _Reads.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(_call("reads", {}, "c1")),
-        _tool_call_response(_call("reads", {}, "c2")),
+        tool_call_response(_call("reads", {}, "c1")),
+        tool_call_response(_call("reads", {}, "c2")),
         LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
     ])
     session = await _runner(llm, actions=_marked_actions()).run("read twice")
@@ -802,7 +791,7 @@ async def test_gated_tool_in_the_same_batch_is_skipped() -> None:
     _Reads.calls = 0
     _Fact.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(
+        tool_call_response(
             _call("reads", {}, "c1"), _call("random_fact", {}, "c2"),
         ),
         LLMResponse(text="done", tokens_used=0, model_name="t", latency_ms=0),
@@ -836,8 +825,8 @@ async def test_later_tool_arguments_are_never_persisted(caplog) -> None:
     caplog.set_level(logging.DEBUG)
     _Reads.calls = 0
     llm = ScriptedLLM([
-        _tool_call_response(_call("reads", {}, "c1")),
-        _tool_call_response(_call("echo", {"text": FIXTURE}, "c2")),
+        tool_call_response(_call("reads", {}, "c1")),
+        tool_call_response(_call("echo", {"text": FIXTURE}, "c2")),
         LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
     ])
     logs: list[str] = []
@@ -855,7 +844,7 @@ async def test_marked_tool_that_raises_redacts_and_still_sets_the_flag(caplog) -
     leaked, it would also leave the flag off and disable every other guard."""
     caplog.set_level(logging.DEBUG)
     llm = ScriptedLLM([
-        _tool_call_response(_call("raises", {}, "c1")),
+        tool_call_response(_call("raises", {}, "c1")),
         LLMResponse(text="all done", tokens_used=0, model_name="t", latency_ms=0),
     ])
     logs: list[str] = []
