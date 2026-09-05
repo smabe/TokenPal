@@ -1,13 +1,13 @@
 # Proactive nudges — one reminder tool, persisted, in the buddy's voice
 
 ## Phase map
-**Phase p1 — schedule model + `reminders` table** — NEXT
+**Phase p1 — schedule model + `reminders` table** — SHIPPED `2418088`
 - Enters when: start here
 - Done signal: `Schedule` round-trips through `memory.db` across a simulated restart; DST spring-forward and fall-back cases have pinned, asserted answers; `PRAGMA user_version` reaches 5 on an existing v4 file with its rows intact
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p1.md`
 
-**Phase p2 — scheduler owns the schedule, on a wall clock**
+**Phase p2 — scheduler owns the schedule, on a wall clock** — NEXT
 - Enters when: p1 shipped
 - Done signal: a reminder armed before a simulated 5-hour gap fires exactly once on resume, not five times; `bedtime_wind_down` runs off a real time-of-day schedule with no `""`-means-skip trick; `one_shot` and `registered_names` are gone
 - If it fails: no gate — fix-forward
@@ -60,7 +60,14 @@ Also corrected: this plan does **not** overturn `CONTEXT.md:37-38` (the not-a-We
 
 Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (the Windows Search backend, written on the Mac and unverified on Windows). p1-p3 of it shipped as `f0ca2f0`, `d42522f`, `3bbe847`. The operator moved to this plan first; work them sequentially, not together.
 
-NEXT: p1 — read `plans/proactive-nudges-p1.md` FIRST.
+NEXT: p2 — read `plans/proactive-nudges-p2.md` FIRST, including its `## Carried in from p1` section.
+
+p1 shipped as `2418088` (2026-09-04). **Spec check at p1** — 4/4 Work items evidenced · none unclaimed. Review: Codex peer was quota-exhausted (resets 2026-09-06 22:26), so `auto-review` ran its host-native fallback fan-out — six angles, then a two-agent closing round over the repaired diff. No external-peer receipt and no commit-gate stamp exist for this phase. 11 findings applied, 4 refuted with evidence, the rest parked below. Sweep: opened p2, p3, p4, p5 — p2/p3/p5 gained `## Carried in from p1`; p4 clean (its only reference is `ui_callback` wiring, which p1 did not touch).
+
+Three p1 decisions p2 is written against:
+1. `Schedule.next_due_at(after)` rolls forward **one** occurrence. Re-arm from the **current time**, never the deadline just fired on, or a reminder missed over a weekend fires once per tick until it catches up.
+2. `upsert_reminder` parses before writing and preserves `armed_at`/`last_fired_at` across a re-arm; `mark_reminder_fired` returns `bool`.
+3. No per-tick `list_reminders()`. Hydrate once at start, write through on change.
 
 ## Goal
 Replace four near-identical reminder actions and an in-memory scheduler with one `reminder` tool whose armed state survives a restart, whose schedule covers intervals and times of day without the `""`-means-skip trick, and whose nudge text is generated in the buddy's voice without ever blocking the brain loop.
