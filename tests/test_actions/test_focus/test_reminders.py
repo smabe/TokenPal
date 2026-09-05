@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 
 from tokenpal.actions.focus.reminders import (
     BedtimeWindDownAction,
     EyeBreakAction,
     StretchReminderAction,
     WaterReminderAction,
-    _make_bedtime_message_fn,
 )
+from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.proactive import ProactiveScheduler
 
 
@@ -22,22 +23,27 @@ def _scheduler(paused: bool = False) -> tuple[ProactiveScheduler, list[str]]:
     )
 
 
+def _armed_ids(sched: ProactiveScheduler) -> list[str]:
+    return [n.id for n in sched.armed()]
+
+
 async def test_stretch_enable_disable() -> None:
     sched, bubbles = _scheduler()
     action = StretchReminderAction({"scheduler": sched})
     r = await action.execute(interval_min=1)
     assert r.success
-    assert sched.is_registered("stretch_reminder")
+    assert _armed_ids(sched) == ["stretch_reminder"]
+    assert sched.armed()[0].schedule.interval_s == 60.0
 
-    base = sched._nudges["stretch_reminder"].last_fired_at
-    sched.tick(now=base + 0.0)
+    due = sched.armed()[0].next_due_at
+    sched.tick(now=due - 1.0)
     assert bubbles == []
-    sched.tick(now=base + 61.0)
+    sched.tick(now=due)
     assert len(bubbles) == 1
 
     off = await action.execute(action="off")
     assert off.success
-    assert not sched.is_registered("stretch_reminder")
+    assert _armed_ids(sched) == []
 
 
 async def test_water_default_interval() -> None:
@@ -71,12 +77,12 @@ async def test_proactive_pauses_during_sensitive_gate() -> None:
     action = StretchReminderAction({"scheduler": sched})
     await action.execute(interval_min=1)
 
-    base = sched._nudges["stretch_reminder"].last_fired_at
-    sched.tick(now=base + 120.0)  # well past interval, still gated
+    due = sched.armed()[0].next_due_at
+    sched.tick(now=due + 120.0)  # well past the deadline, still gated
     assert bubbles == []
 
     paused["v"] = False
-    sched.tick(now=base + 121.0)  # gate open -> fires now
+    sched.tick(now=due + 121.0)  # gate open -> fires now
     assert len(bubbles) == 1
 
 
@@ -89,36 +95,58 @@ async def test_bedtime_wind_down_requires_target_time() -> None:
     assert not r.success
 
 
-async def test_bedtime_message_fn_window() -> None:
-    # Pretend "now" is 22:30; target 23:00 => 30 min away, inside window.
-    from datetime import time as dtime
-
-    fixed_now = datetime(2026, 1, 1, 22, 30, 0)
-    fn = _make_bedtime_message_fn(
-        dtime(23, 0), "wind down", now_fn=lambda: fixed_now
-    )
-    assert fn() == "wind down"
-
-    # 21:00 now, 23:00 target => 2h away, outside window.
-    fixed_early = datetime(2026, 1, 1, 21, 0, 0)
-    fn2 = _make_bedtime_message_fn(
-        dtime(23, 0), "wind down", now_fn=lambda: fixed_early
-    )
-    assert fn2() == ""
-
-    # 23:30 now, 23:00 target => target treated as tomorrow, 23.5h away.
-    fixed_late = datetime(2026, 1, 1, 23, 30, 0)
-    fn3 = _make_bedtime_message_fn(
-        dtime(23, 0), "wind down", now_fn=lambda: fixed_late
-    )
-    assert fn3() == ""
-
-
-async def test_bedtime_enroll_and_cancel() -> None:
+async def test_bedtime_arms_a_daily_schedule() -> None:
     sched, _ = _scheduler()
     action = BedtimeWindDownAction({"scheduler": sched})
-    r = await action.execute(target_time="23:00", interval_min=30)
+    r = await action.execute(target_time="23:00")
     assert r.success
-    assert sched.is_registered("bedtime_wind_down")
+    assert _armed_ids(sched) == ["bedtime_wind_down"]
+
+    nudge = sched.armed()[0]
+    assert nudge.schedule.kind == "daily"
+    assert (nudge.schedule.at_hour, nudge.schedule.at_minute) == (23, 0)
+    due = datetime.fromtimestamp(nudge.next_due_at)
+    assert (due.hour, due.minute) == (23, 0)
+
     off = await action.execute(action="off")
     assert off.success
+    assert _armed_ids(sched) == []
+
+
+async def test_shutdown_does_not_unpersist_an_armed_reminder(tmp_path: Path) -> None:
+    """Brain._teardown_components awaits teardown() on every action at quit.
+
+    An action-level teardown that cancels would delete every armed row from
+    memory.db on every quit -- the exact outcome persistence exists to prevent.
+    Nothing else in the suite catches a reintroduction.
+    """
+    store = MemoryStore(db_path=tmp_path / "brain.db")
+    store.setup()
+    try:
+        sched = ProactiveScheduler(
+            ui_callback=lambda _t: None, is_paused=lambda: False, memory=store
+        )
+        action = StretchReminderAction({"scheduler": sched})
+        assert (await action.execute(interval_min=30)).success
+        assert [r["id"] for r in store.list_reminders()] == ["stretch_reminder"]
+
+        await action.teardown()
+
+        assert [r["id"] for r in store.list_reminders()] == ["stretch_reminder"]
+        assert _armed_ids(sched) == ["stretch_reminder"]
+    finally:
+        store.teardown()
+
+
+async def test_bedtime_rejects_a_one_digit_minute() -> None:
+    """'9:3' means 09:30 to a user and 09:03 to strptime."""
+    sched, _ = _scheduler()
+    action = BedtimeWindDownAction({"scheduler": sched})
+
+    bad = await action.execute(target_time="9:3")
+    assert not bad.success
+    assert _armed_ids(sched) == []
+
+    good = await action.execute(target_time="9:30")
+    assert good.success
+    assert sched.armed()[0].schedule.at_minute == 30

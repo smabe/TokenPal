@@ -196,7 +196,7 @@ FOCUS_SECTION = CatalogSection(
         ),
         CatalogEntry(
             "bedtime_wind_down",
-            "Recurring wrap-up nudges starting 60 minutes before bedtime.",
+            "A nightly nudge at your bedtime to start wrapping up.",
             kind="focus",
         ),
         CatalogEntry(

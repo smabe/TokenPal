@@ -419,6 +419,7 @@ class Brain:
         self._proactive = ProactiveScheduler(
             ui_callback=self._ui_callback,
             is_paused=self._proactive_paused,
+            memory=self._memory,
         )
 
         # Inject brain-scoped dependencies (scheduler, memory, ui_callback)
@@ -565,6 +566,8 @@ class Brain:
         # memory.db so the next session can reference them.
         self._load_previous_session_note()
         self._start_session_summarizer()
+
+        self._proactive.hydrate()
 
         # EOD: if yesterday has unfrozen activity and we haven't shown the
         # bubble yet, fire it off-thread. Startup should not block on it.

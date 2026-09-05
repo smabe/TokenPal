@@ -44,3 +44,9 @@ See the master `plans/proactive-nudges.md`. Binding here:
 - An 8-character label is emitted verbatim.
 - `grep -n "_speak_async" tokenpal/brain/orchestrator.py` shows three call sites: ambient, typed, and the nudge funnel.
 - `pytest` green; `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
+
+
+## Carried in from p2  *(2026-09-05, do not rediscover)*
+- **The funnel must not tick the scheduler from anywhere the brain loop does not already.** `MemoryStore.teardown()` sets `_conn = None` while `enabled` stays `True`. `mark_reminder_fired` now returns `True` on a closed store precisely so an outage cannot disarm reminders, but a funnel that ticks after memory teardown would still write fires nowhere. The brain loop stops before `memory.teardown()` (`app.py:1839-1844`); keep it that way.
+- **`tick()` already spaces deliveries by `_MIN_NUDGE_GAP_S` (16 s)** because the bubble replaces rather than queues and lingers 15 s (`ui/qt/overlay.py:75`). If the funnel adds its own pacing, do not double-gate — and if the funnel introduces real queueing, the scheduler-level gap is what should then be reconsidered, not duplicated.
+- **`tick()` returns the live `ScheduledNudge` objects held in `_nudges`.** `register()` replaces the dict entry with a new object and `cancel()` pops it, so a generation task holding a returned reference can outlive the reminder it describes and deliver text for something the user just cancelled. Pass the id, or a copy, into anything asynchronous.

@@ -18,15 +18,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-_MIN_INTERVAL_MIN = 1
-_MAX_INTERVAL_MIN = 1440
+MIN_INTERVAL_MIN = 1
+MAX_INTERVAL_MIN = 1440
 
-_MIN_INTERVAL_S = _MIN_INTERVAL_MIN * 60.0
-_MAX_INTERVAL_S = _MAX_INTERVAL_MIN * 60.0
+_MIN_INTERVAL_S = MIN_INTERVAL_MIN * 60.0
+_MAX_INTERVAL_S = MAX_INTERVAL_MIN * 60.0
 
 _EVERY_MIN_HELP = (
     f"every_min must be a whole number of minutes between "
-    f"{_MIN_INTERVAL_MIN} and {_MAX_INTERVAL_MIN}."
+    f"{MIN_INTERVAL_MIN} and {MAX_INTERVAL_MIN}."
 )
 _AT_HELP = "at must be a 24-hour time like '23:00' (00:00 to 23:59)."
 _BOTH_KINDS_HELP = "every_min and at cannot both be set."
@@ -138,7 +138,7 @@ class Schedule:
             raise ValueError(_EVERY_MIN_HELP)
         # Bound before multiplying: int is arbitrary-precision but float is not,
         # so a 400-digit count would raise OverflowError past the ValueError contract.
-        if not _MIN_INTERVAL_MIN <= value <= _MAX_INTERVAL_MIN:
+        if not MIN_INTERVAL_MIN <= value <= MAX_INTERVAL_MIN:
             raise ValueError(_EVERY_MIN_HELP)
         return cls(kind="interval", interval_s=value * 60.0)
 

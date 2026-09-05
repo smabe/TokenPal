@@ -687,10 +687,12 @@ class MemoryStore:
         A caller holding the reminder in memory needs that answer: the row can
         be deleted from the chat thread between a tick's due-check and its
         write-through, and a silent no-op would leave it firing from memory
-        with nothing backing it.
+        with nothing backing it. A closed or disabled store answers True --
+        it has no evidence the row is gone, and a storage outage must not
+        disarm the user's reminders.
         """
         if not self._enabled or not self._conn:
-            return False
+            return True
         with self._lock:
             result = self._conn.execute(
                 "UPDATE reminders SET last_fired_at = ?, next_due_at = ? WHERE id = ?",

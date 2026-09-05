@@ -108,8 +108,8 @@ _Avoid_: window, surface, frontend, view.
 > **Dev:** "Is `ProactiveScheduler` a **Wedge**?"
 > **Domain expert:** "No. A Wedge competes for one slot per tick.
 > ProactiveScheduler is a multi-tenant clock that fires registered nudges
-> on their own intervals; it self-emits through `ui_callback` and never
-> goes through the riff pipeline."
+> on their own schedules (a fixed interval, or a daily time of day); it
+> self-emits through `ui_callback` and never goes through the riff pipeline."
 
 ## Flagged ambiguities
 
