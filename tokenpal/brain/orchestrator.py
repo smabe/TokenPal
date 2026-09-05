@@ -13,7 +13,7 @@ import random
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -44,7 +44,7 @@ from tokenpal.brain.news_buffer import (
 )
 from tokenpal.brain.observation_enricher import ObservationEnricher
 from tokenpal.brain.personality import SENSITIVE_APPS, PersonalityEngine
-from tokenpal.brain.proactive import ProactiveScheduler
+from tokenpal.brain.proactive import MIN_NUDGE_GAP_S, ProactiveScheduler
 from tokenpal.brain.research import ResearchRunner, ResearchSession, Source
 from tokenpal.brain.research_followup import FollowupSession
 from tokenpal.brain.session_summarizer import SessionSummarizer
@@ -209,6 +209,14 @@ _DESKTOP_ABORTED_LINE = "Nothing came back that time — and nothing was saved."
 # observation LLM may not arm or disarm a nudge, and armed rows only hydrate
 # while the tool that can cancel them is enabled.
 _REMINDER_TOOL = "reminder"
+
+# Ceiling on one off-loop nudge generation. Running off the brain loop removes
+# the stall, not the unboundedness: LLMConfig has no request_timeout_s and
+# httpx's timeout is per-read rather than a whole-call cap, so a trickling
+# server can hold a call indefinitely. Sits well above the freeform latency
+# budget the sizing hint derives from -- set any lower and a slow first token
+# means the canned label ships on every fire.
+_NUDGE_TIMEOUT_S = 15.0
 
 # Appended to the conversation system message when retrying after a near-dup
 # trip. Observation context is stripped on the retry to break the lock.
@@ -419,10 +427,10 @@ class Brain:
         self._research = research_bridge or ResearchBridge(config=ResearchConfig())
         self._mode: BrainMode = BrainMode.IDLE
 
-        # Proactive scheduler (phase 3). Shared across all focus actions.
-        # Pauses during active conversation and sensitive-app detection.
+        # Proactive scheduler. Shared across all focus actions. Pauses during
+        # active conversation and sensitive-app detection. A pure clock: it
+        # returns what is due and `_fire_due_nudges` delivers it.
         self._proactive = ProactiveScheduler(
-            ui_callback=self._emit_nudge,
             is_paused=self._proactive_paused,
             memory=self._memory,
         )
@@ -478,6 +486,14 @@ class Brain:
         self._session_summarizer: SessionSummarizer | None = None
         self._session_summary_task: asyncio.Task[None] | None = None
         self._conversation_summary_tasks: set[asyncio.Task[None]] = set()
+
+        # Off-loop nudge generations, keyed by reminder id: at most one in
+        # flight per reminder, so a slow model can't stack tasks that all
+        # write to the same bubble.
+        self._nudge_tasks: dict[str, asyncio.Task[None]] = {}
+        self._nudge_delivery_lock = asyncio.Lock()
+        self._last_nudge_delivery = 0.0
+        self._loose_nudge_tasks: set[asyncio.Task[None]] = set()
 
         # Intent tracking — only when memory is available.
         self._intent_config: IntentConfig = intent_config or IntentConfig()
@@ -780,7 +796,7 @@ class Brain:
 
                 # Fire any due proactive nudges (stretch/water/etc).
                 # Respects conversation + sensitive-app gates via _proactive_paused.
-                self._proactive.tick()
+                self._fire_due_nudges()
 
                 self._rollover_expired_session()
 
@@ -1170,8 +1186,115 @@ class Brain:
         self._suppressed_streak = 0
         self._comment_timestamps.append(time.monotonic())
 
+    def _fire_due_nudges(self) -> None:
+        """Tick the scheduler and put each fired nudge into the buddy's voice.
+
+        `tick()` is synchronous and returns what it fired; the generation that
+        dresses a nudge up runs off the loop, so the loop iteration that fired
+        it never waits on the model.
+        """
+        for nudge in self._proactive.tick():
+            self._spawn_nudge_generation(nudge.id, nudge.label)
+
+    def _spawn_nudge_generation(self, reminder_id: str, label: str) -> None:
+        """Start one off-loop generation for a fired nudge.
+
+        At most one per reminder id: a reminder that comes due again while its
+        last generation is still running emits the canned label rather than
+        stacking a second call. Takes the id and the label by value -- the
+        `ScheduledNudge` a tick returns can be replaced by a re-arm or popped
+        by a cancel while the task is still in flight.
+        """
+        in_flight = self._nudge_tasks.get(reminder_id)
+        if in_flight is not None and not in_flight.done():
+            log.debug(
+                "Nudge '%s' generation still in flight; emitting the label",
+                reminder_id,
+            )
+            self._spawn_task(self._deliver_nudge(reminder_id, label))
+            return
+
+        task = asyncio.create_task(self._generate_nudge(reminder_id, label))
+        self._nudge_tasks[reminder_id] = task
+
+        def _forget(finished: asyncio.Task[None]) -> None:
+            # Identity-checked: a task registered for this id after `finished`
+            # completed but before this callback ran is the live one.
+            if self._nudge_tasks.get(reminder_id) is finished:
+                del self._nudge_tasks[reminder_id]
+
+        task.add_done_callback(_forget)
+
+    def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> None:
+        """Run a coroutine off the loop, holding a reference until it ends."""
+        task = asyncio.create_task(coro)
+        self._loose_nudge_tasks.add(task)
+        task.add_done_callback(self._loose_nudge_tasks.discard)
+
+    async def _generate_nudge(self, reminder_id: str, label: str) -> None:
+        """Write a fired nudge in the buddy's voice, then deliver it.
+
+        The label is the fallback on every failure path -- timeout, exception,
+        or a generation the filter drops -- and `_emit_nudge` applies it, so
+        passing `generated=None` is the whole fallback.
+        """
+        generated: str | None = None
+        try:
+            response = await asyncio.wait_for(
+                self._llm.generate(
+                    self._personality.build_reminder_nudge_prompt(label),
+                    target_latency_s=self._budgets.freeform,
+                    min_tokens=self._min_tokens.freeform,
+                ),
+                timeout=_NUDGE_TIMEOUT_S,
+            )
+            generated = response.text
+        except TimeoutError:
+            log.debug(
+                "Nudge '%s' generation timed out after %.0fs; using the label",
+                reminder_id,
+                _NUDGE_TIMEOUT_S,
+            )
+        except Exception:
+            log.exception("Nudge '%s' generation failed", reminder_id)
+
+        await self._deliver_nudge(reminder_id, label, generated=generated)
+
+    async def _deliver_nudge(
+        self, reminder_id: str, label: str, *, generated: str | None = None
+    ) -> None:
+        """Ship a fired nudge: spaced, re-gated, and failure-swallowing.
+
+        Delivery happens up to _NUDGE_TIMEOUT_S after the fire, so the two
+        guarantees `tick()` used to give for free have to be re-made here.
+
+        Spacing: `MIN_NUDGE_GAP_S` spaces *fires*, but the bubble now lands a
+        variable generation later, so two fires 16 s apart whose generations
+        differ by more than a second land inside the bubble's 15 s linger and
+        the user reads only the second. The gap is re-applied to deliveries.
+
+        Gating: `_proactive_paused` was checked when the nudge fired. A
+        sensitive app or a conversation started since then must still silence
+        it -- every other cap-bypassing emitter re-checks immediately before
+        emitting, and this one now has a window in which to be wrong.
+        """
+        async with self._nudge_delivery_lock:
+            wait = MIN_NUDGE_GAP_S - (time.monotonic() - self._last_nudge_delivery)
+            if wait > 0:
+                await asyncio.sleep(wait)
+            if self._proactive_paused():
+                log.debug("Nudge '%s' suppressed: gate closed while generating",
+                          reminder_id)
+                return
+            self._last_nudge_delivery = time.monotonic()
+            try:
+                self._emit_nudge(label, generated=generated)
+            except Exception:
+                log.exception("Nudge '%s' delivery raised", reminder_id)
+
     def _emit_nudge(self, label: str, *, generated: str | None = None) -> None:
-        """Deliver an armed reminder — the ProactiveScheduler's ui_callback.
+        """Deliver an armed reminder. The scheduler returns fires; this ships
+        them.
 
         Deliberately exempt from the rate cap, the forced-silence breather and
         the near-duplicate ring, and it records none of their state: a
@@ -2924,7 +3047,12 @@ class Brain:
             except Exception:
                 log.exception("Error tearing down action '%s'", action.action_name)
         tasks = [
-            t for t in (self._session_summary_task, *self._conversation_summary_tasks)
+            t for t in (
+                self._session_summary_task,
+                *self._conversation_summary_tasks,
+                *self._nudge_tasks.values(),
+                *self._loose_nudge_tasks,
+            )
             if t is not None and not t.done()
         ]
         for task in tasks:
@@ -2936,6 +3064,8 @@ class Brain:
                 pass
         self._session_summary_task = None
         self._conversation_summary_tasks.clear()
+        self._nudge_tasks.clear()
+        self._loose_nudge_tasks.clear()
         if self._session_summarizer is not None:
             self._session_summarizer.stop()
         await self._llm.teardown()

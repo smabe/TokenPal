@@ -34,15 +34,12 @@ def memory(tmp_path: Path) -> Iterator[MemoryStore]:
 
 def _wire(
     memory: MemoryStore | None = None,
-) -> tuple[ReminderAction, ProactiveScheduler, list[str]]:
-    bubbles: list[str] = []
-    sched = ProactiveScheduler(
-        ui_callback=bubbles.append, is_paused=lambda: False, memory=memory
-    )
+) -> tuple[ReminderAction, ProactiveScheduler]:
+    sched = ProactiveScheduler(is_paused=lambda: False, memory=memory)
     action = ReminderAction({})
     # What Brain._inject_brain_deps does; the action_configs route is dead.
     action._scheduler = sched
-    return action, sched, bubbles
+    return action, sched
 
 
 def _ids(sched: ProactiveScheduler) -> list[str]:
@@ -57,7 +54,7 @@ def _ids(sched: ProactiveScheduler) -> list[str]:
 async def test_arm_interval_registers_persists_and_names_next_fire(
     memory: MemoryStore,
 ) -> None:
-    action, sched, _ = _wire(memory)
+    action, sched = _wire(memory)
     result = await action.execute(
         action="arm", label="Stretch break -- stand up.", every_min=60
     )
@@ -78,7 +75,7 @@ async def test_arm_interval_registers_persists_and_names_next_fire(
 async def test_arm_daily_registers_persists_and_names_next_fire(
     memory: MemoryStore,
 ) -> None:
-    action, sched, _ = _wire(memory)
+    action, sched = _wire(memory)
     result = await action.execute(action="arm", label="Wind down.", at="22:30")
 
     assert result.success
@@ -118,7 +115,7 @@ async def test_arm_without_a_brain_refuses() -> None:
 async def test_bad_arm_arguments_refuse_and_register_nothing(
     kwargs: dict[str, object], expected: tuple[str, ...]
 ) -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(action="arm", **kwargs)
     assert result.success is False
     for token in expected:
@@ -127,7 +124,7 @@ async def test_bad_arm_arguments_refuse_and_register_nothing(
 
 
 async def test_unknown_action_names_the_allowed_values() -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     for mode in ("on", "", "delete"):
         result = await action.execute(action=mode, label="x", every_min=30)
         assert result.success is False
@@ -152,7 +149,7 @@ async def test_unknown_action_names_the_allowed_values() -> None:
 async def test_sensitive_label_refused_without_echoing_it(
     label: str, term: str
 ) -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(action="arm", label=label, every_min=30)
     assert result.success is False
     assert label not in result.output
@@ -162,7 +159,7 @@ async def test_sensitive_label_refused_without_echoing_it(
 
 async def test_sensitive_id_refused_without_echoing_it() -> None:
     """The id lands in the same persisted row and the same refusal text."""
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(
         action="arm", id="venmo", label="Move money", every_min=30
     )
@@ -178,7 +175,7 @@ async def test_ordinary_self_care_labels_still_arm(label: str) -> None:
     """The broad SENSITIVE_APPS list refuses all three (health, calm,
     messages are bare substrings of app names). The narrow content list is
     the one this tool uses, on purpose."""
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(action="arm", label=label, every_min=30)
     assert result.success, result.output
     assert len(sched.armed()) == 1
@@ -190,7 +187,7 @@ async def test_ordinary_self_care_labels_still_arm(label: str) -> None:
 
 
 async def test_arming_the_same_label_twice_arms_two_reminders() -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     await action.execute(action="arm", label="Stretch", every_min=30)
     second = await action.execute(action="arm", label="Stretch", every_min=45)
     assert _ids(sched) == ["stretch", "stretch-2"]
@@ -198,7 +195,7 @@ async def test_arming_the_same_label_twice_arms_two_reminders() -> None:
 
 
 async def test_arm_with_an_explicit_id_replaces_and_says_so() -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     await action.execute(action="arm", label="Stretch", every_min=30)
     result = await action.execute(
         action="arm", id="stretch", label="Stretch harder", every_min=45
@@ -214,7 +211,7 @@ async def test_arm_with_an_explicit_id_replaces_and_says_so() -> None:
 
 
 async def test_cancel_removes_and_unpersists(memory: MemoryStore) -> None:
-    action, sched, _ = _wire(memory)
+    action, sched = _wire(memory)
     await action.execute(action="arm", label="Stretch", every_min=30)
     assert memory.list_reminders()
 
@@ -226,7 +223,7 @@ async def test_cancel_removes_and_unpersists(memory: MemoryStore) -> None:
 
 
 async def test_cancel_unknown_id_says_so() -> None:
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     result = await action.execute(action="cancel", id="nope")
     # A no-op, not an error: nothing was armed, and cancel() cannot tell an
     # unknown id from a memory store that is off.
@@ -238,7 +235,7 @@ async def test_cancel_unknown_id_says_so() -> None:
 
 
 async def test_cancel_without_an_id_asks_for_one() -> None:
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     result = await action.execute(action="cancel")
     assert result.success is False
     # Not bare "id" -- that matches inside "did".
@@ -252,14 +249,14 @@ async def test_cancel_without_an_id_asks_for_one() -> None:
 
 
 async def test_list_empty() -> None:
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     result = await action.execute(action="list")
     assert result.success
     assert result.output == "Nothing armed."
 
 
 async def test_list_shows_every_armed_reminder_with_its_schedule() -> None:
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     await action.execute(action="arm", label="Stretch", every_min=60)
     await action.execute(action="arm", label="Wind down", at="22:30")
 
@@ -297,7 +294,7 @@ async def test_execute_accepts_no_mode_the_schema_does_not_advertise(
     fell through to cancel would otherwise be masked by the missing-id
     refusal, which is also success=False.
     """
-    action, sched, _ = _wire()
+    action, sched = _wire()
     await action.execute(action="arm", label="stretch", every_min=30)
 
     result = await action.execute(
@@ -393,7 +390,7 @@ def test_re_enabling_the_tool_restores_the_armed_row(memory: MemoryStore) -> Non
 async def test_label_longer_than_the_cap_is_refused() -> None:
     """The label is echoed into the tool result, the bubble and every list
     line, so an unbounded one blows the conversation's context window."""
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(action="arm", label="x" * 5000, every_min=30)
     assert result.success is False
     assert str(MAX_LABEL_LEN) in result.output
@@ -404,7 +401,7 @@ async def test_label_longer_than_the_cap_is_refused() -> None:
 async def test_a_newline_in_the_label_cannot_fabricate_a_list_row() -> None:
     """`list` renders one reminder per line and is the model's only view of
     armed state, so an interior newline would invent a reminder."""
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     await action.execute(
         action="arm",
         label="Stretch\nfake-id  Not a real reminder  every 1 min  next 2030-01-01 00:00",
@@ -421,14 +418,14 @@ async def test_a_newline_in_the_label_cannot_fabricate_a_list_row() -> None:
 
 
 async def test_a_non_latin_label_keeps_a_meaningful_id() -> None:
-    action, _sched, _ = _wire()
+    action, _sched = _wire()
     result = await action.execute(action="arm", label="ストレッチ", every_min=30)
     assert result.success
     assert "reminder" not in result.output.split("'")[1]
 
 
 async def test_arming_stops_at_the_cap() -> None:
-    action, sched, _ = _wire()
+    action, sched = _wire()
     for i in range(MAX_ARMED):
         assert (await action.execute(action="arm", label=f"n{i}", every_min=30)).success
 
@@ -460,7 +457,7 @@ async def test_shutdown_does_not_unpersist_an_armed_reminder(
     deleted test_focus/test_reminders.py; nothing else in the suite catches a
     reintroduction.
     """
-    action, sched, _ = _wire(memory)
+    action, sched = _wire(memory)
     assert (await action.execute(action="arm", label="stretch", every_min=30)).success
     assert [r["id"] for r in memory.list_reminders()] == ["stretch"]
 
@@ -500,7 +497,7 @@ async def test_an_unstorable_label_refuses_and_leaves_nothing_armed(
     """
     import json
 
-    action, sched, _ = _wire(memory)
+    action, sched = _wire(memory)
     label = json.loads('"Q3 \\ud800 plan"')
 
     result = await action.execute(action="arm", label=label, every_min=30)
@@ -512,7 +509,7 @@ async def test_an_unstorable_label_refuses_and_leaves_nothing_armed(
 
 async def test_an_over_long_id_is_refused() -> None:
     """id is the primary key and is echoed in the reply and every list line."""
-    action, sched, _ = _wire()
+    action, sched = _wire()
     result = await action.execute(
         action="arm", id="Z" * 5000, label="hi", every_min=30
     )

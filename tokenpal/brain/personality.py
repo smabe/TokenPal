@@ -610,6 +610,35 @@ sitting for ~{stale_hours:.0f} hours with uncommitted changes on top.
 Your line:"""
 
 
+_REMINDER_NUDGE_TEMPLATE = """\
+{identity}
+
+The user armed a recurring reminder for themselves: "{label}". It has just
+come due, and you are the one delivering it. Give ONE short in-character
+line that says that same thing in your voice. Keep what they actually asked
+for — do NOT swap it for different advice, do NOT explain why it matters, do
+NOT ask a question, do NOT mention reminders or schedules.
+
+{mood_line}
+
+Examples of your voice:
+{examples}
+
+{voice_reminder}Your line:"""
+
+
+_FINETUNED_REMINDER_NUDGE_TEMPLATE = """\
+Rules:
+1. ONE short in-character line.
+2. Say the user's own reminder — "{label}" — in your voice. Do not swap it
+   for different advice and do not explain it.
+3. No questions, no preaching, no mention of reminders or schedules.
+
+{mood_line}
+
+Your line:"""
+
+
 class PersonalityEngine:
     """Wraps the persona system prompt and filters LLM output."""
 
@@ -1061,6 +1090,26 @@ class PersonalityEngine:
             branch=branch,
             commit_msg=commit_msg,
             stale_hours=stale_hours,
+            mood_line=self._mood_line(),
+            examples=self._sample_examples(),
+            voice_reminder=self._voice_reminder(),
+        )
+
+    def build_reminder_nudge_prompt(self, label: str) -> str:
+        """Prompt for a fired proactive reminder. See plans/proactive-nudges.md.
+
+        `label` is the user's own words, already refused at arm time if it
+        carried a sensitive term. The caller falls back to it verbatim when
+        this generation is dropped, times out, or raises.
+        """
+        if self.is_finetuned:
+            return _FINETUNED_REMINDER_NUDGE_TEMPLATE.format(
+                label=label,
+                mood_line=self._mood_line(),
+            )
+        return _REMINDER_NUDGE_TEMPLATE.format(
+            identity=self._identity_block(),
+            label=label,
             mood_line=self._mood_line(),
             examples=self._sample_examples(),
             voice_reminder=self._voice_reminder(),

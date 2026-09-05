@@ -35,7 +35,7 @@ rage detector, git-nudge detector, intent drift, idle-tool roller. A Wedge
 proposes at most one `EmissionCandidate` per tick. The Brain ranks
 candidates, applies a gate policy, and runs a single shared riff pipeline
 to produce the bubble. ProactiveScheduler is **not** a Wedge: it is a
-multi-tenant scheduler that self-emits on its own clock.
+multi-tenant scheduler that fires on its own clock.
 _Avoid_: detector, nudger, trigger, generator (each describes one Wedge,
 not the role).
 
@@ -109,7 +109,17 @@ _Avoid_: window, surface, frontend, view.
 > **Domain expert:** "No. A Wedge competes for one slot per tick.
 > ProactiveScheduler is a multi-tenant clock that fires registered nudges
 > on their own schedules (a fixed interval, or a daily time of day); it
-> self-emits through `ui_callback` and never goes through the riff pipeline."
+> fires on its own clock rather than proposing an `EmissionCandidate` for
+> the one-per-tick slot. It does not *deliver*, though: `tick()` decides
+> what is due, writes the fire through, and returns it — the Brain ships
+> it, because the text is generated off the loop and a fire must produce
+> exactly one bubble. Nor does it go through the **Riff** pipeline — but it
+> is not unguarded. A fired nudge has its own funnel, `Brain._emit_nudge`,
+> which shares the riff pipeline's output half (`filter_response` on
+> generated text, plus ambient TTS) and none of its rate accounting: no
+> comment cap, no forced-silence breather, no near-duplicate ring. An armed
+> reminder is a promise the user made to themselves, and a recurring one
+> repeating itself is the feature."
 
 ## Flagged ambiguities
 

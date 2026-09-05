@@ -97,3 +97,7 @@ See the master `plans/proactive-nudges.md`. Binding here:
 ## Done criteria  *(added from p1's findings)*
 - Re-arming a reminder that has already fired preserves its `last_fired_at`; the scheduler's in-memory copy and the row agree after a restart.
 - A reminder disarmed from chat during a tick does not keep firing from memory: `mark_reminder_fired` returning `False` drops it.
+
+
+## Superseded by p5  *(operator, 2026-09-05)*
+- **`ui_callback` is no longer a `ProactiveScheduler` constructor parameter and `tick()` emits nothing.** p2 shipped the scheduler as its own emitter; p4 then made the brain's nudge funnel that callback; p5 found the two together produced a bubble per fire *plus* a bubble per generation. The scheduler is now a pure clock — it decides what is due, writes through, and returns it. `Brain._fire_due_nudges` delivers. The nine `test_proactive.py` tests that asserted on a bubble sink assert on `tick()`'s return list instead.

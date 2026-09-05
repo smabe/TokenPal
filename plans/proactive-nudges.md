@@ -106,6 +106,9 @@ Replace four near-identical reminder actions and an in-memory scheduler with one
 - `tests/test_actions/test_focus/test_brain_injection.py` — p3 — retargeted off `StretchReminderAction`
 - `tests/test_actions/test_reminder.py` — p3 (new) — arm/disarm/list, sensitive-label refusal, ambient exclusion
 - `tokenpal/brain/personality.py` — p5 — the nudge prompt builder
+- `tokenpal/brain/proactive.py` — p5 — `ui_callback` removed; the scheduler stops delivering
+- `tests/test_actions/test_focus/test_proactive.py` — p5 — retargeted off the removed `ui_callback` onto `tick()`'s return
+- `tests/test_actions/test_reminder.py` — p5 — its scheduler fixture drops the removed `ui_callback`
 - `tests/test_brain/test_nudge_emission.py` — p4 (new) — funnel guards and TTS; p5 — off-loop generation, timeout and fallback
 - `tokenpal/brain/proactive.py` — p4 — the docstrings the rewiring falsified
 - `docs/claude/brain.md` — p5 — the ProactiveScheduler entry that has never existed

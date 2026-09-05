@@ -1,9 +1,13 @@
 """Proactive scheduler — drives opt-in recurring nudges (stretch, water, etc).
 
 Design rules (see plans/proactive-nudges.md):
-- Nudges surface through the brain's `ui_callback` as speech bubbles, not
-  OS notifications. The brain wires that to `_emit_nudge`, which also speaks
-  them when ambient audio is on.
+- The scheduler is a pure clock: `tick()` decides what is due, writes the
+  fire through to memory.db, and RETURNS it. It delivers nothing. The brain
+  owns delivery (`_fire_due_nudges` -> `_emit_nudge`), because the text is
+  generated off the loop and a fire must produce exactly one bubble --
+  emitting the canned label here as well would speak every reminder twice.
+- Nudges surface as speech bubbles, not OS notifications, and are spoken
+  when ambient audio is on.
 - Nudges pause while the brain is paused, a long task is running, a
   conversation is active, or a sensitive app is in the foreground.
 - The scheduler owns the schedule. A nudge carries a serialisable
@@ -34,10 +38,12 @@ log = logging.getLogger(__name__)
 _MAX_DEADLINE_AHEAD_S = 26 * 3600.0
 
 # The speech bubble replaces rather than queues and lingers for
-# _BUBBLE_HIDE_DELAY_MS (15 s, ui/qt/overlay.py). Two nudges closer together
-# than that and the user only ever reads the second, so consecutive fires are
-# spaced instead -- the loop ticks every 2 s, which is far too fast on its own.
-_MIN_NUDGE_GAP_S = 16.0
+# _BUBBLE_HIDE_DELAY_MS (15 s, ui/qt/overlay.py), so two nudges closer than
+# that leave the user reading only the second. Applied twice, to different
+# things: here it spaces FIRES (bounding how often a generation is spawned),
+# and in Brain._deliver_nudge it spaces DELIVERIES -- which is where the
+# bubble guarantee actually lives, since generation latency varies.
+MIN_NUDGE_GAP_S = 16.0
 
 GateFn = Callable[[], bool]
 
@@ -54,14 +60,10 @@ class ScheduledNudge:
 
 
 class ProactiveScheduler:
-    """Ticked from the brain loop. Fires due nudges through ui_callback.
+    """Ticked from the brain loop. Returns the due nudges; delivers none.
 
     Parameters
     ----------
-    ui_callback
-        How a nudge reaches the user. The brain wires this to `_emit_nudge`,
-        which posts the speech bubble and speaks it; a bare `ui_callback`
-        (bubble only) also satisfies the contract.
     is_paused
         Returns True when no nudge should fire. The brain wires this to
         `_proactive_paused`, which covers the paused flag, a running long
@@ -74,11 +76,9 @@ class ProactiveScheduler:
 
     def __init__(
         self,
-        ui_callback: Callable[[str], None],
         is_paused: GateFn,
         memory: MemoryStore | None = None,
     ) -> None:
-        self._ui_callback = ui_callback
         self._is_paused = is_paused
         self._memory = memory
         self._nudges: dict[str, ScheduledNudge] = {}
@@ -183,16 +183,16 @@ class ProactiveScheduler:
     # ------------------------------------------------------------------
 
     def tick(self, now: float | None = None) -> list[ScheduledNudge]:
-        """Fire the soonest due nudge whose gate is open. Returns what fired.
+        """Return the soonest due nudge whose gate is open, marked as fired.
 
-        At most one, and never within _MIN_NUDGE_GAP_S of the last: the bubble
+        At most one, and never within MIN_NUDGE_GAP_S of the last: the bubble
         replaces rather than queues, so several overdue nudges delivered back
         to back leave the user reading only the last. Every relaunch after a
         long absence is that case. The rest stay due and follow on later ticks.
 
-        The list return holds at most one element. It is a list so p5 can spawn
-        a generation task per fired nudge without the scheduler importing
-        asyncio.
+        The return holds at most one element. It is a list so the brain can
+        spawn a generation task per fired nudge without the scheduler
+        importing asyncio.
 
         The new deadline is computed from `now`, not from the deadline that
         was missed, so a five-hour gap yields one fire and one future
@@ -206,7 +206,7 @@ class ProactiveScheduler:
             return []
 
         now = now if now is not None else time.time()
-        if now - self._last_emit_at < _MIN_NUDGE_GAP_S:
+        if now - self._last_emit_at < MIN_NUDGE_GAP_S:
             return []
 
         due = sorted(
@@ -226,12 +226,6 @@ class ProactiveScheduler:
             nudge.last_fired_at = now
             nudge.next_due_at = next_due_at
             self._last_emit_at = now
-            try:
-                self._ui_callback(nudge.label)
-            except Exception:
-                # Delivery must not abort the brain-loop iteration that called
-                # tick(); the nudge is already marked fired either way.
-                log.exception("Proactive nudge '%s' delivery raised", nudge.id)
             return [nudge]
 
         return []
