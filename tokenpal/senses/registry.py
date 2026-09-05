@@ -31,8 +31,10 @@ def discover_senses(extra_packages: list[str] | None = None) -> None:
         try:
             pkg = importlib.import_module(pkg_name)
             _walk_and_import(pkg)
-        except ImportError:
-            log.warning("Could not import plugin package: %s", pkg_name)
+        except (ImportError, ValueError) as e:
+            # ValueError is register_action refusing a name the plugin duplicated.
+            # First-party collisions still fail fast; a plugin must not stop launch.
+            log.warning("Could not import plugin package %s: %s", pkg_name, e)
 
 
 def _walk_and_import(package: Any) -> None:

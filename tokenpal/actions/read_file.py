@@ -9,9 +9,18 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
-from tokenpal.util.paths import REJECT_PATH, git_root, resolve_inside
+from tokenpal.util.paths import REJECT_PATH, git_root, path_is_sensitive, resolve_inside
 
 _MAX_BYTES = 200 * 1024
+
+
+def _spelled_rel(path_arg: str, root: Path) -> str | None:
+    """Root-relative posix spelling of ``path_arg`` with no symlink resolution."""
+    spelled = Path(path_arg)
+    try:
+        return (spelled if spelled.is_absolute() else root / spelled).relative_to(root).as_posix()
+    except ValueError:
+        return None
 
 
 async def _git_ls_files_contains(repo_root: Path, rel: str) -> bool:
@@ -21,6 +30,7 @@ async def _git_ls_files_contains(repo_root: Path, rel: str) -> bool:
         str(repo_root),
         "ls-files",
         "--error-unmatch",
+        "--",
         rel,
         stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.DEVNULL,
@@ -61,22 +71,33 @@ class ReadFileAction(AbstractAction):
         if root is None:
             return ActionResult(output="Not inside a git repository.", success=False)
 
-        candidate = Path(path_arg)
-        inside = resolve_inside(
-            candidate if candidate.is_absolute() else root / candidate, [root.resolve()]
-        )
+        inside = resolve_inside(root / path_arg, [root.resolve()])
         if inside is None:
             return ActionResult(output="Path is outside the git repo.", success=False)
         abs_path, _, rel = inside
+        rel = Path(rel).as_posix()
 
-        if not await _git_ls_files_contains(root, rel):
+        # A symlink resolves to a name the caller never spelled, so the denylist
+        # has to run again on what is actually opened.
+        if path_is_sensitive(rel):
+            return ActionResult(output="Path matches a denied pattern.", success=False)
+
+        # Both spellings must be tracked. The spelled name alone lets an untracked
+        # symlink read a tracked file; the resolved target alone lets a tracked
+        # symlink stand in for one the denylist refuses under its own name.
+        spelled = _spelled_rel(path_arg, root)
+        if spelled is None or not await _git_ls_files_contains(root, spelled):
+            return ActionResult(output="File is not tracked by git.", success=False)
+        if spelled != rel and not await _git_ls_files_contains(root, rel):
             return ActionResult(output="File is not tracked by git.", success=False)
 
         try:
             with open(abs_path, "rb") as fh:
                 blob = fh.read(_MAX_BYTES + 1)
         except OSError as e:
-            return ActionResult(output=f"Failed to read file: {e}", success=False)
+            return ActionResult(
+                output=f"Failed to read file: {e.strerror or type(e).__name__}.", success=False
+            )
 
         truncated = len(blob) > _MAX_BYTES
         text = blob[:_MAX_BYTES].decode("utf-8", errors="replace")

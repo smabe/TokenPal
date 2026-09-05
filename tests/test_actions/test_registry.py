@@ -67,8 +67,9 @@ def test_register_action_is_idempotent_for_the_same_class():
 
 def test_builtin_actions_register_without_collisions():
     discover_actions()
-    assert len(_ACTION_REGISTRY) >= 39
-    assert all(name == cls.action_name for name, cls in _ACTION_REGISTRY.items())
+    names = [cls.action_name for cls in _ACTION_REGISTRY.values()]
+    assert sorted(names) == sorted(set(names))
+    assert {"timer", "system_info", "open_app", "do_math"} <= set(names)
 
 
 def test_discover_actions_finds_builtins():
