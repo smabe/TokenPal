@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
-from tokenpal.util.paths import REJECT_PATH, git_root
+from tokenpal.util.paths import REJECT_PATH, git_root, resolve_inside
 
 _MAX_BYTES = 200 * 1024
 
@@ -62,18 +62,16 @@ class ReadFileAction(AbstractAction):
             return ActionResult(output="Not inside a git repository.", success=False)
 
         candidate = Path(path_arg)
-        if candidate.is_absolute():
-            try:
-                rel = candidate.resolve().relative_to(root.resolve())
-            except ValueError:
-                return ActionResult(output="Path is outside the git repo.", success=False)
-        else:
-            rel = candidate
+        inside = resolve_inside(
+            candidate if candidate.is_absolute() else root / candidate, [root.resolve()]
+        )
+        if inside is None:
+            return ActionResult(output="Path is outside the git repo.", success=False)
+        abs_path, _, rel = inside
 
-        if not await _git_ls_files_contains(root, str(rel)):
+        if not await _git_ls_files_contains(root, rel):
             return ActionResult(output="File is not tracked by git.", success=False)
 
-        abs_path = root / rel
         try:
             with open(abs_path, "rb") as fh:
                 blob = fh.read(_MAX_BYTES + 1)

@@ -73,3 +73,53 @@ async def test_read_file_outside_repo_fails(
     monkeypatch.chdir(tmp_path)
     result = await ReadFileAction({}).execute(path="anything.txt")
     assert result.success is False
+
+
+def _repo_with_escaping_symlink(tmp_path: Path) -> tuple[Path, Path]:
+    """Repo containing a git-tracked symlink whose target lives outside it."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.txt").write_text("PRIVATE KEY MATERIAL\n")
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    link = repo / "notes.txt"
+    link.symlink_to(Path("..") / "outside" / "private.txt")
+    subprocess.run(["git", "add", "notes.txt"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+    return repo, link
+
+
+async def test_read_file_rejects_tracked_symlink_escaping_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _ = _repo_with_escaping_symlink(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = await ReadFileAction({}).execute(path="notes.txt")
+    assert result.success is False
+    assert result.output == "Path is outside the git repo."
+    assert "PRIVATE KEY MATERIAL" not in result.output
+
+
+async def test_read_file_absolute_and_relative_agree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, link = _repo_with_escaping_symlink(tmp_path)
+    monkeypatch.chdir(repo)
+
+    relative = await ReadFileAction({}).execute(path="notes.txt")
+    absolute = await ReadFileAction({}).execute(path=str(link))
+    assert (relative.success, relative.output) == (absolute.success, absolute.output)
+
+
+async def test_read_file_refusal_does_not_echo_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _ = _repo_with_escaping_symlink(tmp_path)
+    monkeypatch.chdir(repo)
+
+    result = await ReadFileAction({}).execute(path="notes.txt")
+    assert "private.txt" not in result.output
+    assert str(tmp_path) not in result.output
