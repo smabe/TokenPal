@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import (
     _ACTION_REGISTRY,
@@ -32,6 +34,41 @@ def test_register_action_adds_to_registry():
     assert "dummy" in _ACTION_REGISTRY
     assert _ACTION_REGISTRY["dummy"] is _DummyAction
     _ACTION_REGISTRY.pop("dummy")
+
+
+def test_register_action_rejects_a_second_class_under_the_same_name():
+    class _ShadowAction(AbstractAction):
+        action_name = "dummy"
+        description = "A colliding test action."
+        parameters = {"type": "object", "properties": {}}
+
+        async def execute(self, **kwargs: Any) -> ActionResult:
+            return ActionResult(output="shadow")
+
+    _ACTION_REGISTRY.pop("dummy", None)
+    register_action(_DummyAction)
+    try:
+        with pytest.raises(ValueError, match="dummy"):
+            register_action(_ShadowAction)
+        assert _ACTION_REGISTRY["dummy"] is _DummyAction
+    finally:
+        _ACTION_REGISTRY.pop("dummy", None)
+
+
+def test_register_action_is_idempotent_for_the_same_class():
+    _ACTION_REGISTRY.pop("dummy", None)
+    register_action(_DummyAction)
+    try:
+        register_action(_DummyAction)
+        assert _ACTION_REGISTRY["dummy"] is _DummyAction
+    finally:
+        _ACTION_REGISTRY.pop("dummy", None)
+
+
+def test_builtin_actions_register_without_collisions():
+    discover_actions()
+    assert len(_ACTION_REGISTRY) >= 39
+    assert all(name == cls.action_name for name, cls in _ACTION_REGISTRY.items())
 
 
 def test_discover_actions_finds_builtins():

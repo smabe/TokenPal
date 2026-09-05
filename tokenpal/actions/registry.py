@@ -16,7 +16,21 @@ _ACTION_REGISTRY: dict[str, type[AbstractAction]] = {}
 
 
 def register_action(cls: type[AbstractAction]) -> type[AbstractAction]:
-    """Decorator. Registers a concrete action implementation."""
+    """Decorator. Registers a concrete action implementation.
+
+    One class per ``action_name``: the registry has no platform-impl fan-out
+    the way ``_SENSE_REGISTRY`` does, so a second class claiming a taken name
+    would shadow the first and vanish from every registry-driven check —
+    including the desktop-content privacy contract.
+    """
+    existing = _ACTION_REGISTRY.get(cls.action_name)
+    if existing is not None and existing is not cls:
+        raise ValueError(
+            f"Duplicate action_name '{cls.action_name}': "
+            f"{existing.__module__}.{existing.__qualname__} already registered it, "
+            f"{cls.__module__}.{cls.__qualname__} tried to take it. "
+            "Rename one, or dispatch by platform inside a single class."
+        )
     _ACTION_REGISTRY[cls.action_name] = cls
     return cls
 
