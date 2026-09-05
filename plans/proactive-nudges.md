@@ -19,13 +19,13 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p3.md`
 
-**Phase p4 — nudge emission funnel (canned text only)** — NEXT
+**Phase p4 — nudge emission funnel (canned text only)** — SHIPPED `b677312`
 - Enters when: p3 shipped
 - Done signal: a fired nudge is spoken on this Mac with `[audio] speak_ambient_enabled = true` — the gap that makes reminders silent today — and still fires during a forced-silence window that would suppress an ambient comment
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p4.md`
 
-**Phase p5 — LLM voice, off-loop, plus the docs**
+**Phase p5 — LLM voice, off-loop, plus the docs** — NEXT
 - Enters when: p4 shipped
 - Done signal: nudge text differs between two fires of the same reminder; with the inference server stopped a due nudge still fires the canned label and `_run_loop` keeps ticking; `docs/claude/brain.md` gains its first ProactiveScheduler entry
 - If it fails: no gate — fix-forward
@@ -60,15 +60,15 @@ Also corrected: this plan does **not** overturn `CONTEXT.md:37-38` (the not-a-We
 
 Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (the Windows Search backend, written on the Mac and unverified on Windows). p1-p3 of it shipped as `f0ca2f0`, `d42522f`, `3bbe847`. The operator moved to this plan first; work them sequentially, not together.
 
-NEXT: p4 — read `plans/proactive-nudges-p4.md` FIRST, including its `## Carried in from p2` section.
+NEXT: p5 — read `plans/proactive-nudges-p5.md` FIRST, including its `## Carried in from p1` and `## Carried in from p4` sections. p5 is the last phase.
 
-p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`. **Spec check at p3** — 10/10 Work items evidenced · none unclaimed; three files added to Work at execution (`brain/agent.py`, `README.md`, `docs/claude/actions.md`), each a review finding, each recorded in the shard. Review: Codex quota-exhausted throughout (resets 2026-09-06 22:26), so all three phases used `auto-review`'s host-native fallback fan-out plus a closing round over the repaired diff. **No external-peer receipt and no commit-gate stamp exists for any of p1-p3.**
+p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`, p4 `b677312`. **Spec check at p4** — 2/2 Work items evidenced · 1 unclaimed (`proactive.py`'s docstrings, falsified by the rewiring; added to Work). Review across all four phases used `auto-review`'s host-native fallback fan-out plus a closing round, because the Codex peer was quota-exhausted for the whole session (resets 2026-09-06 22:26). **No external-peer receipt and no commit-gate stamp exists for any of p1-p4.**
 
-**p3's review found a privacy leak the plan did not anticipate, and it is the reason to read that shard's findings before p4.** The new tool was a durable local sink reachable straight after a desktop-content read, and `reminders` rows are exempt from both `_prune` and `/clear`. Fixed on both the advertise and execution sides; `habit_streak` and `mood_check` joined the gate by operator decision 2026-09-05. The closing round also proved a branch an earlier reviewer had called dead was reachable — see p3's findings before deleting anything similar.
+**A process failure worth knowing about:** p3 was first committed as `bd33c10`, which contained only two file deletions — the four old actions removed and the replacing tool never staged, leaving a broken commit on `main`. A `git add` had aborted on a pathspec error before staging the rest. Nothing was pushed, so the history was rebuilt: p3 re-landed complete as `e1693ec`. **Verify what a commit contains, not what `git status` appears to say.**
 
-Two operator decisions at the p3 gate, 2026-09-05:
-1. **The durable-sink gate is a name set, not a `writes_durable_state` ClassVar.** All three sinks fixed by name; `docs/claude/actions.md` states that nothing derives the set for you.
-2. The disabled-tool fork settled before dispatch: **gate the hydrate, never delete the rows.**
+Two things p5 must not rediscover, both in p4's shard:
+1. `_emit_nudge(label, *, generated: str | None = None)` — the proposed `generated: bool` could not express the fallback the same Work item required, because a single string parameter leaves no label to fall back to.
+2. p4's one production line — the `ui_callback` rewiring — was untested, and reverting it passed all 2446 tests. p5's own wiring needs the same kind of pin.
 
 ## Goal
 Replace four near-identical reminder actions and an in-memory scheduler with one `reminder` tool whose armed state survives a restart, whose schedule covers intervals and times of day without the `""`-means-skip trick, and whose nudge text is generated in the buddy's voice without ever blocking the brain loop.
