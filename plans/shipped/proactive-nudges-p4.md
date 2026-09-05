@@ -53,7 +53,7 @@ See the master `plans/proactive-nudges.md`. Binding here:
 - A nudge fires during a forced-silence window that would suppress an ambient comment.
 - Firing the same reminder twice emits twice; `_recent_outputs` is unchanged by either.
 - An 8-character label is emitted verbatim.
-- `grep -n "_speak_async" tokenpal/brain/orchestrator.py` shows three call sites: ambient, typed, and the nudge funnel.
+- A nudge reaches TTS. **Criterion corrected at ship:** it originally read "`grep -n "_speak_async"` shows three call sites", which was true when written and false by the end of the same phase — p4's own review found the ambient-TTS guard had gained a second consumer and extracted `_speak_ambient`, collapsing two call sites into one. The true form: `_emit_comment` and `_emit_nudge` both call `_speak_ambient`, which is the single `source="ambient"` call site, and `submit_user_input` is the `source="typed"` one. Verified at ship by calling `_emit_nudge` on a Brain with a pipeline set and observing `('stand up', 'ambient')`.
 - `pytest` green; `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
 
 

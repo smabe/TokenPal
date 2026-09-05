@@ -62,7 +62,9 @@ Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (
 
 **All five phases shipped.** p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`, p4 `b677312`, p5 `2242ef1`. **Spec check at p5** — 8/8 Work items evidenced · 2 unclaimed test files added to Work (both construct `ProactiveScheduler`, which p5's deletion broke).
 
-**Two Done criteria remain operator-run**, both needing the live backend: that two fires of the same reminder produce different text and are spoken with `[audio] speak_ambient_enabled = true`, and that with the inference server stopped a due nudge still fires the canned label while `_run_loop` keeps ticking. Everything else is verified. Ready for `/plan ship proactive-nudges` once those pass.
+**SHIPPED 2026-09-05.** The two live-backend criteria were confirmed by the operator ("alright tested working"): two fires of the same reminder produce different text and are spoken with `[audio] speak_ambient_enabled = true`, and with the inference server stopped a due nudge fires the canned label while `_run_loop` keeps ticking. Every other criterion was verified mechanically at ship — full suite 2462 passed, ruff and mypy clean, all four greps empty or correct, `tokenpal --check` at 23 actions with `reminder` listed. One criterion was corrected rather than passed: p4's "three `_speak_async` call sites" was true when written and false by the end of that phase, because p4's own review extracted `_speak_ambient` and collapsed two into one; the nudge-reaches-TTS intent was re-verified directly at ship. Details in p4's Done criteria.
+
+~~Two Done criteria remain operator-run~~, both needing the live backend: that two fires of the same reminder produce different text and are spoken with `[audio] speak_ambient_enabled = true`, and that with the inference server stopped a due nudge still fires the canned label while `_run_loop` keeps ticking. Everything else is verified. Ready for `/plan ship proactive-nudges` once those pass.
 
 Review across all five phases used `auto-review`'s host-native fallback fan-out plus a closing round, because the Codex peer was quota-exhausted for the entire session (resets 2026-09-06 22:26). **No external-peer receipt and no commit-gate stamp exists for any phase.**
 
@@ -141,14 +143,21 @@ Replace four near-identical reminder actions and an in-memory scheduler with one
 - `pytest` green, `ruff check tokenpal/` clean, `mypy tokenpal/ --ignore-missing-imports` clean.
 
 ## Parking lot
-- ADJACENT: `_proactive_paused` ignores an in-progress desktop-content run (`_handle_desktop_task` sets no `_mode`, `orchestrator.py:1966-2014`), voice-conversation state (`audio/session.py:29-120`), and an open confirm modal (the Qt dialog is `show()`-based, so the loop keeps pumping). A nudge can fire mid-utterance with the mic open.
-- ADJACENT: `HttpBackend`'s EWMA estimator state is shared mutable across concurrent generations, biasing the TTFT figure that every path's max-tokens sizing depends on.
-- ADJACENT: `LLMConfig` has no `request_timeout_s`, so the 60 s HTTP default is unreachable from config; httpx's timeout is per-read, not a total-call cap.
-- ADJACENT: the `action_configs` injection route is dead in production; `pomodoro.py:66`'s comment claims otherwise.
-- ADJACENT: `PomodoroAction` uses `asyncio.sleep(work_min * 60)` (`focus/pomodoro.py:110-112`), which stops during system sleep — a pomodoro started before a lid-close resumes mid-cycle.
-- ADJACENT: nothing anywhere in the repo is sleep/wake aware; 114 `time.monotonic()` call sites, none gap-aware.
-- ADJACENT: `_execute_tool_call` logs raw tool arguments at DEBUG and the file handler is unconditionally DEBUG (`util/logging.py:41`), so a reminder label the tool *refused* to store still lands in `~/.tokenpal/logs/tokenpal.log`. Generic to every tool, predates this plan; scrubbing for one tool would be a special case in a shared path.
-- ADJACENT: `hydrate()` bypasses `MAX_ARMED`, so a hand-seeded `memory.db` with 500 rows hydrates all 500. No in-app path reaches it — arming is capped.
-- ADJACENT: there is no `cancel all`. Recovering from a pile-up is one `cancel` per id, bounded at 20 by the cap.
-- ADJACENT: `ProactiveScheduler.is_registered()` (`proactive.py:94`) is orphaned by p2's rewrite (its only callers are the two test files p2 rewrites and p3 deletes). p2 deletes it alongside `one_shot` and `registered_names`; noted here so the count of removed dead members is three, not two.
-- ADJACENT: `active_intent` has the same false-positive problem this plan fixes for reminders — `intent.py:79` applies the broad `contains_sensitive_term` to user-authored intent text, so `"fix the health dashboard"` is refused. Same shape, different feature; not this plan's to change.
+
+**Every item dispositioned at ship, 2026-09-05.**
+
+**Resolved by this plan:**
+- `ProactiveScheduler.is_registered()` was deleted in p2 alongside `one_shot` and `registered_names`. Verified at ship: the only remaining match in the tree is `test_the_first_marked_tool_is_registered_on_every_host`, an unrelated name.
+
+**Carried out as follow-ups** (recorded here; not filed as issues without the operator's go):
+1. `_proactive_paused` still ignores an in-progress desktop-content run (`_handle_desktop_task` sets no `_mode`), voice-conversation state, and an open confirm modal (the Qt dialog is `show()`-based, so the loop keeps pumping). p5 narrowed this — delivery now re-checks the gate immediately before emitting — but the gate itself is still blind to those three, so a nudge can still land mid-utterance with the mic open.
+2. `_execute_tool_call` logs raw tool arguments at DEBUG and the file handler is unconditionally DEBUG (`util/logging.py:41`), so a reminder label the tool **refused** to store still reaches `~/.tokenpal/logs/tokenpal.log`. Generic to every tool and predates this plan; scrubbing for one tool would be a special case in a shared path.
+3. `HttpBackend`'s EWMA estimator state is shared mutable across concurrent generations, so an off-loop nudge generation overlapping the session summariser makes each attribute the other's queueing delay to its own TTFT — and the poisoned value persists to `memory.db`. This plan added one concurrent caller and is the reason it now matters.
+4. `LLMConfig` has no `request_timeout_s`, so the 60 s HTTP default is unreachable from config and httpx's timeout is per-read rather than a total-call cap. `_NUDGE_TIMEOUT_S` is a soft bound for the same reason: `wait_for` cancels and then waits for the unwind.
+5. `PomodoroAction` uses `asyncio.sleep(work_min * 60)`, which stops during system sleep — a pomodoro started before a lid-close resumes mid-cycle. Nothing else in the repo is sleep/wake aware either: 114 `time.monotonic()` call sites, none gap-aware. This plan fixed that only for reminders.
+6. There is no `cancel all` for reminders. Recovering from a pile-up is one `cancel` per id, bounded at 20 by `MAX_ARMED`.
+7. `active_intent` has the same false-positive problem this plan fixed for reminder labels — `intent.py:79` applies the broad `contains_sensitive_term` to user-authored intent text, so `"fix the health dashboard"` is refused. Same shape, different feature.
+
+**Dropped, with reasons:**
+- The `action_configs` injection route is dead in production and `pomodoro.py:66`'s comment claims otherwise. A one-line comment fix in a file this plan does not otherwise touch; not worth a follow-up of its own — fold it in whenever `pomodoro.py` is next edited.
+- `hydrate()` bypasses `MAX_ARMED`, so a hand-seeded `memory.db` with 500 rows hydrates all 500. No in-app path reaches it, because arming is capped; a user who hand-edits their database has chosen that.
