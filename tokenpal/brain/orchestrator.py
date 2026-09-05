@@ -205,6 +205,11 @@ _CONV_RECENT_OUTPUTS_MAX = 5
 _DESKTOP_DONE_FALLBACK = "Done. The answer is in the chat log and was not saved."
 _DESKTOP_ABORTED_LINE = "Nothing came back that time — and nothing was saved."
 
+# The reminder tool, by name. Two rules key on it: the unprompted ambient
+# observation LLM may not arm or disarm a nudge, and armed rows only hydrate
+# while the tool that can cancel them is enabled.
+_REMINDER_TOOL = "reminder"
+
 # Appended to the conversation system message when retrying after a near-dup
 # trip. Observation context is stripped on the retry to break the lock.
 _RETRY_NEAR_DUP_INSTRUCTION = (
@@ -567,7 +572,7 @@ class Brain:
         self._load_previous_session_note()
         self._start_session_summarizer()
 
-        self._proactive.hydrate()
+        self._hydrate_reminders()
 
         # EOD: if yesterday has unfrozen activity and we haven't shown the
         # bubble yet, fire it off-thread. Startup should not block on it.
@@ -627,6 +632,19 @@ class Brain:
         if emitted:
             return None
         return f"Nothing to summarize for {date_str}."
+
+    def _hydrate_reminders(self) -> None:
+        """Load armed reminders, but only while the tool that disarms exists.
+
+        `reminder` is the sole way to cancel one. Hydrating with the tool
+        un-ticked in /tools would leave nudges firing every launch with no
+        in-app way to stop them. The rows stay on disk untouched, so
+        re-ticking the tool brings them back on the next launch.
+        """
+        if _REMINDER_TOOL not in self._actions:
+            log.debug("Reminder tool not enabled; leaving armed rows dormant")
+            return
+        self._proactive.hydrate()
 
     def _load_previous_session_note(self) -> None:
         """Pull the most recent session summary within the lookback window."""
@@ -1870,11 +1888,16 @@ class Brain:
         no timeout, so a modal raised on an unattended tick — the user is in
         another app, which is what "ambient" means — would stall the brain loop
         until someone answered it.
+
+        `reminder` is excluded by name on top of that: it raises no modal, but
+        an unprompted tick must not arm or disarm a standing commitment.
         """
         return [
             a.to_tool_spec()
             for a in self._actions.values()
-            if not a.reads_desktop_content and not a.requires_confirm
+            if not a.reads_desktop_content
+            and not a.requires_confirm
+            and a.action_name != _REMINDER_TOOL
         ]
 
     def _build_agent_specs(self) -> list[dict[str, Any]]:

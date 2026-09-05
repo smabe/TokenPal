@@ -180,23 +180,9 @@ FOCUS_SECTION = CatalogSection(
             kind="focus",
         ),
         CatalogEntry(
-            "stretch_reminder",
-            "Recurring stretch nudge (speech bubble). Pauses in conversation.",
-            kind="focus",
-        ),
-        CatalogEntry(
-            "water_reminder",
-            "Recurring hydration nudge. Pauses in conversation.",
-            kind="focus",
-        ),
-        CatalogEntry(
-            "eye_break",
-            "Recurring 20-20-20 eye-rest prompt. Pauses in conversation.",
-            kind="focus",
-        ),
-        CatalogEntry(
-            "bedtime_wind_down",
-            "A nightly nudge at your bedtime to start wrapping up.",
+            "reminder",
+            "Arm, cancel or list recurring nudges (speech bubbles). "
+            "Pauses in conversation.",
             kind="focus",
         ),
         CatalogEntry(

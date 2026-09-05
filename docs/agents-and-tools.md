@@ -64,7 +64,7 @@ The catalog (`tokenpal/actions/catalog.py`) groups tools into six sections. Ever
 | **Default** | `timer`, `system_info`, `open_app`, `do_math` | always on |
 | **Local** | `read_file`, `grep_codebase`, `git_log`, `git_diff`, `git_status`, `list_processes`, `memory_query` | opt-in only |
 | **Utilities** | `convert`, `timezone`, `sunrise_sunset`, `moon_phase`, `currency`, `weather_forecast_week`, `pollen_count`, `air_quality`, `random_fact`, `joke_of_the_day`, `word_of_the_day`, `on_this_day`, `random_recipe`, `trivia_question`, `sports_score`, `crypto_price`, `book_suggestion` | opt-in + `web_fetches` for network ones |
-| **Focus** | `pomodoro`, `stretch_reminder`, `water_reminder`, `eye_break`, `bedtime_wind_down`, `hydration_log`, `habit_streak`, `mood_check` | opt-in |
+| **Focus** | `pomodoro`, `reminder`, `hydration_log`, `habit_streak`, `mood_check` | opt-in |
 | **Agent** | `agent_mode` flag | opt-in |
 | **Research** | `research_mode` flag, `fetch_url`, `research` | opt-in + `research_mode` consent |
 

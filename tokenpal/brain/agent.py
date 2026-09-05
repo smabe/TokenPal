@@ -223,7 +223,10 @@ class AgentRunner:
             denied = False
             for i, tc in enumerate(response.tool_calls):
                 normalized = _normalize_tool_call(tc, i)
-                if session.desktop_content and _needs_consent(normalized.name):
+                if session.desktop_content and (
+                    _needs_consent(normalized.name)
+                    or normalized.name in _PERSISTENT_SINKS
+                ):
                     self._trace(
                         f"\u2190 skipped {normalized.name}: {_DESKTOP_CONTEXT_REASON}"
                     )
@@ -291,13 +294,15 @@ class AgentRunner:
     def _tools_for(self, session: AgentSession) -> list[dict[str, Any]] | None:
         """Tool list for the next step: ``None`` means the unfiltered set.
         Once desktop content is in context, every consent-gated (network)
-        tool is dropped for the rest of the run."""
+        tool is dropped for the rest of the run, and so is every tool that
+        would write model-authored text to a durable local sink."""
         if not session.desktop_content:
             return None
         if self._gated_free_specs is None:
             self._gated_free_specs = [
                 spec for spec in self._tool_specs
                 if not _needs_consent(spec["function"]["name"])
+                and spec["function"]["name"] not in _PERSISTENT_SINKS
             ]
         return self._gated_free_specs
 
@@ -378,6 +383,17 @@ class AgentRunner:
         except Exception:
             log.exception("Forced synthesis failed")
             return ""
+
+
+# Tools whose arguments land in memory.db as model-authored text. The consent
+# gate above only covers tools that reach the NETWORK, so these would otherwise
+# let a desktop-content read be laundered into a durable local sink the
+# contract in CLAUDE.md forbids. Their rows (`reminders`, `habit_log`,
+# `mood_log`) are swept by neither _prune nor /clear, so the residue is
+# permanent. Gated on BOTH sides: dropped from the advertised specs, and
+# refused at execution so a sink called in the same batch as the read -- or
+# re-emitted from a name the model saw earlier -- cannot slip through.
+_PERSISTENT_SINKS = frozenset({"reminder", "habit_streak", "mood_check"})
 
 
 def _needs_consent(name: str) -> bool:

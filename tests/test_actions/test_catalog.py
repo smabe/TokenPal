@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from tokenpal.actions.catalog import DEFAULT_SECTION, LOCAL_SECTION, SECTIONS
+from tokenpal.actions.catalog import (
+    DEFAULT_SECTION,
+    FOCUS_SECTION,
+    LOCAL_SECTION,
+    SECTIONS,
+)
 
 
 def test_default_section_has_four_entries() -> None:
@@ -26,6 +31,18 @@ def test_local_section_lists_all_phase1_tools() -> None:
         "list_processes",
         "memory_query",
         "read_selection",
+    }
+
+
+def test_focus_section_lists_one_reminder_tool() -> None:
+    """The four per-schedule reminder tools collapsed into one parameterised
+    `reminder`; a leftover entry would leave a dead /tools checkbox."""
+    assert {e.name for e in FOCUS_SECTION.entries} == {
+        "pomodoro",
+        "reminder",
+        "hydration_log",
+        "habit_streak",
+        "mood_check",
     }
 
 
