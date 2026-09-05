@@ -25,7 +25,7 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p4.md`
 
-**Phase p5 — LLM voice, off-loop, plus the docs** — NEXT
+**Phase p5 — LLM voice, off-loop, plus the docs** — SHIPPED `2242ef1`
 - Enters when: p4 shipped
 - Done signal: nudge text differs between two fires of the same reminder; with the inference server stopped a due nudge still fires the canned label and `_run_loop` keeps ticking; `docs/claude/brain.md` gains its first ProactiveScheduler entry
 - If it fails: no gate — fix-forward
@@ -60,15 +60,15 @@ Also corrected: this plan does **not** overturn `CONTEXT.md:37-38` (the not-a-We
 
 Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (the Windows Search backend, written on the Mac and unverified on Windows). p1-p3 of it shipped as `f0ca2f0`, `d42522f`, `3bbe847`. The operator moved to this plan first; work them sequentially, not together.
 
-NEXT: p5 — read `plans/proactive-nudges-p5.md` FIRST, including its `## Carried in from p1` and `## Carried in from p4` sections. p5 is the last phase.
+**All five phases shipped.** p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`, p4 `b677312`, p5 `2242ef1`. **Spec check at p5** — 8/8 Work items evidenced · 2 unclaimed test files added to Work (both construct `ProactiveScheduler`, which p5's deletion broke).
 
-p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`, p4 `b677312`. **Spec check at p4** — 2/2 Work items evidenced · 1 unclaimed (`proactive.py`'s docstrings, falsified by the rewiring; added to Work). Review across all four phases used `auto-review`'s host-native fallback fan-out plus a closing round, because the Codex peer was quota-exhausted for the whole session (resets 2026-09-06 22:26). **No external-peer receipt and no commit-gate stamp exists for any of p1-p4.**
+**Two Done criteria remain operator-run**, both needing the live backend: that two fires of the same reminder produce different text and are spoken with `[audio] speak_ambient_enabled = true`, and that with the inference server stopped a due nudge still fires the canned label while `_run_loop` keeps ticking. Everything else is verified. Ready for `/plan ship proactive-nudges` once those pass.
 
-**A process failure worth knowing about:** p3 was first committed as `bd33c10`, which contained only two file deletions — the four old actions removed and the replacing tool never staged, leaving a broken commit on `main`. A `git add` had aborted on a pathspec error before staging the rest. Nothing was pushed, so the history was rebuilt: p3 re-landed complete as `e1693ec`. **Verify what a commit contains, not what `git status` appears to say.**
+Review across all five phases used `auto-review`'s host-native fallback fan-out plus a closing round, because the Codex peer was quota-exhausted for the entire session (resets 2026-09-06 22:26). **No external-peer receipt and no commit-gate stamp exists for any phase.**
 
-Two things p5 must not rediscover, both in p4's shard:
-1. `_emit_nudge(label, *, generated: str | None = None)` — the proposed `generated: bool` could not express the fallback the same Work item required, because a single string parameter leaves no label to fall back to.
-2. p4's one production line — the `ui_callback` rewiring — was untested, and reverting it passed all 2446 tests. p5's own wiring needs the same kind of pin.
+**Two process failures worth carrying forward:**
+1. p3 was first committed as `bd33c10`, containing only two file deletions — the replacing tool never staged, leaving a broken commit on `main`. A `git add` had aborted on a pathspec error. Nothing was pushed, so history was rebuilt and p3 re-landed complete. **Verify what a commit contains, not what `git status` appears to say.**
+2. **Three separate phases shipped a single production wiring line with no test.** p4's `ui_callback` rewiring and p5's `_fire_due_nudges` call each passed the whole suite when reverted, and p5's first pin used `inspect.getsource`, which passes against a commented-out call. Drive the code; do not grep it.
 
 ## Goal
 Replace four near-identical reminder actions and an in-memory scheduler with one `reminder` tool whose armed state survives a restart, whose schedule covers intervals and times of day without the `""`-means-skip trick, and whose nudge text is generated in the buddy's voice without ever blocking the brain loop.
