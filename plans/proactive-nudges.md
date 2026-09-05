@@ -13,13 +13,13 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p2.md`
 
-**Phase p3 — one `reminder` tool replacing the four** — NEXT
+**Phase p3 — one `reminder` tool replacing the four** — SHIPPED `e1693ec`
 - Enters when: p2 shipped
 - Done signal: `reminder` arms, disarms and lists from chat on this Mac; the four old names are gone from the registry and the catalog; the tool is absent from `_build_ambient_specs`; a sensitive label is refused
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p3.md`
 
-**Phase p4 — nudge emission funnel (canned text only)**
+**Phase p4 — nudge emission funnel (canned text only)** — NEXT
 - Enters when: p3 shipped
 - Done signal: a fired nudge is spoken on this Mac with `[audio] speak_ambient_enabled = true` — the gap that makes reminders silent today — and still fires during a forced-silence window that would suppress an ambient comment
 - If it fails: no gate — fix-forward
@@ -60,14 +60,15 @@ Also corrected: this plan does **not** overturn `CONTEXT.md:37-38` (the not-a-We
 
 Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (the Windows Search backend, written on the Mac and unverified on Windows). p1-p3 of it shipped as `f0ca2f0`, `d42522f`, `3bbe847`. The operator moved to this plan first; work them sequentially, not together.
 
-NEXT: p3 — read `plans/proactive-nudges-p3.md` FIRST, including its `## Carried in from p1` and `## Carried in from p2` sections.
+NEXT: p4 — read `plans/proactive-nudges-p4.md` FIRST, including its `## Carried in from p2` section.
 
-p1 shipped `2418088`, p2 shipped `d18dc23`. **Spec check at p2** — 6/6 Work items evidenced · 1 unclaimed (`test_reminders.py`, required by the deletions the phase names; added to Work with the planning miss recorded). Review both phases: Codex peer quota-exhausted (resets 2026-09-06 22:26), so `auto-review` ran its host-native fallback fan-out — six angles at p1, five at p2, each followed by a two-agent closing round over the repaired diff. **No external-peer receipt and no commit-gate stamp exist for either phase.** p2: 12 findings applied, 3 routed to later phases by operator decision, the rest refuted with evidence. Sweep: p3 and p4 gained `## Carried in from p2`; p5 unchanged by p2.
+p1 `2418088`, p2 `d18dc23`, p3 `e1693ec`. **Spec check at p3** — 10/10 Work items evidenced · none unclaimed; three files added to Work at execution (`brain/agent.py`, `README.md`, `docs/claude/actions.md`), each a review finding, each recorded in the shard. Review: Codex quota-exhausted throughout (resets 2026-09-06 22:26), so all three phases used `auto-review`'s host-native fallback fan-out plus a closing round over the repaired diff. **No external-peer receipt and no commit-gate stamp exists for any of p1-p3.**
 
-Three operator decisions taken at the p2 gate, 2026-09-05:
-1. **A stale daily reminder fires anyway.** Three reviewers flagged a 23:00 wind-down speaking at 09:05 the next morning as a regression against the deleted T-60 window. The operator chose the late fire over a staleness cutoff. Do not add one.
-2. **Nudges must not overwrite each other.** At most one fires per tick and never within `_MIN_NUDGE_GAP_S` (16 s) of the last, because the bubble replaces rather than queues and lingers 15 s against a 2 s loop.
-3. **The uncancellable-reminder gap is p3's to close**, not p2's. See p3's carried section for the Done criterion.
+**p3's review found a privacy leak the plan did not anticipate, and it is the reason to read that shard's findings before p4.** The new tool was a durable local sink reachable straight after a desktop-content read, and `reminders` rows are exempt from both `_prune` and `/clear`. Fixed on both the advertise and execution sides; `habit_streak` and `mood_check` joined the gate by operator decision 2026-09-05. The closing round also proved a branch an earlier reviewer had called dead was reachable — see p3's findings before deleting anything similar.
+
+Two operator decisions at the p3 gate, 2026-09-05:
+1. **The durable-sink gate is a name set, not a `writes_durable_state` ClassVar.** All three sinks fixed by name; `docs/claude/actions.md` states that nothing derives the set for you.
+2. The disabled-tool fork settled before dispatch: **gate the hydrate, never delete the rows.**
 
 ## Goal
 Replace four near-identical reminder actions and an in-memory scheduler with one `reminder` tool whose armed state survives a restart, whose schedule covers intervals and times of day without the `""`-means-skip trick, and whose nudge text is generated in the buddy's voice without ever blocking the brain loop.
@@ -95,6 +96,9 @@ Replace four near-identical reminder actions and an in-memory scheduler with one
 - `tests/test_actions/test_focus/test_proactive.py` — p2 — rewritten onto the schedule model and the wake-once rule
 - `tokenpal/brain/orchestrator.py` — p2 (hydrate at start), p3 (ambient exclusion), p4 (nudge funnel + off-loop generation)
 - `tokenpal/actions/reminder.py` — p3 (new) — the single arm/disarm/list tool
+- `tokenpal/brain/agent.py` — p3 — `_PERSISTENT_SINKS`: durable-write tools are dropped and refused once desktop content is in an agent run's context
+- `README.md` — p3 — `:214` named water/stretch reminders as shipped tools
+- `docs/claude/actions.md` — p3 — the tool-author checklist's ambient-exclusion rule, and the new sink gate
 - `tokenpal/actions/focus/__init__.py` — p3 — docstring no longer names four reminders
 - `tokenpal/actions/catalog.py` — p3 — four `FOCUS_SECTION` rows become one
 - `tests/test_actions/test_catalog.py` — p3 — pinned name set
@@ -139,6 +143,8 @@ Replace four near-identical reminder actions and an in-memory scheduler with one
 - ADJACENT: the `action_configs` injection route is dead in production; `pomodoro.py:66`'s comment claims otherwise.
 - ADJACENT: `PomodoroAction` uses `asyncio.sleep(work_min * 60)` (`focus/pomodoro.py:110-112`), which stops during system sleep — a pomodoro started before a lid-close resumes mid-cycle.
 - ADJACENT: nothing anywhere in the repo is sleep/wake aware; 114 `time.monotonic()` call sites, none gap-aware.
-- ADJACENT: `README.md` (`:214`) says "focus (pomodoro, water/stretch reminders) tools". After p3 a reminder tool still exists, so the sentence does not go false — reword it whenever README is next touched.
+- ADJACENT: `_execute_tool_call` logs raw tool arguments at DEBUG and the file handler is unconditionally DEBUG (`util/logging.py:41`), so a reminder label the tool *refused* to store still lands in `~/.tokenpal/logs/tokenpal.log`. Generic to every tool, predates this plan; scrubbing for one tool would be a special case in a shared path.
+- ADJACENT: `hydrate()` bypasses `MAX_ARMED`, so a hand-seeded `memory.db` with 500 rows hydrates all 500. No in-app path reaches it — arming is capped.
+- ADJACENT: there is no `cancel all`. Recovering from a pile-up is one `cancel` per id, bounded at 20 by the cap.
 - ADJACENT: `ProactiveScheduler.is_registered()` (`proactive.py:94`) is orphaned by p2's rewrite (its only callers are the two test files p2 rewrites and p3 deletes). p2 deletes it alongside `one_shot` and `registered_names`; noted here so the count of removed dead members is three, not two.
 - ADJACENT: `active_intent` has the same false-positive problem this plan fixes for reminders — `intent.py:79` applies the broad `contains_sensitive_term` to user-authored intent text, so `"fix the health dashboard"` is refused. Same shape, different feature; not this plan's to change.
