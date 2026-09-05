@@ -73,3 +73,11 @@ See the master `plans/proactive-nudges.md`. Binding here:
 - A sensitive label is refused and does not appear in the refusal text.
 - `reminder` is in the conversation spec list and not in the ambient one, asserted by test.
 - `pytest` green; `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
+
+
+## Carried in from p1  *(2026-09-04, do not rediscover)*
+- **`Schedule` owns parsing and its messages are the refusal strings.** `interval_from_minutes` and `daily_from_hhmm` raise `ValueError` naming `every_min` / `at`. Surface the message verbatim. Both grammars are strict on purpose: `"1e3"` and `"1_0"` are refused (they used to parse as 1000 and 10 minutes), and `"9:3"` is refused rather than silently armed as 09:03.
+- **`upsert_reminder` raises `ValueError` on a schedule mapping it cannot read back.** The tool must catch it and refuse, not let it escape the executor.
+- **`delete_reminder` returns `False` for BOTH "no such reminder" and "memory disabled or closed"** (`[memory] enabled = false`, or a call after teardown). Do not phrase the refusal as "you have no reminder called X" without accounting for that, or the buddy tells a user their reminder was never set when the store was simply off.
+- **Reminder labels are now swept by `assert_no_leak`** (`tests/_helpers.py`), because `reminders.label` is persistent free text the model can write. Keep it that way when the tool lands.
+- **The four old reminder actions' constants and parsing are duplicated in `schedule.py` by design, and this phase's deletion is what resolves it.** `_MIN_INTERVAL_MIN`/`_MAX_INTERVAL_MIN` (`actions/focus/reminders.py:27-28`), the `%H:%M` parse (`:198`) and the roll-to-tomorrow maths (`:239-249`) all exist twice while both live. Treat the deletion as load-bearing, not optional: if it slips, changing the interval bounds leaves two layers disagreeing with no test catching it.

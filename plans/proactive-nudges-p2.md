@@ -69,3 +69,14 @@ See the master `plans/proactive-nudges.md`. Binding here:
 - `_teardown_components` runs on that quit and the row is **still** in `memory.db` afterwards — only an explicit `cancel` unpersists, never process shutdown.
 - A nudge whose delivery raises does not stop the following nudge in the same tick, and does not abort the rest of the brain-loop iteration.
 - `pytest` green; `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
+
+
+## Carried in from p1  *(2026-09-04, do not rediscover)*
+- **`Schedule.next_due_at(after)` rolls forward ONE occurrence.** When re-arming after a fire, pass the **current time**, never the deadline that just fired. Chaining from a stale deadline returns a result still in the past, and the tick would then fire once every 2-3 s until it walked forward to now — one nudge per missed day, which is exactly what this phase's done signal forbids. `tests/test_brain/test_schedule.py::test_next_due_at_from_now_collapses_a_missed_gap` pins the rule; the DST no-drift test deliberately chains from the previous due time and is the one place that pattern is correct, because there the previous value is not stale.
+- **`mark_reminder_fired` returns `bool`** — `False` means the row is gone (disarmed from chat between the tick's due-check and its write-through). Act on it: a nudge held in memory whose row has been deleted must be dropped, not left firing from memory with nothing backing it.
+- **Hydrate must skip and log an unreadable row, never propagate.** `Schedule.from_row` raises `ValueError` whose message names a *tool* argument (`every_min`, `at`) — a statement about input the user never gave. `upsert_reminder` now validates before writing so this should be unreachable, but a hand-edited or future-version `memory.db` can still produce one, and hydrate runs in `Brain.start()`: one bad row must not stop the brain from starting.
+- **Do not add a per-tick `list_reminders()` call.** Hydrate once, write through on change. p1's failure-modes note about a "cheap query" was corrected — it justifies a single read at startup, not one on the 2-second hot path, where `MemoryStore` blocks on a lock the Qt thread also takes.
+
+## Done criteria  *(added from p1's findings)*
+- Re-arming a reminder that has already fired preserves its `last_fired_at`; the scheduler's in-memory copy and the row agree after a restart.
+- A reminder disarmed from chat during a tick does not keep firing from memory: `mark_reminder_fired` returning `False` drops it.

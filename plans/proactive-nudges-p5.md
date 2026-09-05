@@ -51,3 +51,8 @@ See the master `plans/proactive-nudges.md`. Binding here:
 - A second due-fire during an in-flight generation starts no second task.
 - `docs/claude/brain.md` has a ProactiveScheduler bullet; `CONTEXT.md:108-112` no longer claims the riff pipeline is bypassed while `:37-38` is unchanged; `CLAUDE.md`'s Privacy bullet names the `reminders` table.
 - `pytest` green; `ruff check tokenpal/` and `mypy tokenpal/ --ignore-missing-imports` clean.
+
+
+## Carried in from p1  *(2026-09-04, do not rediscover)*
+- **`docs/claude/brain.md:22` is stale independently of this plan** and this plan makes it worse. It reads "Two migrations so far: session_summaries (v0→v1), active_intent (v1→v2)"; migrations 3 and 4 had already landed before p1, and p1 adds the fifth. It is the doc `CLAUDE.md` routes migration authors to, and `CURRENT_SCHEMA_VERSION` **is** the list index, so a wrong count there misleads directly. Correct it to the real list while writing the ProactiveScheduler entry.
+- **The `CLAUDE.md` privacy line must name the retention carve-out, not just the table.** `CLAUDE.md:56` currently says chat content reaches `memory.db` "only through the persisted chat log and conversation summaries". `reminders.label` is user- and model-authored free text that is swept by neither `_prune()` (deliberate — a month-old armed reminder must not vanish) nor `/clear` → `clear_conversation_summaries`. Say both things: the table exists, and it is exempt from retention and from `/clear` by design, so a reminder persists until it is disarmed.

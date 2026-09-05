@@ -11,10 +11,12 @@ import threading
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from tokenpal.brain.schedule import Schedule
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +97,6 @@ LLM_ESTIMATOR_SCHEMA_VERSION = 1
 
 _PERSONALIZATION_CACHE_TTL_S = 60.0
 
-
 # PRAGMA user_version based migrations. _SCHEMA above stays frozen as the
 # legacy "always idempotent" base; new tables land via migrations. Each entry
 # in _MIGRATIONS takes the db from version (index) to version (index + 1).
@@ -174,11 +175,36 @@ def _migration_4_conversation_summaries(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_5_reminders(conn: sqlite3.Connection) -> None:
+    """v4 -> v5: add reminders so armed proactive nudges survive a restart.
+
+    Its own table rather than an observations row: _prune() deletes
+    observations older than retention_days, which would silently disarm a
+    month-old reminder at startup.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS reminders (
+            id TEXT PRIMARY KEY,
+            label TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            interval_s REAL,
+            at_hour INTEGER,
+            at_minute INTEGER,
+            armed_at REAL NOT NULL,
+            next_due_at REAL NOT NULL,
+            last_fired_at REAL
+        );
+        """
+    )
+
+
 _MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_1_session_summaries,
     _migration_2_active_intent,
     _migration_3_chat_log,
     _migration_4_conversation_summaries,
+    _migration_5_reminders,
 ]
 
 CURRENT_SCHEMA_VERSION = len(_MIGRATIONS)
@@ -581,6 +607,97 @@ class MemoryStore:
         with self._lock:
             self._conn.execute("DELETE FROM active_intent WHERE id = 1")
             self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Reminders — see plans/proactive-nudges.md
+    # ------------------------------------------------------------------
+
+    def upsert_reminder(
+        self,
+        reminder_id: str,
+        label: str,
+        schedule: Mapping[str, Any],
+        next_due_at: float,
+    ) -> None:
+        """Arm (or re-arm) a reminder row.
+
+        schedule carries the four schedule columns as produced by
+        Schedule.to_row(); it is parsed here and the PARSED values are stored,
+        so a row that Schedule.from_row would reject can never reach the table.
+        Such a row would be unreadable on every later hydrate and no accessor
+        could repair it. Raises ValueError, whose message names a tool argument.
+
+        Re-arming an existing id keeps armed_at and last_fired_at: editing a
+        reminder's label or schedule must not erase the record that it fired.
+        """
+        row = Schedule.from_row(schedule).to_row()
+        if not self._enabled or not self._conn:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO reminders "
+                "(id, label, kind, interval_s, at_hour, at_minute, "
+                "armed_at, next_due_at, last_fired_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                "label = excluded.label, kind = excluded.kind, "
+                "interval_s = excluded.interval_s, at_hour = excluded.at_hour, "
+                "at_minute = excluded.at_minute, next_due_at = excluded.next_due_at",
+                (
+                    reminder_id,
+                    label,
+                    row["kind"],
+                    row["interval_s"],
+                    row["at_hour"],
+                    row["at_minute"],
+                    time.time(),
+                    next_due_at,
+                ),
+            )
+            self._conn.commit()
+
+    def delete_reminder(self, reminder_id: str) -> bool:
+        """Disarm a reminder. True when a row was actually removed."""
+        if not self._enabled or not self._conn:
+            return False
+        with self._lock:
+            result = self._conn.execute(
+                "DELETE FROM reminders WHERE id = ?", (reminder_id,)
+            )
+            self._conn.commit()
+            return result.rowcount > 0
+
+    def list_reminders(self) -> list[dict[str, Any]]:
+        """Every armed reminder, soonest first, keyed by column name."""
+        if not self._enabled or not self._conn:
+            return []
+        with self._lock:
+            cursor = self._conn.cursor()
+            cursor.row_factory = sqlite3.Row
+            rows = cursor.execute(
+                "SELECT * FROM reminders ORDER BY next_due_at ASC"
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_reminder_fired(
+        self, reminder_id: str, fired_at: float, next_due_at: float
+    ) -> bool:
+        """Record a fire and re-arm the row. False when the id no longer exists.
+
+        A caller holding the reminder in memory needs that answer: the row can
+        be deleted from the chat thread between a tick's due-check and its
+        write-through, and a silent no-op would leave it firing from memory
+        with nothing backing it.
+        """
+        if not self._enabled or not self._conn:
+            return False
+        with self._lock:
+            result = self._conn.execute(
+                "UPDATE reminders SET last_fired_at = ?, next_due_at = ? WHERE id = ?",
+                (fired_at, next_due_at, reminder_id),
+            )
+            self._conn.commit()
+            return result.rowcount > 0
 
     # ------------------------------------------------------------------
     # End-of-day summary tracking — see plans/buddy-utility-wedges.md

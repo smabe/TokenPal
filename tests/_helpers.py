@@ -147,7 +147,7 @@ def assert_no_leak(
         return
     conn = sqlite3.connect(str(memory._db_path))
     try:
-        for table in ("chat_log", "conversation_summaries"):
+        for table in ("chat_log", "conversation_summaries", "reminders"):
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
             for row in rows:
                 assert fixture not in str(row), f"fixture leaked into {table}: {row!r}"
