@@ -7,13 +7,13 @@
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p1.md`
 
-**Phase p2 — scheduler owns the schedule, on a wall clock** — NEXT
+**Phase p2 — scheduler owns the schedule, on a wall clock** — SHIPPED `d18dc23`
 - Enters when: p1 shipped
 - Done signal: a reminder armed before a simulated 5-hour gap fires exactly once on resume, not five times; `bedtime_wind_down` runs off a real time-of-day schedule with no `""`-means-skip trick; `one_shot` and `registered_names` are gone
 - If it fails: no gate — fix-forward
 - Shard: `plans/proactive-nudges-p2.md`
 
-**Phase p3 — one `reminder` tool replacing the four**
+**Phase p3 — one `reminder` tool replacing the four** — NEXT
 - Enters when: p2 shipped
 - Done signal: `reminder` arms, disarms and lists from chat on this Mac; the four old names are gone from the registry and the catalog; the tool is absent from `_build_ambient_specs`; a sensitive label is refused
 - If it fails: no gate — fix-forward
@@ -60,14 +60,14 @@ Also corrected: this plan does **not** overturn `CONTEXT.md:37-38` (the not-a-We
 
 Also open: `plans/find-files-open-path.md` is APPROVED with **p4 outstanding** (the Windows Search backend, written on the Mac and unverified on Windows). p1-p3 of it shipped as `f0ca2f0`, `d42522f`, `3bbe847`. The operator moved to this plan first; work them sequentially, not together.
 
-NEXT: p2 — read `plans/proactive-nudges-p2.md` FIRST, including its `## Carried in from p1` section.
+NEXT: p3 — read `plans/proactive-nudges-p3.md` FIRST, including its `## Carried in from p1` and `## Carried in from p2` sections.
 
-p1 shipped as `2418088` (2026-09-04). **Spec check at p1** — 4/4 Work items evidenced · none unclaimed. Review: Codex peer was quota-exhausted (resets 2026-09-06 22:26), so `auto-review` ran its host-native fallback fan-out — six angles, then a two-agent closing round over the repaired diff. No external-peer receipt and no commit-gate stamp exist for this phase. 11 findings applied, 4 refuted with evidence, the rest parked below. Sweep: opened p2, p3, p4, p5 — p2/p3/p5 gained `## Carried in from p1`; p4 clean (its only reference is `ui_callback` wiring, which p1 did not touch).
+p1 shipped `2418088`, p2 shipped `d18dc23`. **Spec check at p2** — 6/6 Work items evidenced · 1 unclaimed (`test_reminders.py`, required by the deletions the phase names; added to Work with the planning miss recorded). Review both phases: Codex peer quota-exhausted (resets 2026-09-06 22:26), so `auto-review` ran its host-native fallback fan-out — six angles at p1, five at p2, each followed by a two-agent closing round over the repaired diff. **No external-peer receipt and no commit-gate stamp exist for either phase.** p2: 12 findings applied, 3 routed to later phases by operator decision, the rest refuted with evidence. Sweep: p3 and p4 gained `## Carried in from p2`; p5 unchanged by p2.
 
-Three p1 decisions p2 is written against:
-1. `Schedule.next_due_at(after)` rolls forward **one** occurrence. Re-arm from the **current time**, never the deadline just fired on, or a reminder missed over a weekend fires once per tick until it catches up.
-2. `upsert_reminder` parses before writing and preserves `armed_at`/`last_fired_at` across a re-arm; `mark_reminder_fired` returns `bool`.
-3. No per-tick `list_reminders()`. Hydrate once at start, write through on change.
+Three operator decisions taken at the p2 gate, 2026-09-05:
+1. **A stale daily reminder fires anyway.** Three reviewers flagged a 23:00 wind-down speaking at 09:05 the next morning as a regression against the deleted T-60 window. The operator chose the late fire over a staleness cutoff. Do not add one.
+2. **Nudges must not overwrite each other.** At most one fires per tick and never within `_MIN_NUDGE_GAP_S` (16 s) of the last, because the bubble replaces rather than queues and lingers 15 s against a 2 s loop.
+3. **The uncancellable-reminder gap is p3's to close**, not p2's. See p3's carried section for the Done criterion.
 
 ## Goal
 Replace four near-identical reminder actions and an in-memory scheduler with one `reminder` tool whose armed state survives a restart, whose schedule covers intervals and times of day without the `""`-means-skip trick, and whose nudge text is generated in the buddy's voice without ever blocking the brain loop.
