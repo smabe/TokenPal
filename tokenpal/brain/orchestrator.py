@@ -422,7 +422,7 @@ class Brain:
         # Proactive scheduler (phase 3). Shared across all focus actions.
         # Pauses during active conversation and sensitive-app detection.
         self._proactive = ProactiveScheduler(
-            ui_callback=self._ui_callback,
+            ui_callback=self._emit_nudge,
             is_paused=self._proactive_paused,
             memory=self._memory,
         )
@@ -1158,20 +1158,46 @@ class Brain:
         """Record a comment and show it to the user."""
         self._personality.record_comment(text)
         self._ui_callback(text)
-        # Ambient narration: every emit-comment path is unsolicited (idle
-        # tool, freeform, observation, EOD, drift, easter egg). Reply paths
-        # call self._ui_callback directly and never reach here, so a "typed
-        # → no speak" violation can't sneak through this hook. Voice-reply
-        # plumbing is stage 7's job. getattr() makes us tolerant of tests
-        # that bypass __init__ via Brain.__new__.
-        if getattr(self, "_audio_pipeline", None) is not None:
-            self._speak_async(text, source="ambient")
+        # Every emit-comment path is unsolicited (idle tool, freeform,
+        # observation, EOD, drift, easter egg). Reply paths call
+        # self._ui_callback directly and never reach here, so a "typed → no
+        # speak" violation can't sneak through this hook.
+        self._speak_ambient(text)
         if acknowledge:
             self._context.acknowledge()
         self._last_comment_time = time.monotonic()
         self._consecutive_comments += 1
         self._suppressed_streak = 0
         self._comment_timestamps.append(time.monotonic())
+
+    def _emit_nudge(self, label: str, *, generated: str | None = None) -> None:
+        """Deliver an armed reminder — the ProactiveScheduler's ui_callback.
+
+        Deliberately exempt from the rate cap, the forced-silence breather and
+        the near-duplicate ring, and it records none of their state: a
+        recurring reminder repeating itself verbatim is the point, and
+        `_recent_outputs` is shared with ambient output, so consulting it
+        would let unrelated chatter swallow a nudge.
+
+        `label` is the user's own words and bypasses `filter_response`, which
+        drops anything under 15 characters. `generated` is model text: it gets
+        the filter, falling back to `label` when the filter chooses silence.
+        """
+        text = label
+        if generated is not None:
+            text = self._personality.filter_response(generated) or label
+        self._ui_callback(text)
+        self._speak_ambient(text)
+
+    def _speak_ambient(self, text: str) -> None:
+        """Narrate unsolicited output, if audio is up.
+
+        `_speak_async` asserts the pipeline is present, so the guard is what
+        an audio-disabled run needs; the no-op inside `speak()` is too late.
+        getattr() tolerates tests that bypass __init__ via Brain.__new__.
+        """
+        if getattr(self, "_audio_pipeline", None) is not None:
+            self._speak_async(text, source="ambient")
 
     def _speak_async(self, text: str, *, source: InputSource) -> None:
         """Fire-and-forget TTS. Imports kept lazy so an audio-disabled run

@@ -107,6 +107,7 @@ Replace four near-identical reminder actions and an in-memory scheduler with one
 - `tests/test_actions/test_reminder.py` — p3 (new) — arm/disarm/list, sensitive-label refusal, ambient exclusion
 - `tokenpal/brain/personality.py` — p5 — the nudge prompt builder
 - `tests/test_brain/test_nudge_emission.py` — p4 (new) — funnel guards and TTS; p5 — off-loop generation, timeout and fallback
+- `tokenpal/brain/proactive.py` — p4 — the docstrings the rewiring falsified
 - `docs/claude/brain.md` — p5 — the ProactiveScheduler entry that has never existed
 - `CONTEXT.md` — p5 — `:108-112`'s "never goes through the riff pipeline" is now false; `:37-38` is untouched and still true
 - `CLAUDE.md` — p5 — one Privacy line for the new `reminders` table

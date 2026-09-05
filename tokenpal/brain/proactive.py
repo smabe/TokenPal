@@ -2,7 +2,8 @@
 
 Design rules (see plans/proactive-nudges.md):
 - Nudges surface through the brain's `ui_callback` as speech bubbles, not
-  OS notifications.
+  OS notifications. The brain wires that to `_emit_nudge`, which also speaks
+  them when ambient audio is on.
 - Nudges pause while the brain is paused, a long task is running, a
   conversation is active, or a sensitive app is in the foreground.
 - The scheduler owns the schedule. A nudge carries a serialisable
@@ -58,8 +59,9 @@ class ProactiveScheduler:
     Parameters
     ----------
     ui_callback
-        How a nudge reaches the user. Must behave like `brain._ui_callback`
-        (post speech bubble).
+        How a nudge reaches the user. The brain wires this to `_emit_nudge`,
+        which posts the speech bubble and speaks it; a bare `ui_callback`
+        (bubble only) also satisfies the contract.
     is_paused
         Returns True when no nudge should fire. The brain wires this to
         `_proactive_paused`, which covers the paused flag, a running long
