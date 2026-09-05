@@ -1,0 +1,23 @@
+{
+  "test_command_template": "\"$(dirname \"$(git rev-parse --path-format=absolute --git-common-dir)\")/.venv/bin/python\" -m pytest -xq {test_class}",
+  "ui_path_prefixes": [
+    "tokenpal/ui/",
+    "tokenpal/textual_overlay.py"
+  ],
+  "ui_code_patterns": [
+    "QWidget",
+    "paintEvent",
+    "Static(",
+    "compose(self)"
+  ],
+  "ui_extra_keywords": [
+    "overlay",
+    "speech bubble",
+    "qt",
+    "textual",
+    "ascii art",
+    "particle"
+  ],
+  "subprompt_extra": "Working agreements (TokenPal):\n- Python 3.12+. `ruff check tokenpal/` (line-length 100, E/F/I/N/W/UP) and `mypy tokenpal/ --ignore-missing-imports` (strict) must both pass on your worktree before you commit.\n- pytest with asyncio_mode=auto. Write the failing test first; prove it ran.\n- Grep before adding a helper, constant, or field. If the pattern already exists in tokenpal/, reuse it.\n- Don't abstract on the first use. No ABC, registry, or config dataclass until there is a second concrete consumer.\n- Don't add state nothing reads. A field with no reader is speculative -- delete it.\n- No narrative comments. Comments earn space only for hidden constraints, surprising invariants, or a workaround for a specific bug.\n- Privacy contract: desktop-content tools are marked `reads_desktop_content` and must never reach memory.db or any log line. Do not add a marked tool to M3_CATALOG or M1_RULES. See docs/claude/actions.md.\n- Path safety lives in tokenpal/util/paths.py (`resolve_inside`, `path_is_sensitive`, `REJECT_PATH`, `git_root`). Reuse it rather than hand-rolling containment.\n- Commit message must contain `Fixes #N` (not just `(#N)`) or GitHub will not auto-close the issue.\n- End the commit message with these two trailers:\n  Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>\n  Claude-Session: https://claude.ai/code/session_01VW9rDTzD2oN2SsCbAHVBuh\n- Do not touch plans/, CLAUDE.md, or .parallel-issues.json unless your issue names them.\n- Stay inside your listed files in scope. If the fix genuinely needs a file outside them, stop and report rather than widening.",
+  "notes": "test_command_template resolves the MAIN checkout's .venv from inside any worktree (a worktree has no .venv of its own). On Windows use .venv/Scripts/python.exe."
+}
