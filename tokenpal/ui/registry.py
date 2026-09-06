@@ -62,8 +62,14 @@ def discover_overlays() -> None:
             log.debug("Skipping overlay module %s: %s", modname, e)
 
 
-def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
-    """Pick the overlay matching config or auto-detect."""
+def resolve_overlay_name(config: dict[str, Any]) -> str:
+    """Registry key of the overlay this config resolves to.
+
+    Split out of ``resolve_overlay`` so a caller can learn *which*
+    overlay would run without paying for its construction — the macOS
+    relaunch decision has to know it is on the Qt path before any Qt
+    object exists.
+    """
     overlay_name = config.get("overlay", "auto")
     plat = current_platform()
 
@@ -77,7 +83,7 @@ def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
                     continue
                 if plat in cls.platforms:
                     log.info("Auto-selected overlay: %s", cls.__name__)
-                    return cls(config)
+                    return name
         overlay_name = "tkinter"
 
     if overlay_name == "qt":
@@ -87,6 +93,13 @@ def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
                 "qt overlay unavailable (%s) — falling back to textual", reason,
             )
             overlay_name = _TEXTUAL_FALLBACK
+
+    return str(overlay_name)
+
+
+def resolve_overlay(config: dict[str, Any]) -> AbstractOverlay:
+    """Pick the overlay matching config or auto-detect, and build it."""
+    overlay_name = resolve_overlay_name(config)
 
     selected: type[AbstractOverlay] | None = _OVERLAY_REGISTRY.get(overlay_name)
     if selected is None:

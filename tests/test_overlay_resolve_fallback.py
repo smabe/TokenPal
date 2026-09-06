@@ -16,6 +16,7 @@ from tokenpal.ui.registry import (
     _qt_unavailable_reason,
     discover_overlays,
     resolve_overlay,
+    resolve_overlay_name,
 )
 
 
@@ -82,3 +83,22 @@ def test_unknown_overlay_still_raises_clean_error() -> None:
     like `overlay = "qtt"` should still explode noisily."""
     with pytest.raises(RuntimeError, match="Unknown overlay"):
         resolve_overlay({"overlay": "qtt"})
+
+
+def test_resolve_overlay_name_reports_the_headless_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The macOS relaunch decision asks for the *name* so it can tell the Qt
+    path from the Textual one without constructing an overlay first."""
+    monkeypatch.setenv("TOKENPAL_HEADLESS", "1")
+    assert resolve_overlay_name({"overlay": "qt"}) == "textual"
+
+
+def test_resolve_overlay_name_reports_qt_when_qt_can_run() -> None:
+    assert resolve_overlay_name({"overlay": "qt"}) == "qt"
+
+
+def test_resolve_overlay_name_auto_prefers_textual() -> None:
+    """`overlay = "auto"` picks textual before any platform-specific
+    overlay, so an auto config never triggers the macOS bundle relaunch."""
+    assert resolve_overlay_name({"overlay": "auto"}) == "textual"

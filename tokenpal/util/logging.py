@@ -11,6 +11,9 @@ from pathlib import Path
 
 _DEFAULT_LOG_DIR = Path.home() / ".tokenpal" / "logs"
 
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_DATEFMT = "%H:%M:%S"
+
 
 def setup_logging(
     level: int = logging.INFO,
@@ -25,10 +28,7 @@ def setup_logging(
     log_path = (log_dir or _DEFAULT_LOG_DIR)
     log_file = log_path / "tokenpal.log"
 
-    fmt = logging.Formatter(
-        fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    fmt = logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT)
 
     root = logging.getLogger("tokenpal")
     root.setLevel(logging.DEBUG)

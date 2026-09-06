@@ -5,7 +5,8 @@ raise a system dialog. ``CGRequestScreenCaptureAccess`` — the prompting
 sibling of the preflight call below — is deliberately never called from
 this process.
 
-The grant attaches to the *responsible* process, which under a terminal is
+The grant attaches to the *responsible* process: the ``TokenPal.app``
+bundle on the Qt path (``tokenpal/ui/qt/macos_bundle.py``), and otherwise
 the terminal app rather than the interpreter. Callers that surface these
 answers to a user should name ``responsible_host()`` so the user knows which
 entry to look for in System Settings.
@@ -28,11 +29,25 @@ log = logging.getLogger(__name__)
 def responsible_host() -> str:
     """Name of the process a user must grant these permissions to.
 
-    macOS attributes the grants to the responsible parent process
-    (Terminal.app, iTerm2, Cursor, ...), not the python interpreter, so
-    naming "tokenpal" sends the user hunting in the wrong place.
+    On the Qt path the buddy runs inside its own ``TokenPal.app`` bundle
+    (``tokenpal/ui/qt/macos_bundle.py``) and macOS attributes the grants
+    to that app. Everywhere else macOS attributes them to the responsible
+    parent process (Terminal.app, iTerm2, Cursor, ...) rather than the
+    python interpreter, so naming "tokenpal" sends the user hunting in
+    the wrong place.
+
+    The bundle check has to come first: ``open`` passes the launching
+    shell's environment straight through, so ``TERM_PROGRAM`` is still
+    set inside the bundle and would name the wrong app.
     """
     if platform.system() == "Darwin":
+        from tokenpal.ui.qt.macos_bundle import (  # noqa: PLC0415
+            BUNDLE_NAME,
+            running_in_bundle,
+        )
+
+        if running_in_bundle():
+            return BUNDLE_NAME
         return os.environ.get("TERM_PROGRAM") or sys.executable
     return sys.executable
 

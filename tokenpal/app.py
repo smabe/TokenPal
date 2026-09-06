@@ -67,8 +67,13 @@ from tokenpal.senses.base import AbstractSense
 from tokenpal.senses.registry import discover_senses, resolve_senses
 from tokenpal.ui.ascii_renderer import BuddyFrame, SpeechBubble
 from tokenpal.ui.base import AbstractOverlay
-from tokenpal.ui.registry import discover_overlays, resolve_overlay
-from tokenpal.util.logging import setup_logging
+from tokenpal.ui.qt import macos_bundle
+from tokenpal.ui.registry import (
+    discover_overlays,
+    resolve_overlay,
+    resolve_overlay_name,
+)
+from tokenpal.util.logging import LOG_DATEFMT, LOG_FORMAT, setup_logging
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +138,20 @@ def _apply_font_change(
 
 
 def main() -> None:
+    # Launched through the macOS bundle, whose cwd is always "/". Restore the
+    # launching terminal's cwd before anything reads it: the repo-local
+    # config.toml fallback, git_root() for find_files/open_path, grep_codebase
+    # and git_log all resolve against it.
+    launch_cwd = macos_bundle.consume_launch_env()
+    if launch_cwd:
+        try:
+            os.chdir(launch_cwd)
+        except OSError as e:
+            # cwd is load-bearing: the repo-local config.toml fallback and the
+            # git root find_files/open_path are contained to both come from it.
+            # Failing silently would look like a config mystery.
+            print(f"could not restore working directory {launch_cwd}: {e}")
+
     args = parse_args()
 
     if args.version:
@@ -146,7 +165,9 @@ def main() -> None:
     setup_logging(verbose=args.verbose, log_dir=data_dir / "logs")
 
     if args.validate:
-        sys.exit(run_validate(config_path=args.config))
+        sys.exit(run_validate(
+            config_path=args.config, overlay_override=args.overlay,
+        ))
 
     if args.check:
         sys.exit(run_check(config_path=args.config))
@@ -160,12 +181,55 @@ def main() -> None:
             config = load_config(config_path=args.config)
             data_dir = Path(config.paths.data_dir).expanduser().resolve()
 
+    # Overlays are discovered here rather than with the other plugins because
+    # the macOS relaunch decision below has to know which overlay will run.
+    discover_overlays()
+    ui_config = dataclasses.asdict(config.ui)
+    if getattr(args, "overlay", None):
+        ui_config["overlay"] = args.overlay
+
+    # macOS attributes a menu-bar status item to whichever app launched the
+    # process, so a terminal-launched buddy files its item under the shared
+    # org.python.python identity and can be parked off-screen by another app's
+    # Control Center record. Relaunch through LaunchServices inside TokenPal's
+    # own bundle so the item belongs to com.tokenpal.app. Everything else --
+    # Textual, console, headless, off-darwin, and the bundled child itself --
+    # stays in-process, as does any host where the bundle can't be built.
+    if (
+        sys.platform == "darwin"
+        and not macos_bundle.running_in_bundle()
+        and resolve_overlay_name(ui_config) == "qt"
+        and (bundle_blocker := macos_bundle.bundle_unavailable_reason())
+    ):
+        log.info("menu-bar identity stays org.python.python: %s", bundle_blocker)
+
+    if macos_bundle.would_use_bundle(ui_config):
+        # Release the log file before the child opens its own handler on it --
+        # two RotatingFileHandlers on one path corrupt each other on rotation.
+        # Keep a stderr handler so the parent's own build/launch records, the
+        # only trace a relaunch leaves, still reach the user.
+        tokenpal_log = logging.getLogger("tokenpal")
+        for handler in list(tokenpal_log.handlers):
+            tokenpal_log.removeHandler(handler)
+            handler.close()
+        parent_handler = logging.StreamHandler(sys.stderr)
+        parent_handler.setFormatter(
+            logging.Formatter(fmt=LOG_FORMAT, datefmt=LOG_DATEFMT),
+        )
+        parent_handler.setLevel(logging.DEBUG if args.verbose else logging.INFO)
+        tokenpal_log.addHandler(parent_handler)
+        try:
+            sys.exit(macos_bundle.relaunch_in_bundle(sys.argv[1:], data_dir))
+        except (RuntimeError, OSError) as e:
+            tokenpal_log.removeHandler(parent_handler)
+            setup_logging(verbose=args.verbose, log_dir=data_dir / "logs")
+            log.warning("running in-process: %s", e)
+
     log.info("TokenPal starting up...")
 
     # Discover all plugins
     discover_senses(extra_packages=config.plugins.extra_packages)
     discover_backends()
-    discover_overlays()
     discover_actions()
 
     # Session memory (before senses, so productivity sense can use it)
@@ -198,9 +262,6 @@ def main() -> None:
     llm_config = backend_config(config, memory_store=memory)
     llm = resolve_backend(llm_config)
 
-    ui_config = dataclasses.asdict(config.ui)
-    if getattr(args, "overlay", None):
-        ui_config["overlay"] = args.overlay
     overlay = resolve_overlay(ui_config)
 
     # Load voice profile if configured

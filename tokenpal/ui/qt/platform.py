@@ -40,8 +40,11 @@ def buddy_overlay_flags(*, focusable: bool = False) -> Qt.WindowType:
 
 def apply_macos_accessory_mode() -> None:
     """Hide the Dock icon on macOS so TokenPal lives in the menu bar
-    only. Equivalent to ``LSUIElement = true`` in an Info.plist, except
-    we're not packaged — we're running from the Python interpreter.
+    only. Same effect as ``LSUIElement = true``, which the bundle built
+    by ``tokenpal/ui/qt/macos_bundle.py`` already sets — under that
+    bundle this is a harmless repeat, and it is what hides the Dock icon
+    on the in-process fallback path (no framework stub, or ``open``
+    failed).
 
     **MUST be called after ``QApplication`` is constructed.** The
     ``NSApplication.sharedApplication()`` call hands us the Cocoa app
@@ -86,7 +89,9 @@ def apply_macos_stay_visible(window: object) -> None:
 
     Fix: set ``CanJoinAllSpaces | Stationary | FullScreenAuxiliary``
     on the underlying NSWindow. Done in code rather than via Info.plist
-    because we don't ship a bundled .app — we're a plain Python process.
+    because collection behavior is per-window, and because the in-process
+    fallback path has no bundle at all (``tokenpal/ui/qt/macos_bundle.py``
+    only covers the relaunched Qt run).
 
     No-op off macOS or when pyobjc isn't installed.
     """

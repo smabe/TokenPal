@@ -25,7 +25,7 @@ def test_check_audio_skips_when_both_toggles_off(
     tmp_path: Path, capsys,
 ) -> None:
     cfg = _config(AudioConfig(), tmp_path)
-    assert _check_audio(cfg) == 0
+    assert _check_audio(cfg, as_bundle=False) == 0
     out = capsys.readouterr().out
     assert "Audio I/O" not in out
 
@@ -39,7 +39,7 @@ def test_check_audio_warns_on_missing_deps_and_models(
         "tokenpal.audio.deps.missing_deps",
         return_value=("kokoro-onnx", "sounddevice"),
     ):
-        problems = _check_audio(cfg)
+        problems = _check_audio(cfg, as_bundle=False)
     out = capsys.readouterr().out
     # Two distinct issues: pip wheels + model files.
     assert problems == 2
@@ -59,8 +59,29 @@ def test_check_audio_passes_when_everything_present(
         "tokenpal.audio.deps.missing_deps",
         return_value=(),
     ):
-        problems = _check_audio(cfg)
+        problems = _check_audio(cfg, as_bundle=False)
     out = capsys.readouterr().out
     assert problems == 0
     assert "audio wheels installed" in out
     assert "kokoro models present (fp16)" in out
+
+
+def test_mic_warning_names_the_bundle_on_the_qt_path(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    """On the Qt path macOS attributes the mic grant to TokenPal.app, so
+    naming the terminal sends the user to the wrong Settings row."""
+    cfg = _config(AudioConfig(voice_conversation_enabled=True), tmp_path)
+    monkeypatch.setattr("tokenpal.cli.platform.system", lambda: "Darwin")
+    monkeypatch.setenv("TERM_PROGRAM", "ghostty")
+
+    with mock.patch("tokenpal.audio.deps.missing_deps", return_value=()):
+        _check_audio(cfg, as_bundle=True)
+    bundled = capsys.readouterr().out
+
+    with mock.patch("tokenpal.audio.deps.missing_deps", return_value=()):
+        _check_audio(cfg, as_bundle=False)
+    terminal = capsys.readouterr().out
+
+    assert "TokenPal" in bundled and "ghostty" not in bundled
+    assert "ghostty" in terminal and "TokenPal" not in terminal

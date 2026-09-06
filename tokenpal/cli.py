@@ -17,6 +17,7 @@ import httpx
 
 from tokenpal.config.loader import load_config
 from tokenpal.config.schema import TokenPalConfig
+from tokenpal.ui.qt.macos_bundle import BUNDLE_NAME
 
 # Terminal colors (no dependency needed)
 _BOLD = "\033[1m"
@@ -167,7 +168,31 @@ def _check_actions(config: TokenPalConfig) -> None:
         print(f"  {_WARN} No actions enabled")
 
 
-def _check_audio(config: TokenPalConfig) -> int:
+def _runs_as_bundle_app(
+    config: TokenPalConfig, overlay_override: str | None = None,
+) -> bool:
+    """True when this config launches the buddy inside ``TokenPal.app``.
+
+    macOS attributes Accessibility / Screen Recording / Microphone grants
+    to that bundle rather than to the terminal, so every permission line
+    below has to know. Delegates to the same predicate ``main()`` uses to
+    decide, so the advice cannot drift from the behavior; ``--validate``
+    itself never relaunches. ``overlay_override`` is ``--overlay``, which
+    ``main()`` layers over the config before deciding.
+    """
+    if platform.system() != "Darwin":
+        return False
+    from tokenpal.ui.qt.macos_bundle import would_use_bundle
+    from tokenpal.ui.registry import discover_overlays
+
+    ui_config = dataclasses.asdict(config.ui)
+    if overlay_override:
+        ui_config["overlay"] = overlay_override
+    discover_overlays()
+    return would_use_bundle(ui_config)
+
+
+def _check_audio(config: TokenPalConfig, *, as_bundle: bool) -> int:
     """Audio I/O readiness: deps, model files, and on macOS the parent-terminal
     binary the user must grant mic permission to (which is NOT 'tokenpal' or
     'python3'). Returns problem count.
@@ -226,34 +251,55 @@ def _check_audio(config: TokenPalConfig) -> int:
             print(f"  {_CHECK} wakeword + VAD models present")
 
     if audio_cfg.voice_conversation_enabled and platform.system() == "Darwin":
-        # Mic permission on macOS is granted to the *parent terminal binary*
-        # (Terminal.app, iTerm2, Cursor, ...), not the python interpreter.
-        # Naming "tokenpal" sends the user hunting in the wrong place.
-        host = os.environ.get("TERM_PROGRAM", "your terminal app")
-        print(
-            f"  {_WARN} macOS: grant Microphone access to {host} "
-            f"in System Settings > Privacy & Security > Microphone",
-        )
+        # Mic permission on macOS is granted to the app that owns the process:
+        # the TokenPal bundle on the Qt path, otherwise the *parent terminal
+        # binary* (Terminal.app, iTerm2, Cursor, ...) rather than the python
+        # interpreter. Naming "tokenpal" sends the user hunting in the wrong
+        # place either way.
+        if as_bundle:
+            print(
+                f"  {_WARN} macOS: the buddy runs as the {BUNDLE_NAME} app — grant "
+                f"Microphone access to \"{BUNDLE_NAME}\" in System Settings > "
+                f"Privacy & Security > Microphone",
+            )
+        else:
+            host = os.environ.get("TERM_PROGRAM", "your terminal app")
+            print(
+                f"  {_WARN} macOS: grant Microphone access to {host} "
+                f"in System Settings > Privacy & Security > Microphone",
+            )
 
     return problems
 
 
-def _check_desktop_permissions(plat: str) -> None:
+def _check_desktop_permissions(plat: str, *, as_bundle: bool) -> None:
     """OS grants the desktop-content tools need to read another app's text.
 
     Read-only: the probes report the current state and never raise a system
     dialog. A missing grant is a warning, not a counted problem — no shipped
     tool needs one yet.
+
+    The probes run in *this* process, which is the terminal's. On the Qt path
+    the buddy runs as ``TokenPal.app`` instead, so the rows below describe the
+    terminal and the grant the user actually needs is TokenPal's.
     """
     print()
     from tokenpal.desktop import permissions
 
-    host = permissions.responsible_host()
+    host = BUNDLE_NAME if as_bundle else permissions.responsible_host()
     print(f"  {_BOLD}desktop tools{_RESET} (permissions granted to {host})")
 
     if plat != "Darwin":
         print(f"  {_CHECK} no OS permission grants needed")
         return
+
+    if as_bundle:
+        print(
+            f"  {_WARN} the buddy runs as the {BUNDLE_NAME} app — the rows below "
+            f"report this terminal, not {BUNDLE_NAME}. Grant to "
+            f"\"{BUNDLE_NAME}\" when "
+            f"macOS prompts.",
+        )
 
     for label, granted, settings_path in (
         (
@@ -376,12 +422,16 @@ async def _check(config_path: Path | None) -> int:
     return 1 if problems else 0
 
 
-def run_validate(config_path: Path | None = None) -> int:
+def run_validate(
+    config_path: Path | None = None, overlay_override: str | None = None,
+) -> int:
     """Run comprehensive preflight validation. Returns 0 if all good, 1 if problems."""
-    return asyncio.run(_validate(config_path))
+    return asyncio.run(_validate(config_path, overlay_override))
 
 
-async def _validate(config_path: Path | None) -> int:
+async def _validate(
+    config_path: Path | None, overlay_override: str | None = None,
+) -> int:
     print(f"\n{_BOLD}TokenPal Preflight Validation{_RESET}")
     print("=" * 40)
     problems = 0
@@ -440,10 +490,11 @@ async def _validate(config_path: Path | None) -> int:
     _check_cloud_llm(config)
 
     # 6d. Audio I/O — only when at least one [audio] toggle is on
-    problems += _check_audio(config)
+    as_bundle = _runs_as_bundle_app(config, overlay_override)
+    problems += _check_audio(config, as_bundle=as_bundle)
 
     # 7. Desktop-content OS grants (read-only probes; never prompt)
-    _check_desktop_permissions(plat)
+    _check_desktop_permissions(plat, as_bundle=as_bundle)
 
     _print_summary(problems)
     return 1 if problems else 0
