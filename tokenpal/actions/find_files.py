@@ -19,9 +19,10 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.util.paths import (
+    PathScreen,
     declared_roots,
     is_hidden_or_protected,
-    path_is_sensitive,
+    is_screened_out,
     resolve_inside,
 )
 from tokenpal.util.platform import current_platform
@@ -208,7 +209,7 @@ async def _run_backend(
 
 
 def _post_filter(
-    candidates: list[Path], roots: list[Path], kind: str, limit: int
+    candidates: list[Path], roots: list[Path], kind: str, limit: int, screen: PathScreen
 ) -> list[tuple[float, Path]]:
     """Drop anything outside the roots, hidden, protected, sensitive, or off-kind."""
     kept: list[tuple[float, Path]] = []
@@ -226,7 +227,9 @@ def _post_filter(
             continue
         if resolved in seen:
             continue
-        if is_hidden_or_protected(resolved, root) or path_is_sensitive(rel):
+        # "narrow": the tool screens names it found, and the broad app terms
+        # would refuse a benign file under a badly-named folder.
+        if is_screened_out(resolved, root, rel, screen):
             continue
         try:
             info = os.stat(resolved)
@@ -282,6 +285,11 @@ class FindFilesAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    # No path ARGUMENT, so the invoker resolves nothing -- this tool filters
+    # paths a backend returned. Declared and READ below, so the class cannot
+    # drift from what it actually does.
+    path_roots = "allowed_dirs"
+    path_screen = "narrow"
     # The listing goes stale the moment the user saves a file mid-run.
     cacheable: ClassVar[bool] = False
 
@@ -316,7 +324,7 @@ class FindFilesAction(AbstractAction):
             return _refuse("limit", f"must be a whole number from 1 to {_MAX_LIMIT}.")
         limit = min(limit, _MAX_LIMIT)
 
-        roots = await declared_roots("allowed_dirs")
+        roots = await declared_roots(self.path_roots)
         if not roots:
             return _refuse("[paths] allowed_dirs", "names no folder that exists.")
 
@@ -330,7 +338,7 @@ class FindFilesAction(AbstractAction):
                 success=False,
             )
 
-        hits = _post_filter(candidates, roots, kind, limit)
+        hits = _post_filter(candidates, roots, kind, limit, self.path_screen)
         if not hits:
             return ActionResult(output=f"No matches under {len(roots)} allowed folders.")
         return ActionResult(

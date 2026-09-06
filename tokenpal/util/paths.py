@@ -138,6 +138,20 @@ class ResolvedPath(NamedTuple):
 RootsPolicy = Literal["git_root", "allowed_dirs"]
 PathScreen = Literal["broad", "narrow"]
 
+
+def is_screened_out(resolved: Path, root: Path, rel: str, screen: PathScreen) -> bool:
+    """True when a resolved path under *root* must be withheld from the caller.
+
+    The output-side counterpart of ``resolve_declared_path``'s resolved screen,
+    for tools that return paths their backend chose rather than one the caller
+    named: neither Spotlight nor ripgrep honours a root's hidden or ignored
+    files once the search is pointed at it explicitly.
+    """
+    if is_hidden_or_protected(resolved, root) or path_is_sensitive(rel):
+        return True
+    return screen == "broad" and contains_sensitive_term(rel)
+
+
 _NO_ROOTS: dict[str, str] = {
     "git_root": "Not inside a git repository.",
     "allowed_dirs": "[paths] allowed_dirs names no folder that exists.",

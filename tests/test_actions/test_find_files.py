@@ -143,9 +143,9 @@ async def test_limit_is_clamped_to_max(sandbox: Path, monkeypatch: pytest.Monkey
     monkeypatch.setattr(
         find_files,
         "_post_filter",
-        lambda candidates, roots, kind, limit: (
+        lambda candidates, roots, kind, limit, screen: (
             seen.append(limit),
-            real(candidates, roots, kind, limit),
+            real(candidates, roots, kind, limit, screen),
         )[1],
     )
     monkeypatch.setattr(find_files, "current_platform", lambda: "linux")
@@ -309,6 +309,7 @@ async def test_kind_filter_agrees_across_backends(
         [sandbox],
         "document",
         20,
+        "narrow",
     )
     assert [p.name for _, p in kept] == ["doc-note.txt"]
 
@@ -391,8 +392,8 @@ def test_kind_gate_reads_the_symlink_target_not_the_link(tmp_path: Path) -> None
     (root / "draft.md").write_text("x")
     (root / "report.pdf").symlink_to(root / "draft.md")
 
-    assert find_files._post_filter([root / "report.pdf"], [root], "pdf", 20) == []
-    kept = find_files._post_filter([root / "report.pdf"], [root], "document", 20)
+    assert find_files._post_filter([root / "report.pdf"], [root], "pdf", 20, "narrow") == []
+    kept = find_files._post_filter([root / "report.pdf"], [root], "document", 20, "narrow")
     assert [p.name for _, p in kept] == ["draft.md"]
 
 
