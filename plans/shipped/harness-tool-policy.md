@@ -129,11 +129,33 @@ Make tool policy something a tool declares and the harness enforces at one place
 - A tool that declares nothing is absent from `_build_ambient_specs`' output; exactly 26 named tools appear; the hardcoded `_REMINDER_TOOL` check and the `_PERSISTENT_SINKS` frozenset no longer exist.
 - Every LLM tool call reaches `execute()` through `ToolInvoker.invoke`; a test fails if a new direct dispatch appears in `tokenpal/brain/`. The assertion must match the dispatch shape, NOT the bare word `.execute(` — `tokenpal/brain/memory.py` calls `self._conn.execute(` more than sixty times.
 - `grep_codebase` with an absolute path outside the repo is refused, and with no path argument no longer returns the contents of an in-repo `credentials.md` or `id_rsa`.
-- `read_file`, `grep_codebase` and `open_path` contain no `resolve_inside` call of their own.
+- `read_file`, `grep_codebase` and `open_path` contain no INPUT-side containment of their own — no tool resolves or contains its own path ARGUMENT. **Amended at ship, 2026-09-06:** as written this said "no `resolve_inside` call of their own", which `grep_codebase` now fails on its letter: p4 added `resolve_inside` at `grep_codebase.py:95`, inside `_screened_hits`, to map a path ripgrep RETURNED onto `(resolved, root, rel)` for the output screen. That is the opposite direction from the containment this criterion was written about, and it did not exist when the criterion was drafted. `read_file` and `open_path` have no `resolve_inside` call at all; verified.
 - A new action declaring a schema property named `path` and no `path_params` fails the suite.
 - The full suite is green and `test_privacy_contract.py` still passes unchanged.
 
 ## Parking lot
+
+**Dispositioned at ship, 2026-09-06.**
+
+**Nothing filed as a GitHub issue: per the operator's standing convention that needs a separate go-ahead.** Every item below is carried here with its evidence, for that decision.
+
+**Carry as follow-ups (recommend filing):**
+- **Execution-side ambient enforcement.** The ambient gate is advertise-only: `_execute_tool_call` resolves any name the model emits against the full enabled set, so `allow_unprompted` narrows what the model is SHOWN, not what it can RUN. Proven by probe — with `_build_ambient_specs()` empty, a mock LLM calling the unadvertised action still executed it. The durable-sink gate beside it is deliberately two-sided for this exact reason. Out of the approved scope: the operator approved four phases before this was known.
+- **Content-based secret detection.** Every screen in this plan matches on NAMES, so a credential inside `notes.txt` is invisible. Explicitly excluded by the operator; entropy/pattern detection, not an LLM.
+- **`test_privacy_contract.py`'s three fail-open modes** — `pytest.skip` on a constructor raise, an empty set from an unreadable module, and an empty `parametrize` list collecting as a skip. The new `test_path_policy_contract.py` differs on all three and is the worked example. Partly #65 item 1.
+- **`_dummy_args` is duplicated** between `test_path_policy_contract.py` and `test_privacy_contract.py`, and the copies diverged on the `required`-absent default before being aligned. Two concrete consumers now, so CLAUDE.md's rule says refactor.
+- **A hardlink to a screened file bypasses the name-based screen** — verified. Needs prior filesystem write, and the model has no write tool.
+
+**Dropped, with reasons:**
+- **A user-configurable ambient list** (`[tools] ambient_tools`). `allow_unprompted` is author-declared and the operator approved that shape; a config surface was not asked for.
+- **`open_path`'s existence oracle.** p3 narrowed it: a nonexistent sensitive path now answers "That path is protected." instead of "No such file.", removing the sensitive-name half. The remaining ordering inside `open_path` is ADJACENT.
+- **`memory.tool_usage_counts` is a write-only table** with no production reader. Unrelated to this boundary.
+- **A cancelled `/idle_tools roll` still consumes a rate-limit slot.** Pre-existing, unaffected, and no path tool declares a `rate_limit`.
+- **`open_path(path="config.toml")` anchors at the process cwd**, whose git root `allowed_roots` appends. Pre-existing and unchanged by this plan.
+- **A single-file binary target returns rg's own `binary file matches` notice.** Diagnostic text, not content; rg skips such files entirely in directory mode.
+- **`test_privacy_contract.py` could assert `allow_unprompted is False` for marked tools.** Cheap and genuinely invariant, but p4 required that file stay unchanged and it did.
+
+### Original parking lot (evidence retained)
 - **Content-based secret detection** — `path_is_sensitive` matches names only, so a credential inside `notes.txt` is invisible to every layer this plan adds. Evidence: P4's per-hit screen filters `grep_codebase` hits by filename, not by matched text. Useful, but a different mechanism (entropy/pattern detection) and explicitly out of scope per the operator.
 - **A user-configurable ambient list** — `[tools] ambient_tools` or an `/options` surface, so the operator can exclude a tool without editing source. `allow_unprompted` is author-declared. Not required for the requested outcome.
 - **`open_path`'s existence oracle** — it checks `exists()` (`open_path.py:93`) before `path_is_sensitive` (`:100`), so `allowed/credentials.md` answers "That path is protected." while `allowed/nope_credentials.md` answers "No such file.", distinguishing a denied name that exists from one that does not. P3 adopts `read_file`'s deny-before-stat order for the containment step, which narrows but does not remove this; the remaining ordering inside `open_path` is ADJACENT.
