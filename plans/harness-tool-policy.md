@@ -39,16 +39,18 @@ history: 1 qualifying (`tokenpal/brain/orchestrator.py`, 136 commits) · 1 mined
 Re-audit of the rewritten p1 (fail-closed default + `writes_durable_sink`), 2026-09-05: grounding/executability 9 findings, integration 9 findings, 4 blocking between them, all fixed. The 26-name opt-in set was verified set-identical in both directions against the live registry by both auditors independently — 0 errors. Named fixes: the `_PERSISTENT_SINKS` tests are in `tests/test_actions/test_reminder.py`, not `tests/test_agent.py` which holds zero references, and two of them assert the literal string via `inspect.getsource`; `_EchoAction` (`test_tool_loop.py:372-377`) declares no flag so the two ambient assertions BREAK rather than pass under the inverted default; the expected-set test pinned only the 26 and was blind to a newly added tool, now pins both halves; `agent.py:305` needs no registry lookup because `AgentRunner` already holds `self._actions`; `docs/claude/actions.md:7` goes stale at p1, not p4.
 **Approval: APPROVED 2026-09-05** — operator signed off the ten-tool exclusion list, uncapped chat after seeing the before/after code shape, converting `_PERSISTENT_SINKS` to a declaration, and the fail-closed default. The non-conflation of `writes_durable_sink` from `allow_unprompted` was a correction made at approval and is flagged in the response.
 
-**p1 SHIPPED at `3bbc46d`. p2 SHIPPED at `38d9d68`. p3 SHIPPED at `e8e2692`.** NEXT is p4 — read `plans/harness-tool-policy-p4.md` FIRST.
+**ALL FOUR PHASES SHIPPED** — p1 `3bbc46d`, p2 `38d9d68`, p3 `e8e2692`, p4 `1094948`. Every Done criterion met; ready for `/plan ship`.
 
 **Spec check at p1** — 10/10 Work items evidenced · none unclaimed (the 21 action modules are the opt-ins Work described by grep recipe).
 **Spec check at p2** — 4/4 Work items evidenced · 1 unclaimed (`tests/test_brain/test_followup_handler.py`, a `Brain.__new__` fixture; required by the described work, added to Work, planning miss recorded — p1 hit the same pattern in `test_reminder.py`).
 **Spec check at p3** — 14/14 Work items evidenced · none unclaimed.
+**Spec check at p4** — 6/6 Work items evidenced · 2 unclaimed (`tokenpal/util/paths.py`, `tokenpal/actions/find_files.py` — the extraction the Work called for had no named destination; added to Work, planning miss recorded).
+**Sweep at p4** — nothing unshipped remains to sweep.
 **Sweep at p3** — opened p4 and widened it three ways from p3's findings: the per-hit screen must also apply `is_hidden_or_protected` (ripgrep ignores its hidden/gitignore filters for an explicitly named path — measured, `path=".aws"` returns key material); the contract test must assert every `path_params` tool refuses a non-`ResolvedPath` (a reviewer built a tool that trusts the invoker and received an uncontained list); and the docs must document all three ClassVars, which appear nowhere in `docs/claude/actions.md` today.
 **Sweep at p2** — opened p3 and p4. p3 gains the `Brain.__new__` fixture warning, which is material because p3 reads action attributes inside `invoke`. p4 clean.
 **Sweep at p1** — opened p2, p3, p4. p2 gains the advertise-only finding as context and a note that `_execute_tool_call` is unchanged by p1. p3 clean — its `base.py` ClassVars are additive to p1's two. p4 gains a note that `docs/claude/actions.md` was already partly updated by p1.
 
-Binding decisions for p4, pulled inline:
+Binding decisions that shipped (kept for a cold reader):
 - The per-hit screen applies the tool's declared `path_screen` AND `is_hidden_or_protected`. `is_hidden_or_protected` must NOT move into `resolve_declared_path` — `read_file` has to keep reading a tracked `.github/workflows/*.yml`.
 - The contract test selects on the SCHEMA (any property whose name contains path/file/dir/folder), not on `path_params`, or it can only check tools that already remembered to declare.
 - It must not inherit `test_privacy_contract.py`'s three fail-open modes: `pytest.skip` on a constructor raise, an empty set from an unreadable module, and an empty `parametrize` list being a skip rather than a failure.
@@ -84,11 +86,11 @@ Make tool policy something a tool declares and the harness enforces at one place
 - `tests/test_actions/test_reminder.py` — P1 — the three `_PERSISTENT_SINKS` assertions, two of them `inspect.getsource` string checks, move to the new flag
 - `tokenpal/brain/orchestrator.py` — P1, P2 — ambient filter reads the flag (P1); chat/ambient dispatcher routes through an invoker (P2)
 - `tokenpal/actions/invoker.py` — P2, P3 — `enforce_rate_limit` kwarg (P2); path resolution and substitution (P3)
-- `tokenpal/util/paths.py` — P3 — shared declared-path resolver, memoized `git_root`
+- `tokenpal/util/paths.py` — P3, P4 — the shared declared-path resolver; P4 adds the output-side `is_screened_out`
+- `tokenpal/actions/find_files.py` — P1, P3, P4 — flag; shared roots; `_post_filter` calls the extracted screen
 - `tokenpal/actions/read_file.py` — P1, P3 — declares `allow_unprompted = False`; local containment deleted in P3
 - `tokenpal/actions/grep_codebase.py` — P1, P3, P4 — flag; declares a path policy; gains a per-hit output screen in P4
 - `tokenpal/actions/open_path.py` — P3 — declares a path policy, local containment deleted
-- `tokenpal/actions/find_files.py` — P1, P3 — flag; shares the roots computation only, output-side filter stays
 - `tokenpal/actions/research/research_action.py` — P1 — `allow_unprompted = False` on both actions
 - `tokenpal/actions/research/fetch_url.py` — P1 — `allow_unprompted = False`
 - `tokenpal/actions/reminder.py` — P1 — `allow_unprompted = False`, replacing the name check deleted from the filter
