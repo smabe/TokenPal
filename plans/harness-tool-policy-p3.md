@@ -81,6 +81,76 @@ See the master `plans/harness-tool-policy.md`. The decisions binding this phase:
 - **Rationale:** `087d5a4` was written because screening only the raw argument lets a tracked symlink launder a denied filename — reproduced then as `docs/credentials.md` refused while `notes.md → docs/credentials.md` returned `AWS_SECRET=abc123`. One screen on either input alone reopens it.
 - **Evidence:** `tokenpal/actions/read_file.py:64,67,82`; `tokenpal/actions/find_files.py:230`; `tokenpal/actions/open_path.py:100`.
 
+### Finding: the two Done-criteria observables, run  *(status: active)*
+Scratch repo — tracked `docs/credentials.md`, tracked symlink `notes.md` → it, plus a control:
+```
+read_file(path='docs/credentials.md')      -> success=False 'Path matches a denied pattern.'
+read_file(path='notes.md')  [tracked link] -> success=False 'Path matches a denied pattern.'
+read_file(path=<abs>/notes.md)             -> success=False 'Path matches a denied pattern.'
+read_file(path='hello.txt')  [control]     -> success=True  'hello world\n'
+grep_codebase(pattern='AWS_SECRET', path=<abs outside repo>)
+                                           -> success=False 'Path is outside the git repo.'
+```
+`open_path` on a benign file under a badly-named folder, both root shapes:
+```
+allowed_dirs=[<tmp>/credentials-app]  path=<tmp>/credentials-app/README.md   (rel='README.md')
+  -> success=True  'Opening README.md.'  launched=[['open', '.../credentials-app/README.md']]
+allowed_dirs=[<tmp>]                  path=<tmp>/credentials-app/README.md
+                                             (rel='credentials-app/README.md')
+  -> success=False 'That path is protected.'  launched=[]
+```
+The second shape is refused by the RESOLVED screen and was refused identically before this
+phase — `path_is_sensitive("credentials-app/README.md")` is True, `path_is_sensitive("README.md")`
+is False. Only the first shape is the narrow-screen observable.
+
+### Finding: `test_untracked_symlink_cannot_read_a_tracked_file` does not pin what it is cited for  *(status: active)*
+Its fixture aims the untracked symlink at `docs/credentials.md`, so the resolved-name screen
+refuses in the invoker before `execute()` runs — the dual `git ls-files` check is never reached,
+and the test would still pass under a bare-string substitution. Measured on the real objects:
+with both names benign (`alias.txt` → tracked `tracked_notes.txt`), `_spelled_rel(path.raw, root)`
+= `'alias.txt'` while `_spelled_rel(str(path.resolved), root)` = `'tracked_notes.txt'` — equal to
+`rel`, so `spelled != rel` would be False and both tracking calls would pass. Added
+`test_untracked_symlink_with_a_benign_name_is_still_refused`, which fails under that substitution.
+
+### Finding: refusal strings are keyed on policy and screen, not collapsed to one  *(status: active)*
+Work anticipated one shared outside-roots string and an edit to `test_read_file.py:102`. Keyed
+instead: `git_root` → "Path is outside the git repo.", `allowed_dirs` → "That path is outside
+[paths] allowed_dirs."; resolved-name denial `broad` → "Path matches a denied pattern.",
+`narrow` → "That path is protected.". This is what preserves the oracle granularity the Failure
+modes demand in BOTH directions — read_file's raw-`REJECT_PATH` and resolved-screen refusals stay
+identical to each other (a symlink pointing at a denied name is indistinguishable from spelling it),
+and open_path's kept `is_hidden_or_protected` refusal stays identical to the invoker's. A single
+string would have had to change one of those two pairs. No test needed editing; `:102` still holds.
+
+## Decisions & findings — reviewed before commit
+
+### Verdict: the centralized check is a strict superset. No weakening.
+A reviewer reconstructed HEAD in a detached worktree and ran **69 input/verdict pairs** across the four tools. `read_file` 22/22 identical (`..` escape, abs-outside, tracked symlink→outside, untracked symlink→tracked, raw-sensitive-rel, benign-under-badly-named-dir, nonexistent, dir, root, blank, NUL byte, `--others`, non-`str`). `open_path` 25/25 identical except one row where the new code is STRICTER: a nonexistent sensitive path returns "That path is protected." where HEAD returned "No such file.", removing an existence oracle. `find_files` byte-equivalent. `grep_codebase` newly refuses six things HEAD searched, including an absolute path outside the repo, `..`, an in-repo symlink pointing out, a non-`str` argument that used to fall through to a whole-repo search, and a NUL byte that used to raise out of `execute`.
+
+### Finding: `grep_codebase(path=<hidden or gitignored dir>)` still returns secrets — p4's to close
+ripgrep's hidden-file and gitignore filters do NOT apply to a path named explicitly on the command line, and the resolved-name screen checks the DIRECTORY's own name, not its contents. Measured end-to-end through `ToolInvoker`: `path=".git"` returned `.git/description:1:MARKERSECRET`; `path=".aws"` returned `aws_secret_access_key = MARKERSECRET`; a gitignored `ignored/` returned `prod.env:1:TOKEN=MARKERSECRET`. Pre-existing — HEAD had no screen at all — and it makes the tool's own description ("Respects .gitignore") false whenever `path` is supplied. **p4's per-hit screen must apply `is_hidden_or_protected` as well as `path_is_sensitive`.** Note `is_hidden_or_protected` cannot be added to `resolve_declared_path` for all tools: `read_file` must stay able to read a tracked `.github/workflows/*.yml`.
+
+### Finding: the second half of `read_file`'s dual tracking check was unguarded
+Mutation-verified by a reviewer: deleting `if spelled != path.rel and not await _git_ls_files_contains(...)` left 14/14 green. `test_tracked_symlink_cannot_launder_a_denied_path` refuses at the invoker's screen on BOTH arms, so it never reaches the tracking logic it is named for — the same wrong-reason pass the worker found on the other half. Added `test_tracked_symlink_to_an_untracked_file_is_refused` with two benign names; re-ran the mutation and it is now the only failure (1 failed, 14 passed).
+
+### Decision: `path_roots` defaults to `git_root`, the narrower policy
+It shipped defaulting to `allowed_dirs`, which under the default config is `~/Documents`, `~/Desktop`, `~/Downloads` plus the cwd git root — a strict superset of `git_root`, and the opposite of `path_screen`'s documented fail-closed default. A future repo-scoped tool that forgot the declaration would silently have got the whole home tree.
+
+### Finding: containment is still OPT-IN, and the author docs never mention it — p4's to close
+`path_params` defaults to `()`, so a tool that forgets gets no path work and receives a raw `str`. A reviewer built a `Forgetful` tool that declares `path_params`, trusts the invoker, and received `{"path": ["/…/outside.txt"]}` uncontained. `docs/claude/actions.md` has zero occurrences of `path_params`/`path_roots`/`path_screen`, and the local `resolve_inside` call that used to remind an author is now deleted from all three tools. **p4's contract test must assert that every action declaring `path_params` refuses a non-`ResolvedPath`,** and its docs work must document all three ClassVars.
+
+### Finding: a containment refusal spends no rate-limit slot and is not recorded
+It returns before both blocks. Inert today — no path tool declares a `rate_limit` — but once one does, refused paths become free, and each still costs a `git rev-parse` fork or an uncached two-file `load_config()` on the event loop. The invoker docstring said the hook fires "after every invocation"; corrected.
+
+### Behavior change now live: `grep_codebase` outside a repo refuses entirely
+HEAD fell back to `Path.cwd()`. A packaged `tokenpal` launched from `~` rather than `./run.sh` now gets "Not inside a git repository." for every call. This is the locked tightening — grepping an unbounded `$HOME` with no gitignore was the worse outcome — but it is a user-visible capability loss on a supported launch path.
+
+### Refuted
+Rate-limit atomicity under `gather` (no `await` between the check and the append — and the gathered path runs `enforce_rate_limit=False` anyway, while the enforcing agent path dispatches sequentially at `agent.py:242`); per-call state on the invoker (none; `_contain_paths` writes a local copy so `tc.arguments` keeps the raw spelling for logging and the cache key); an import cycle from `paths.py` importing `config.loader` (`paths.py` already pulled in `brain.personality`, which imports `config.schema`); the agent cache bypassing containment (only `success=True` is stored, refusals are `success=False`, and nothing in `tokenpal/` calls `os.chdir`).
+
+### Parked
+`open_path(path="config.toml")` anchors at the process cwd, whose git root `allowed_roots` silently appends as a root — so a bare relative name can resolve into the TokenPal repo. Pre-existing and unchanged by this phase.
+
 ## Failure modes to anticipate
 - **Refusal strings must not become more distinguishable than they are today.** `open_path.py:100` merges `is_hidden_or_protected` and `path_is_sensitive` into one refusal ("That path is protected."). Splitting the screen into the invoker risks two distinct strings, which would let a caller tell "denied name" from "protected location" — a finer oracle than the tool exposes now. Keep one string for that pair.
 - **`grep_codebase` fails open on an unexpected argument type.** `:59`'s `isinstance(path_arg, str)` falling through to `target = root` is the single most dangerous line in this phase: it turns a substitution mistake into a silent whole-repo search rather than an error.

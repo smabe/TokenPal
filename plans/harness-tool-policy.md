@@ -39,18 +39,19 @@ history: 1 qualifying (`tokenpal/brain/orchestrator.py`, 136 commits) · 1 mined
 Re-audit of the rewritten p1 (fail-closed default + `writes_durable_sink`), 2026-09-05: grounding/executability 9 findings, integration 9 findings, 4 blocking between them, all fixed. The 26-name opt-in set was verified set-identical in both directions against the live registry by both auditors independently — 0 errors. Named fixes: the `_PERSISTENT_SINKS` tests are in `tests/test_actions/test_reminder.py`, not `tests/test_agent.py` which holds zero references, and two of them assert the literal string via `inspect.getsource`; `_EchoAction` (`test_tool_loop.py:372-377`) declares no flag so the two ambient assertions BREAK rather than pass under the inverted default; the expected-set test pinned only the 26 and was blind to a newly added tool, now pins both halves; `agent.py:305` needs no registry lookup because `AgentRunner` already holds `self._actions`; `docs/claude/actions.md:7` goes stale at p1, not p4.
 **Approval: APPROVED 2026-09-05** — operator signed off the ten-tool exclusion list, uncapped chat after seeing the before/after code shape, converting `_PERSISTENT_SINKS` to a declaration, and the fail-closed default. The non-conflation of `writes_durable_sink` from `allow_unprompted` was a correction made at approval and is flagged in the response.
 
-**p1 SHIPPED at `3bbc46d`. p2 SHIPPED at `38d9d68`.** NEXT is p3 — read `plans/harness-tool-policy-p3.md` FIRST.
+**p1 SHIPPED at `3bbc46d`. p2 SHIPPED at `38d9d68`. p3 SHIPPED at `e8e2692`.** NEXT is p4 — read `plans/harness-tool-policy-p4.md` FIRST.
 
 **Spec check at p1** — 10/10 Work items evidenced · none unclaimed (the 21 action modules are the opt-ins Work described by grep recipe).
 **Spec check at p2** — 4/4 Work items evidenced · 1 unclaimed (`tests/test_brain/test_followup_handler.py`, a `Brain.__new__` fixture; required by the described work, added to Work, planning miss recorded — p1 hit the same pattern in `test_reminder.py`).
+**Spec check at p3** — 14/14 Work items evidenced · none unclaimed.
+**Sweep at p3** — opened p4 and widened it three ways from p3's findings: the per-hit screen must also apply `is_hidden_or_protected` (ripgrep ignores its hidden/gitignore filters for an explicitly named path — measured, `path=".aws"` returns key material); the contract test must assert every `path_params` tool refuses a non-`ResolvedPath` (a reviewer built a tool that trusts the invoker and received an uncontained list); and the docs must document all three ClassVars, which appear nowhere in `docs/claude/actions.md` today.
 **Sweep at p2** — opened p3 and p4. p3 gains the `Brain.__new__` fixture warning, which is material because p3 reads action attributes inside `invoke`. p4 clean.
 **Sweep at p1** — opened p2, p3, p4. p2 gains the advertise-only finding as context and a note that `_execute_tool_call` is unchanged by p1. p3 clean — its `base.py` ClassVars are additive to p1's two. p4 gains a note that `docs/claude/actions.md` was already partly updated by p1.
 
-Binding decisions for p3, pulled inline:
-- The invoker substitutes a `ResolvedPath` NamedTuple (`raw`, `resolved`, `root`, `rel`) into a COPY of `kwargs` — never a bare string, which would make `read_file`'s `_spelled_rel` return exactly `rel` and kill the untracked-symlink defence.
-- `path_screen` governs the RAW-name screen only; the resolved name is always screened with `path_is_sensitive(rel)`. `"narrow"` means no raw screen — screening a raw absolute path newly refuses benign files under a badly-named folder.
-- Containment runs BEFORE the rate-limit block, which must stay await-free.
-- No `git_root` memoization: it breaks the monkeypatch surfaces and 25 `monkeypatch.chdir` tests.
+Binding decisions for p4, pulled inline:
+- The per-hit screen applies the tool's declared `path_screen` AND `is_hidden_or_protected`. `is_hidden_or_protected` must NOT move into `resolve_declared_path` — `read_file` has to keep reading a tracked `.github/workflows/*.yml`.
+- The contract test selects on the SCHEMA (any property whose name contains path/file/dir/folder), not on `path_params`, or it can only check tools that already remembered to declare.
+- It must not inherit `test_privacy_contract.py`'s three fail-open modes: `pytest.skip` on a constructor raise, an empty set from an unreadable module, and an empty `parametrize` list being a skip rather than a failure.
 
 Binding decisions for p1, pulled inline so a compaction still leaves them visible:
 - `allow_unprompted` defaults to **`False`** — fail closed (operator, 2026-09-05). A new tool is ambient-ineligible until a human opts it in. The 26 opt-ins land in the same commit, and an expected-set test makes an omission fail loudly.
