@@ -88,3 +88,38 @@ async def test_window_release_allows_retry() -> None:
     await asyncio.sleep(0.06)
     r3 = await invoker.invoke(action, {})
     assert r3.success
+
+
+class _Limited(_Counter):
+    """Two calls per two minutes — the shard's observable stub."""
+
+    action_name: ClassVar[str] = "limited"
+    rate_limit: ClassVar[RateLimit | None] = RateLimit(max_calls=2, window_s=120.0)
+
+
+@pytest.mark.asyncio
+async def test_enforce_rate_limit_false_skips_the_limit() -> None:
+    """Chat and the ambient tick construct the invoker this way: the user is
+    present and asked, so a declared limit is not enforced there."""
+    _Counter.calls = 0
+    invoker = ToolInvoker(enforce_rate_limit=False)
+    action = _Limited({})
+
+    results = [await invoker.invoke(action, {}) for _ in range(3)]
+
+    assert [r.success for r in results] == [True, True, True]
+    assert [r.output for r in results] == ["1", "2", "3"]
+    assert _Counter.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_default_still_enforces_the_limit() -> None:
+    _Counter.calls = 0
+    invoker = ToolInvoker()
+    action = _Limited({})
+
+    results = [await invoker.invoke(action, {}) for _ in range(3)]
+
+    assert [r.success for r in results] == [True, True, False]
+    assert results[2].output == "rate limit: 2 calls per 120s exceeded"
+    assert _Counter.calls == 2

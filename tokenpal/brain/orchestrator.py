@@ -423,6 +423,11 @@ class Brain:
         # One modal at a time: tool calls in a round run under asyncio.gather,
         # and two confirm prompts would stack on top of each other.
         self._confirm_lock = asyncio.Lock()
+        # Serves typed chat AND the ambient observation tick; both reach
+        # `_execute_tool_call`. Limits are off: the only rate-limited tools are
+        # the research pair, and `allow_unprompted` keeps those off the ambient
+        # half, so what remains is a request the user typed.
+        self._chat_invoker = ToolInvoker(enforce_rate_limit=False)
         self._research = research_bridge or ResearchBridge(config=ResearchConfig())
         self._mode: BrainMode = BrainMode.IDLE
 
@@ -1938,7 +1943,7 @@ class Brain:
             if not allowed:
                 return f"User denied {tc.name}."
         try:
-            result = await action.execute(**tc.arguments)
+            result = await self._chat_invoker.invoke(action, tc.arguments)
             if log.isEnabledFor(logging.DEBUG):
                 log.debug(
                     "Action '%s'(%s) -> %.200s",
@@ -2635,7 +2640,7 @@ class Brain:
             self._status_callback("following up...")
         log_cb(f"> followup: {question}")
         try:
-            result = await action.execute(question=question)
+            result = await self._chat_invoker.invoke(action, {"question": question})
         except Exception:
             log.exception("followup execute crashed")
             self._ui_callback("/followup: crashed (check --verbose logs)")

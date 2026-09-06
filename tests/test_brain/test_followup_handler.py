@@ -7,16 +7,20 @@ from typing import Any
 
 import pytest
 
-from tokenpal.actions.base import ActionResult
+from tokenpal.actions.base import AbstractAction, ActionResult
+from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.orchestrator import Brain, BrainMode
 
 
-class _ScriptedAction:
+class _ScriptedAction(AbstractAction):
     """Stand-in for ResearchFollowupAction — returns a preset ActionResult."""
 
     action_name = "research_followup"
+    description = "Scripted."
+    parameters = {"type": "object", "properties": {}}
 
     def __init__(self, result: ActionResult) -> None:
+        super().__init__({})
         self._result = result
         self.calls: list[dict[str, Any]] = []
 
@@ -28,6 +32,7 @@ class _ScriptedAction:
 def _bare_brain_with_action(action: _ScriptedAction) -> Brain:
     brain = Brain.__new__(Brain)
     brain._actions = {"research_followup": action}
+    brain._chat_invoker = ToolInvoker(enforce_rate_limit=False)
     brain._mode = BrainMode.IDLE
     brain._status_callback = None
     brain._agent = type("A", (), {"log_callback": None})()

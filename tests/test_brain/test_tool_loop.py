@@ -945,3 +945,59 @@ def test_the_idle_rollers_only_fire_ambient_eligible_tools() -> None:
         f"M1_RULES fires {sorted(m1 - set(EXPECTED_AMBIENT))} on an idle roll, "
         "but they are not ambient-eligible."
     )
+
+
+# Every receiver in tokenpal/ that legitimately calls `.execute(`. All three are
+# sqlite. `ToolInvoker.invoke` is the one sanctioned tool dispatch, exempt by path.
+EXPECTED_EXECUTE_RECEIVERS = frozenset({"conn", "cursor", "self._conn"})
+
+
+def _execute_receivers(source: str) -> set[str]:
+    """Every `<receiver>.execute(...)` receiver expression in *source*."""
+    import ast
+
+    return {
+        ast.unparse(node.func.value)
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "execute"
+    }
+
+
+def test_tool_dispatch_happens_only_inside_the_invoker() -> None:
+    """Every LLM tool call must reach `execute()` through `ToolInvoker.invoke`.
+
+    Pins the receiver SET rather than guessing which receivers look like a tool
+    dispatch. A heuristic on the receiver's name is defeated by renaming one
+    local -- which is the case that matters, since a future dispatcher will not
+    be spelled like the two this phase routed.
+    """
+    import tokenpal
+
+    root = Path(tokenpal.__file__).parent
+    found: dict[str, set[str]] = {}
+    for path in sorted(root.rglob("*.py")):
+        if path.name == "invoker.py" and path.parent.name == "actions":
+            continue
+        receivers = _execute_receivers(path.read_text())
+        if receivers:
+            found[path.relative_to(root).as_posix()] = receivers
+
+    seen: set[str] = set()
+    for receivers in found.values():
+        seen |= receivers
+    assert seen == set(EXPECTED_EXECUTE_RECEIVERS), (
+        f"`.execute(` receivers changed: {sorted(seen ^ set(EXPECTED_EXECUTE_RECEIVERS))}. "
+        f"Per file: { {k: sorted(v) for k, v in found.items()} }. A new tool dispatch must "
+        "go through ToolInvoker.invoke; a new sqlite receiver belongs in the pinned set."
+    )
+
+
+def test_the_receiver_pin_catches_what_a_name_heuristic_missed() -> None:
+    """A rename with no `**` -- the shape the first detector let through."""
+    assert _execute_receivers("await impl.execute(question=q)") == {"impl"}
+    assert _execute_receivers("await handler.execute(**args)") == {"handler"}
+    assert _execute_receivers("self._registry[n].execute(q)") == {"self._registry[n]"}
+    assert _execute_receivers("self._conn.execute(sql, **binds)") == {"self._conn"}
+    assert _execute_receivers("cursor.execute(sql)") == {"cursor"}

@@ -19,14 +19,20 @@ CallRecord = Callable[[str, float, bool], None]
 
 
 class ToolInvoker:
-    def __init__(self, on_call: CallRecord | None = None) -> None:
+    def __init__(
+        self,
+        on_call: CallRecord | None = None,
+        *,
+        enforce_rate_limit: bool = True,
+    ) -> None:
         self._on_call = on_call
+        self._enforce_rate_limit = enforce_rate_limit
         self._call_times: dict[str, deque[float]] = {}
 
     async def invoke(
         self, action: AbstractAction, arguments: dict[str, Any]
     ) -> ActionResult:
-        limit = action.rate_limit
+        limit = action.rate_limit if self._enforce_rate_limit else None
         if limit is not None:
             now = time.monotonic()
             q = self._call_times.setdefault(action.action_name, deque())
