@@ -11,6 +11,9 @@ grep -rn "action\.execute(" tokenpal/brain/     # must return nothing
 
 If it returns a hit, stop and report — do not proceed with the deletions in Work.
 
+## Also inherited from p2 (shipped `38d9d68`)
+`ToolInvoker.invoke` is now the single dispatch point — `tests/test_brain/test_tool_loop.py::test_tool_dispatch_happens_only_inside_the_invoker` pins that by receiver set, so if you add a `.execute(` receiver anywhere in `tokenpal/` it fails until you route it or pin it. **11 `Brain.__new__` test fixtures exist** and hand-set attributes without running `__init__`; only one needed patching in p2 because only one reached a dispatch site. This phase reads attributes off the action inside `invoke`, so any fixture reaching a tool path may now need a real `AbstractAction` rather than a duck type — `_ScriptedAction` in `test_followup_handler.py` was converted for exactly this.
+
 ## Locked decisions
 See the master `plans/harness-tool-policy.md`. The decisions binding this phase:
 - **`path_screen` governs the RAW-name screen ONLY. The resolved-name screen is always `path_is_sensitive(rel)`.** `"narrow"` means no raw screen at all (today's `open_path` and `find_files`); `"broad"` means `REJECT_PATH` plus `contains_sensitive_term` on the raw name (today's `read_file`, `read_file.py:64,67`).

@@ -27,6 +27,7 @@ See the master `plans/harness-tool-policy.md`. The decisions binding this phase:
   ```
   Everything below that line is unchanged. The check-and-append block stays synchronous and await-free.
 - `tokenpal/brain/orchestrator.py` — construct `self._chat_invoker = ToolInvoker(enforce_rate_limit=False)` in `Brain.__init__`, beside `self._confirm_lock` (`:426`). In `_execute_tool_call` (`:1923-1958`) replace `await action.execute(**tc.arguments)` (`:1942`) with `await self._chat_invoker.invoke(action, tc.arguments)`. Everything above `:1942` — unknown-name, desktop-content refusal, the confirm block under `_confirm_lock` — is untouched. `_handle_followup` (`:2635`) routes the same way.
+- `tests/test_brain/test_followup_handler.py` — **added to Work during execution.** `_bare_brain_with_action` builds a `Brain` via `Brain.__new__` and hand-sets six attributes without running `__init__`, so routing `_handle_followup` made two tests raise `AttributeError: no attribute '_chat_invoker'`. Planning miss: the Work list predicted the `__new__` fixture problem for `test_reminder.py` in p1 but not for this file, and the same pattern is used in both.
 - `tests/test_invoker.py` — add: `enforce_rate_limit=False` skips the limit and still calls through; the default still enforces.
 - `tests/test_brain/test_tool_loop.py` — the file pins this dispatcher closely (unknown tool, `"Error: {e}"` on exception, `gather` parallelism, `_MAX_TOOL_ROUNDS`, and the five confirm tests). All must stay green. Add a characterization test that no `action.execute(` call remains in `tokenpal/brain/` — a source-level assertion, so a sixth dispatch site added later fails the suite.
 
@@ -39,6 +40,50 @@ See the master `plans/harness-tool-policy.md`. The decisions binding this phase:
 ### Decision: the source-level "no direct execute" test is the phase's real deliverable  *(status: active)*
 - **Rationale:** routing two call sites is a five-line change that any later commit can silently undo. The guarantee this phase claims — one dispatch point — is only durable if a new direct call fails the suite.
 - **Evidence:** the six-path enumeration in the master's Background findings.
+
+### Finding: the rate-limit observable, run as a unit test  *(status: active)*
+Stub action `_Limited` (`tests/test_invoker.py`), `RateLimit(max_calls=2, window_s=120.0)`, no backend and no network. Three invokes each way:
+
+```
+enforce_rate_limit=False: ['1', '2', '3'] action body ran 3 times
+default             : ['1', '2', 'rate limit: 2 calls per 120s exceeded'] action body ran 2 times
+```
+
+Pinned by `test_enforce_rate_limit_false_skips_the_limit` and
+`test_default_still_enforces_the_limit`.
+
+### Finding: only two actions in the registry declare a `rate_limit`  *(status: active)*
+`research` (2 per 120 s, `research_action.py:69`) and `research_followup`
+(5 per 120 s, `:237`). Both are chat-reachable, so `enforce_rate_limit=False`
+is the entire behavioural surface of the kwarg on this path — and it preserves
+HEAD exactly, since the direct `execute()` calls it replaces consulted no
+limit either. This phase therefore changes no runtime behaviour at all.
+
+### Finding: `tests/test_brain/test_followup_handler.py` builds Brains with `Brain.__new__`  *(status: active)*
+`_bare_brain_with_action` hand-sets six attributes and never runs `__init__`,
+so `_chat_invoker` was missing and two tests raised `AttributeError` at the
+newly routed `_handle_followup` line. Fixed by setting
+`brain._chat_invoker = ToolInvoker(enforce_rate_limit=False)` in that helper.
+The `_ScriptedAction` double is not an `AbstractAction` and has no
+`rate_limit` attribute; the conditional expression short-circuits, so it never
+reads one. `## Work` did not name this file — an unavoidable edit.
+
+## Decisions & findings — shipped at `38d9d68`
+
+### Finding: the first dispatch guard was defeatable, and that was the phase's whole deliverable
+The initial detector flagged a `.execute(` call whose receiver was *named* `action`/`tool` or which unpacked `**`. Review demonstrated five bypasses — `impl.execute(question=q)`, `handler.execute(question=q)`, `self._registry[n].execute(question=q)`, `fn = action.execute; fn(**args)`, `getattr(a, "execute")(**args)` — the first of which is the `_handle_followup` site under a rename. It also false-flagged `self._transaction.execute(sql)` and `self._conn.execute(sql, **binds)`, both plausible in a 61-call sqlite file. Replaced with a pinned receiver SET over all of `tokenpal/` (`invoker.py` exempt): every legitimate receiver today is sqlite — `conn`, `cursor`, `self._conn` — and any new one fails. Verified red by injecting `impl.execute(question='x')` into `orchestrator.py` and green on restore.
+
+### Finding: this phase changed no runtime behaviour
+Verified: with `enforce_rate_limit=False`, `limit` short-circuits to `None` so `_call_times` is never written (`{}` after 50 invokes); `_on_call` is `None` so the hook block is inert; exceptions propagate identically and `CancelledError` remains a `BaseException`, so `except Exception` catches what it caught. Nothing per-call is stored on the invoker, so one shared instance under the 8-way `gather` is safe.
+
+### Refuted: "`_chat_invoker` serves only chat"
+A reviewer claimed both readers are typed chat and that ambient builds its own invoker. False. `_generate_with_tools` has two callers: `orchestrator.py:1897` (typed chat) and `:1721`, inside `_generate_comment` — the ambient observation tick, passing `tool_specs=self._build_ambient_specs()`. Both reach `_execute_tool_call`. The reviewer confused the ambient TICK with the M1/M3 idle ROLLERS, which do hold their own invokers (`idle_tools.py:138`, `idle_tools_m3.py:114`). The comment's justification was still wrong and was fixed: ambient is unattended, so "the user typed it" only holds because p1 keeps the rate-limited research pair off that half.
+
+### Refuted: "reuse `_build_invoker()` instead of a second construction site"
+It would wire `on_call → memory.record_tool_call`, sending every chat and ambient tool call to `memory.db`'s `tool_calls` table. This shard's Locked decisions settled that deliberately; it is a behaviour change, not a cleanup.
+
+### Finding: 11 `Brain.__new__` fixtures exist, and p3 will hit more of them
+`test_qt_overlay.py:354`, `test_nudge_emission.py:88`, `test_orchestrator_idle_path.py:21`, `test_orchestrator_mood_callback.py:16`, `test_desktop_tasks.py:273`, `test_orchestrator_afk.py:33`, `test_near_duplicate_guard.py:28`, `test_followup_handler.py:30,77,117`, `test_suppression_cooldown.py:34`. Only one needed patching here, because only one reaches a dispatch site. **p3 adds work inside `invoke` that reads attributes off the action**, so any fixture reaching a tool path will need a real action rather than a duck type. `_ScriptedAction` was converted to a genuine `AbstractAction` subclass for this reason.
 
 ## Failure modes to anticipate
 - **Return-type mismatch.** `_execute_tool_call` returns `str` and consumes `display_text` / `display_url` / `display_urls` before flattening to `result.output`; `invoke` returns `ActionResult`. Mechanical, but the `except Exception` at `:1956` currently wraps `execute`; keep it wrapping `invoke`.
