@@ -44,6 +44,10 @@ class HydrationLogAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    # Not a durable sink: the argument is a NUMBER, not model-authored text, so
+    # nothing from a desktop-content read can be laundered through it. The row
+    # survives /clear like the others; the gate is about text, not about writing.
+    allow_unprompted = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
@@ -91,6 +95,10 @@ class HabitStreakAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    # Rows land in habit_log / mood_log, which neither _prune nor
+    # clear_conversation_summaries sweeps, and the name carries no sensitive-term
+    # filter -- so an unattended tick must not be able to write one.
+    writes_durable_sink = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
@@ -139,6 +147,10 @@ class MoodCheckAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    # Rows land in habit_log / mood_log, which neither _prune nor
+    # clear_conversation_summaries sweeps, and the name carries no sensitive-term
+    # filter -- so an unattended tick must not be able to write one.
+    writes_durable_sink = True
 
     # 60-second debounce after a prompt-only call: late mood submissions
     # after that window are dropped to avoid stale tagging.

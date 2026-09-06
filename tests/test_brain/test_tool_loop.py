@@ -375,6 +375,7 @@ class _EchoAction(AbstractAction):
     parameters = {"type": "object", "properties": {}}
     safe = True
     requires_confirm = False
+    allow_unprompted = True
 
     def __init__(self) -> None:
         super().__init__({})
@@ -773,3 +774,174 @@ async def test_ambient_generation_passes_the_narrowed_spec_list(
     await brain._generate_comment("snapshot")
 
     assert seen == [["echo"]]
+
+
+class _UnpromptedAction(AbstractAction):
+    """Opted in to ambient ticks."""
+
+    action_name = "unprompted"
+    description = "Cheap, read-only, fine on an unattended tick."
+    parameters = {"type": "object", "properties": {}}
+    safe = True
+    requires_confirm = False
+    allow_unprompted = True
+
+    def __init__(self) -> None:
+        super().__init__({})
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        return ActionResult(output="ok")
+
+
+class _UndeclaredAction(AbstractAction):
+    """Declares no suitability flag — the shape of every future tool."""
+
+    action_name = "undeclared"
+    description = "Says nothing about whether it may run unprompted."
+    parameters = {"type": "object", "properties": {}}
+    safe = True
+    requires_confirm = False
+
+    def __init__(self) -> None:
+        super().__init__({})
+
+    async def execute(self, **kwargs: Any) -> ActionResult:
+        return ActionResult(output="ok")
+
+
+async def test_a_tool_that_never_opts_in_is_ambient_ineligible_but_still_in_chat() -> None:
+    """The fail-closed default. A user asking for a tool by name must still
+    get it, so the flag gates only `_build_ambient_specs`."""
+    brain = _make_brain(_MockLLM([]), actions=[_UndeclaredAction(), _UnpromptedAction()])
+
+    conversation = {s["function"]["name"] for s in brain._build_conversation_specs()}
+    ambient = {s["function"]["name"] for s in brain._build_ambient_specs()}
+
+    assert conversation == {"undeclared", "unprompted"}
+    assert ambient == {"unprompted"}
+
+
+async def test_reminder_stays_out_of_ambient_without_a_name_check() -> None:
+    """`reminder` stays out of ambient on its own declaration."""
+    from tokenpal.actions.reminder import ReminderAction
+
+    assert ReminderAction.allow_unprompted is False
+
+    brain = _make_brain(_MockLLM([]), actions=[ReminderAction({}), _UnpromptedAction()])
+
+    ambient = {s["function"]["name"] for s in brain._build_ambient_specs()}
+    assert ambient == {"unprompted"}
+    assert "reminder" in {s["function"]["name"] for s in brain._build_conversation_specs()}
+
+
+# The tools an unattended ambient tick may offer, signed off by the operator
+# 2026-09-05. Both halves are pinned: a forgotten `allow_unprompted = True`
+# drops a name out of the first set, and a newly registered tool lands in
+# neither, so either way this fails rather than passing silently.
+EXPECTED_AMBIENT = frozenset(
+    {
+        "air_quality",
+        "book_suggestion",
+        "convert",
+        "crypto_price",
+        "currency",
+        "do_math",
+        "git_diff",
+        "git_log",
+        "git_status",
+        "hydration_log",
+        "joke_of_the_day",
+        "memory_query",
+        "moon_phase",
+        "on_this_day",
+        "pollen_count",
+        "random_fact",
+        "random_recipe",
+        "sports_score",
+        "sunrise_sunset",
+        "system_info",
+        "timezone",
+        "trivia_question",
+        "weather_forecast_week",
+        "word_of_the_day",
+    }
+)
+
+# Excluded because they were already excluded before `allow_unprompted` existed:
+# open_app and open_path raise a confirm modal, read_selection reads desktop
+# content, reminder was excluded by name.
+# Every OTHER name here loses ambient eligibility with this change -- the buddy
+# can no longer start a timer or a pomodoro, or read/search files, unprompted.
+EXPECTED_EXCLUDED = frozenset(
+    {
+        "fetch_url",
+        "find_files",
+        "grep_codebase",
+        "habit_streak",
+        "list_processes",
+        "mood_check",
+        "open_app",
+        "open_path",
+        "pomodoro",
+        "read_file",
+        "read_selection",
+        "reminder",
+        "research",
+        "research_followup",
+        "timer",
+    }
+)
+
+
+def test_the_ambient_eligible_set_is_exactly_the_signed_off_list() -> None:
+    """Applies `Brain._is_ambient_eligible` to the live registry.
+
+    A short registry usually means a half-synced venv: `registry.py` swallows
+    ImportError at DEBUG, so a missing `aiohttp`/`psutil` drops ~18 actions and
+    surfaces here as missing tool names rather than a missing package.
+    """
+    from tokenpal.actions.registry import _ACTION_REGISTRY, discover_actions
+
+    discover_actions()
+    registered = set(_ACTION_REGISTRY)
+    assert len(registered) >= 39, (
+        f"only {len(registered)} actions registered; expected 39+. "
+        "A half-synced venv drops action modules silently — "
+        "reinstall with `pip install -e .` before trusting this diff."
+    )
+
+    # The production predicate itself, not a copy of it: a clause added to
+    # `_is_ambient_eligible` must move this set, not slip past a retyped twin.
+    eligible = {
+        name for name, cls in _ACTION_REGISTRY.items() if Brain._is_ambient_eligible(cls)
+    }
+
+    assert eligible == set(EXPECTED_AMBIENT)
+    assert registered - eligible == set(EXPECTED_EXCLUDED), (
+        "A tool was added or removed. Decide deliberately whether an "
+        "unattended ambient tick may call it, then update both halves."
+    )
+
+
+def test_the_idle_rollers_only_fire_ambient_eligible_tools() -> None:
+    """`allow_unprompted` is not the only unprompted path.
+
+    `M1_RULES` and `M3_CATALOG` pick by hardcoded name and never read the flag,
+    so a tool declared unsuitable could still fire from an idle roll. Today the
+    two agree; this pins that rather than leaving it to coincidence.
+    """
+    from tokenpal.brain.idle_rules import M1_RULES
+    from tokenpal.brain.idle_tools_m3 import M3_CATALOG
+
+    m1 = {r.tool_name for r in M1_RULES}
+    for rule in M1_RULES:
+        m1.update(getattr(rule, "extra_tool_names", ()) or ())
+
+    assert set(M3_CATALOG) <= set(EXPECTED_AMBIENT), (
+        f"M3_CATALOG fires {sorted(set(M3_CATALOG) - set(EXPECTED_AMBIENT))} on an "
+        "idle roll, but they are not ambient-eligible."
+    )
+    assert m1 <= set(EXPECTED_AMBIENT), (
+        f"M1_RULES fires {sorted(m1 - set(EXPECTED_AMBIENT))} on an idle roll, "
+        "but they are not ambient-eligible."
+    )

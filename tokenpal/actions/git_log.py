@@ -51,6 +51,7 @@ class GitLogAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         limit = kwargs.get("limit", 20)
@@ -95,6 +96,7 @@ class GitDiffAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         args = ["diff"]
@@ -126,6 +128,7 @@ class GitStatusAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         rc, stdout, stderr = await _run_git(["status", "--porcelain=v1"])

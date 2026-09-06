@@ -225,7 +225,7 @@ class AgentRunner:
                 normalized = _normalize_tool_call(tc, i)
                 if session.desktop_content and (
                     _needs_consent(normalized.name)
-                    or normalized.name in _PERSISTENT_SINKS
+                    or self._writes_durable_sink(normalized.name)
                 ):
                     self._trace(
                         f"\u2190 skipped {normalized.name}: {_DESKTOP_CONTEXT_REASON}"
@@ -291,6 +291,27 @@ class AgentRunner:
                 self._trace(f"\u2026 {response.reasoning}")
         return response
 
+    def _writes_durable_sink(self, name: str) -> bool:
+        """True when *name*'s arguments land in memory.db as model-authored text.
+
+        The consent gate beside this one only covers tools that reach the
+        NETWORK, so a sink would otherwise let a desktop-content read be
+        laundered into a durable local sink the contract in CLAUDE.md forbids.
+        Their rows (`reminders`, `habit_log`, `mood_log`) are swept by neither
+        _prune nor /clear, so the residue is permanent. Gated on BOTH sides:
+        dropped from the advertised specs, and refused at execution so a sink
+        called in the same batch as the read -- or re-emitted from a name the
+        model saw earlier -- cannot slip through.
+
+        `tool_specs` is an independent constructor kwarg, so a spec name need
+        not name an action the runner holds. An unheld name answers True: this
+        gates a privacy contract, and refusing to advertise a tool that cannot
+        execute anyway is free, while the reverse would advertise a sink on the
+        strength of a lookup miss.
+        """
+        action = self._actions.get(name)
+        return action is None or action.writes_durable_sink
+
     def _tools_for(self, session: AgentSession) -> list[dict[str, Any]] | None:
         """Tool list for the next step: ``None`` means the unfiltered set.
         Once desktop content is in context, every consent-gated (network)
@@ -302,7 +323,7 @@ class AgentRunner:
             self._gated_free_specs = [
                 spec for spec in self._tool_specs
                 if not _needs_consent(spec["function"]["name"])
-                and spec["function"]["name"] not in _PERSISTENT_SINKS
+                and not self._writes_durable_sink(spec["function"]["name"])
             ]
         return self._gated_free_specs
 
@@ -383,17 +404,6 @@ class AgentRunner:
         except Exception:
             log.exception("Forced synthesis failed")
             return ""
-
-
-# Tools whose arguments land in memory.db as model-authored text. The consent
-# gate above only covers tools that reach the NETWORK, so these would otherwise
-# let a desktop-content read be laundered into a durable local sink the
-# contract in CLAUDE.md forbids. Their rows (`reminders`, `habit_log`,
-# `mood_log`) are swept by neither _prune nor /clear, so the residue is
-# permanent. Gated on BOTH sides: dropped from the advertised specs, and
-# refused at execution so a sink called in the same batch as the read -- or
-# re-emitted from a name the model saw earlier -- cannot slip through.
-_PERSISTENT_SINKS = frozenset({"reminder", "habit_streak", "mood_check"})
 
 
 def _needs_consent(name: str) -> bool:

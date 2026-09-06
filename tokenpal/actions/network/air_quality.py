@@ -51,6 +51,7 @@ class AirQualityAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
     consent_category: ClassVar[str] = "web_fetches"
 
     async def execute(self, **kwargs: Any) -> ActionResult:
@@ -85,6 +86,7 @@ class PollenCountAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
     consent_category: ClassVar[str] = "web_fetches"
 
     async def execute(self, **kwargs: Any) -> ActionResult:

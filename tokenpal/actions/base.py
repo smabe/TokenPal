@@ -75,6 +75,18 @@ class AbstractAction(abc.ABC):
     # the trace, never caches the result, and drops network tools for the rest
     # of the run; the conversation path never exposes this tool at all.
     reads_desktop_content: ClassVar[bool] = False
+    # True only when the tool is suitable for an unattended ambient tick.
+    # Defaults False so a new tool is not ADVERTISED there until a human opts
+    # it in. Advertise-only: `Brain._execute_tool_call` resolves any name the
+    # model emits against the full enabled set, so this narrows what the model
+    # is shown, not what it can run. Independent of `requires_confirm`, which
+    # is about raising a modal.
+    allow_unprompted: ClassVar[bool] = False
+    # True when the tool writes model-authored text to a durable local sink
+    # whose rows survive `_prune` and `/clear`. The agent runner drops such a
+    # tool from the advertised specs and refuses it at execution once desktop
+    # content is in the run's context.
+    writes_durable_sink: ClassVar[bool] = False
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

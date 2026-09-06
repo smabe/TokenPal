@@ -205,9 +205,8 @@ _CONV_RECENT_OUTPUTS_MAX = 5
 _DESKTOP_DONE_FALLBACK = "Done. The answer is in the chat log and was not saved."
 _DESKTOP_ABORTED_LINE = "Nothing came back that time — and nothing was saved."
 
-# The reminder tool, by name. Two rules key on it: the unprompted ambient
-# observation LLM may not arm or disarm a nudge, and armed rows only hydrate
-# while the tool that can cancel them is enabled.
+# The reminder tool, by name: armed rows only hydrate while the tool that can
+# cancel them is enabled.
 _REMINDER_TOOL = "reminder"
 
 # Ceiling on one off-loop nudge generation. Running off the brain loop removes
@@ -2030,24 +2029,28 @@ class Brain:
             if not a.reads_desktop_content
         ]
 
+    @staticmethod
+    def _is_ambient_eligible(action: AbstractAction) -> bool:
+        """Whether *action* may be advertised on an unattended tick."""
+        return (
+            not action.reads_desktop_content
+            and not action.requires_confirm
+            and action.allow_unprompted
+        )
+
     def _build_ambient_specs(self) -> list[dict[str, Any]]:
-        """Conversation specs minus anything that would raise a confirm modal.
+        """Conversation specs minus anything unsuitable for an unattended tick.
 
         `_run_loop` awaits `_generate_comment` inline and the confirm future has
         no timeout, so a modal raised on an unattended tick — the user is in
         another app, which is what "ambient" means — would stall the brain loop
         until someone answered it.
 
-        `reminder` is excluded by name on top of that: it raises no modal, but
-        an unprompted tick must not arm or disarm a standing commitment.
+        Suitability beyond that is declared per tool by `allow_unprompted`,
+        which defaults False: a tool is offered here only once its author has
+        opted it in.
         """
-        return [
-            a.to_tool_spec()
-            for a in self._actions.values()
-            if not a.reads_desktop_content
-            and not a.requires_confirm
-            and a.action_name != _REMINDER_TOOL
-        ]
+        return [a.to_tool_spec() for a in self._actions.values() if self._is_ambient_eligible(a)]
 
     def _build_agent_specs(self) -> list[dict[str, Any]]:
         if not self._tool_calling_enabled:

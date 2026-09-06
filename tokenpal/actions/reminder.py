@@ -148,6 +148,10 @@ class ReminderAction(AbstractAction):
     safe: ClassVar[bool] = False
     requires_confirm: ClassVar[bool] = False
     cacheable: ClassVar[bool] = False
+    # Raises no modal, but an unprompted tick must not arm or disarm a
+    # standing commitment the user will be held to later.
+    allow_unprompted: ClassVar[bool] = False
+    writes_durable_sink: ClassVar[bool] = True
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)

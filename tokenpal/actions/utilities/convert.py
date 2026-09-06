@@ -52,6 +52,7 @@ class ConvertAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
     platforms = ("windows", "darwin", "linux")
 
     async def execute(self, **kwargs: Any) -> ActionResult:

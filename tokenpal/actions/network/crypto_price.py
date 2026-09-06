@@ -72,6 +72,7 @@ class CryptoPriceAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
     consent_category: ClassVar[str] = "web_fetches"
 
     async def execute(self, **kwargs: Any) -> ActionResult:

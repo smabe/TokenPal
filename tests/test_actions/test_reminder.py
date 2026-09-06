@@ -470,12 +470,16 @@ async def test_shutdown_does_not_unpersist_an_armed_reminder(
 def test_reminder_is_dropped_once_desktop_content_is_in_context() -> None:
     """`reminders` rows are exempt from _prune and from /clear, so a label
     derived from a read document would be permanent and unwipeable."""
+    from tokenpal.actions.do_math import DoMathAction
     from tokenpal.brain.agent import AgentRunner, AgentSession
 
     runner = AgentRunner.__new__(AgentRunner)
     runner._tool_specs = [
         {"function": {"name": n}} for n in ("reminder", "do_math", "read_selection")
     ]
+    # `read_selection` is deliberately absent: `tool_specs` is an independent
+    # constructor kwarg, so the flag lookup must tolerate an unheld name.
+    runner._actions = {"reminder": ReminderAction({}), "do_math": DoMathAction({})}
     runner._gated_free_specs = None
 
     session = AgentSession(goal="g")
@@ -521,9 +525,14 @@ async def test_an_over_long_id_is_refused() -> None:
 def test_every_durable_sink_is_gated_after_a_desktop_content_read() -> None:
     """reminders/habit_log/mood_log rows are swept by neither _prune nor
     /clear, so a label lifted from a read document would be permanent."""
-    from tokenpal.brain.agent import _PERSISTENT_SINKS
+    from tokenpal.actions.registry import _ACTION_REGISTRY, discover_actions
 
-    assert _PERSISTENT_SINKS == frozenset({"reminder", "habit_streak", "mood_check"})
+    discover_actions()
+    declared = {
+        name for name, cls in _ACTION_REGISTRY.items() if cls.writes_durable_sink
+    }
+
+    assert declared == {"reminder", "habit_streak", "mood_check"}
 
 
 def test_the_desktop_content_gate_covers_execution_not_just_advertising() -> None:
@@ -534,5 +543,5 @@ def test_the_desktop_content_gate_covers_execution_not_just_advertising() -> Non
 
     from tokenpal.brain.agent import AgentRunner
 
-    assert "_PERSISTENT_SINKS" in inspect.getsource(AgentRunner.run)
-    assert "_PERSISTENT_SINKS" in inspect.getsource(AgentRunner._tools_for)
+    assert "writes_durable_sink" in inspect.getsource(AgentRunner.run)
+    assert "writes_durable_sink" in inspect.getsource(AgentRunner._tools_for)

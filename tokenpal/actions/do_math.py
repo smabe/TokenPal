@@ -87,6 +87,7 @@ class DoMathAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    allow_unprompted = True
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         expr = kwargs.get("expr", "")
