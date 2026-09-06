@@ -83,7 +83,9 @@ def test_dock_placement_follows_buddy_and_history_state(
     - buddy hidden, history shown: dock embedded in history
     - both hidden: dock hidden entirely
 
-    Toggling one window must not change the other's visibility.
+    Placement derivation never mutates visibility intent; the anchor
+    rule that couples the buddy and the chat window lives upstream
+    in the toggle paths.
     """
     overlay = QtOverlay(config={})
     overlay.setup()
@@ -98,7 +100,7 @@ def test_dock_placement_follows_buddy_and_history_state(
         overlay._update_dock_placement()
         assert not overlay._dock_docked
         assert not overlay._user_visible.get("chat", False), (
-            "hiding buddy must not force history open"
+            "deriving placement must not mutate chat intent"
         )
 
         # User opens history → dock embeds.

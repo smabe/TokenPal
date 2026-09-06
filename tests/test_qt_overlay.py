@@ -194,6 +194,189 @@ def test_history_window_hidden_by_default(qapp: QApplication) -> None:
         overlay.teardown()
 
 
+def test_hiding_buddy_auto_shows_chat(qapp: QApplication) -> None:
+    """Anchor rule: the buddy is the only surface up, so hiding it must
+    bring the chat window with it — the app can never end with nothing
+    on screen."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    saved: list[dict] = []
+    overlay.set_ui_state_persist_callback(saved.append)
+    try:
+        assert overlay._history is not None
+        assert overlay._tray is not None
+        assert not overlay._user_visible.get("chat", False)
+
+        overlay._set_buddy_visible(False)
+
+        assert overlay._user_visible["chat"] is True
+        assert not overlay._history.isHidden(), (
+            "chat history must be shown when the buddy hides"
+        )
+        assert overlay._tray._window_actions["chat"].text() == "Hide chat log"
+        assert overlay._tray._toggle_buddy_action.text() == "Show buddy"
+
+        overlay.flush_pending_persist()
+        assert saved[-1]["buddy_visible"] is False
+        assert saved[-1]["windows"]["chat"] is True
+    finally:
+        overlay.teardown()
+
+
+def test_hiding_chat_with_buddy_hidden_shows_buddy(qapp: QApplication) -> None:
+    """The mirror rule: with the buddy already hidden, hiding the chat
+    window brings the buddy back instead of leaving an empty screen."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._buddy_host is not None
+        assert overlay._tray is not None
+
+        overlay._set_buddy_visible(False)
+        assert overlay._buddy_user_visible is False
+        assert overlay._user_visible["chat"] is True
+
+        overlay._do_toggle_chat()
+
+        assert overlay._buddy_user_visible is True
+        assert not overlay._buddy_host.isHidden(), (
+            "buddy must come back when the chat window is hidden"
+        )
+        assert overlay._tray._toggle_buddy_action.text() == "Hide buddy"
+        assert overlay._tray._window_actions["chat"].text() == "Show chat log"
+    finally:
+        overlay.teardown()
+
+
+def test_restore_all_hidden_state_resets_to_buddy(qapp: QApplication) -> None:
+    """A persisted state with both anchors hidden is repaired at restore
+    to the default surface (the buddy), and the repair is dirty so
+    teardown's flush writes it back without any user toggle."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay.restore_visibility_state(
+            buddy_visible=False, windows={"chat": False},
+        )
+        assert overlay._buddy_user_visible is True
+        assert overlay._user_visible.get("chat", False) is False
+
+        saved: list[dict] = []
+        overlay.set_ui_state_persist_callback(saved.append)
+        overlay.flush_pending_persist()
+        assert saved, "the repair must be flushed without a user toggle"
+        assert saved[-1]["buddy_visible"] is True
+        assert saved[-1]["windows"]["chat"] is False
+    finally:
+        overlay.teardown()
+
+
+def test_generic_toggle_of_chat_also_enforces_the_rule(
+    qapp: QApplication,
+) -> None:
+    """The rule lives at the intent mutator, not in ``_do_toggle_chat``:
+    the generic window toggle cannot leave the screen empty either."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay._set_buddy_visible(False)
+        assert overlay._user_visible["chat"] is True
+
+        overlay._do_toggle_window("chat")
+
+        assert overlay._user_visible["chat"] is False
+        assert overlay._buddy_user_visible is True
+        assert not overlay._buddy_host.isHidden()
+    finally:
+        overlay.teardown()
+
+
+def test_auto_shown_buddy_gets_the_macos_stay_visible_treatment(
+    qapp: QApplication, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session restored buddy-hidden never runs ``run_loop``'s
+    collectionBehavior pass, so the show path must apply it or the
+    re-shown buddy vanishes on the next click-away."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay._set_buddy_visible(False)
+
+        seen: list[object] = []
+        monkeypatch.setattr(
+            "tokenpal.ui.qt.overlay.apply_macos_stay_visible", seen.append,
+        )
+        overlay._set_buddy_visible(True)
+
+        assert overlay._buddy_host in seen
+    finally:
+        overlay.teardown()
+
+
+def test_hiding_buddy_clears_the_parked_dock_mock(qapp: QApplication) -> None:
+    """``_reposition_dock`` would re-snapshot the mock, but it stops
+    running once the dock embeds, so the hide path has to clear it or a
+    frozen pill hangs over every other app."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay._dock_mock.show()
+        overlay._dock_mock_active = True
+        assert not overlay._dock_mock.isHidden()
+
+        overlay._set_buddy_visible(False)
+
+        assert overlay._dock_mock_active is False
+        assert overlay._dock_mock.isHidden()
+    finally:
+        overlay.teardown()
+
+
+def test_flush_without_a_callback_keeps_the_repair_pending(
+    qapp: QApplication,
+) -> None:
+    """The restore repair is the only writer of ``_persist_pending``
+    that runs before the callback is wired; a flush in that window must
+    not consume it."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        overlay.restore_visibility_state(
+            buddy_visible=False, windows={"chat": False},
+        )
+        overlay.flush_pending_persist()
+
+        saved: list[dict] = []
+        overlay.set_ui_state_persist_callback(saved.append)
+        overlay.flush_pending_persist()
+
+        assert saved, "the repair survived a flush with no callback wired"
+        assert saved[-1]["buddy_visible"] is True
+    finally:
+        overlay.teardown()
+
+
+def test_news_toggle_leaves_anchor_surfaces_alone(qapp: QApplication) -> None:
+    """News is not an anchor: toggling it never drags the buddy or the
+    chat window with it."""
+    overlay = QtOverlay(config={})
+    overlay.setup()
+    try:
+        assert overlay._buddy_user_visible is True
+        assert not overlay._user_visible.get("chat", False)
+
+        overlay._do_toggle_window("news")
+        assert overlay._buddy_user_visible is True
+        assert overlay._user_visible.get("chat", False) is False
+
+        overlay._do_toggle_window("news")
+        assert overlay._user_visible["news"] is False
+        assert overlay._buddy_user_visible is True
+        assert overlay._user_visible.get("chat", False) is False
+    finally:
+        overlay.teardown()
+
+
 def test_news_toggle_persists_and_restores(qapp: QApplication) -> None:
     """Toggling the news window fires the persistence callback with the
     new {name: visible} dict, and restore_visibility_state honors that

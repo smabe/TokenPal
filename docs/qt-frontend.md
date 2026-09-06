@@ -78,12 +78,24 @@ PySide6. It owns:
   the viewport casts only from glyph pixels.
 - Dock placement is a state machine driven by `_update_dock_placement`
   / `_apply_dock_mode(mode)` where `mode ∈ {"floating", "embedded",
-  "hidden"}`. Inputs are `_buddy_user_visible` + `_history_user_visible`
+  "hidden"}`. Inputs are `_buddy_user_visible` + `_user_visible["chat"]`
   tracked as explicit user-intent state (separate from Qt's
   `isVisible()`, which lies on macOS due to the NSWindow auto-hide on
-  app deactivate). `_toggle_buddy` and `_do_toggle_chat` flip their own
-  flag and call `_update_dock_placement()` — neither window's toggle
-  touches the other's state.
+  app deactivate). `_update_dock_placement` only derives placement — it
+  never mutates intent.
+- **Anchor rule**: `{buddy, chat}` is the anchor set and one of them is
+  always on screen. Hiding the buddy auto-shows the chat window; hiding
+  the chat window while the buddy is hidden shows the buddy;
+  `restore_visibility_state` repairs an all-hidden persisted state back
+  to the buddy and marks it dirty so `teardown()`'s flush writes the
+  repair. The rule lives at the two intent mutators —
+  `_set_buddy_visible(visible)` and `_set_window_visible(name, visible)`
+  — plus `restore_visibility_state`, so no wrapper (the tray's
+  `on_toggle_buddy` lambda, `_do_toggle_window`, `_do_toggle_chat`,
+  `toggle_chat_log`) can bypass it. Never in `config/ui_state.py`, which
+  stays a codec. News is **not** an anchor and is never coupled. "Both
+  hidden" is therefore only reachable by writing the intent flags
+  directly, as `tests/test_qt_dock_follow.py` does.
 - `BuddyTrayIcon` (`qt/tray.py`) — `QSystemTrayIcon`. Clicking the
   icon only pops the context menu (Show/Hide buddy · Show/Hide chat log
   · Options… · Quit); no direct single-click or double-click toggle, to

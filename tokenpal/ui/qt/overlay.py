@@ -425,62 +425,6 @@ class QtOverlay(AbstractOverlay):
         if self._zoom != 1.0:
             self._fan_out_zoom(self._zoom)
 
-        def _toggle_buddy() -> None:
-            if self._buddy is None:
-                return
-            new_visible = not self._buddy_user_visible
-            self._buddy_user_visible = new_visible
-            if new_visible:
-                self._buddy_host.show()  # type: ignore[union-attr]
-                if self._resize_grip is not None:
-                    self._resize_grip.show()
-                    if not self._use_quick_backend:
-                        lock_macos_child_above(
-                            self._buddy, self._resize_grip,
-                        )
-                    self._reposition_grip()
-                if self._sky_window is not None:
-                    self._sky_window.show()
-                    apply_macos_stay_visible(self._sky_window)
-                    apply_macos_click_through(self._sky_window)
-                    self._sky_window.reanchor()
-                if self._buddy_rain_overlay is not None:
-                    self._buddy_rain_overlay.show()
-                    apply_macos_click_through(self._buddy_rain_overlay)
-                    self._buddy_rain_overlay.reanchor()
-                if self._use_quick_backend and self._buddy_host is not None:
-                    self._buddy_host.raise_()  # type: ignore[attr-defined]
-            else:
-                self._buddy_host.hide()  # type: ignore[union-attr]
-                if self._resize_grip is not None:
-                    self._resize_grip.hide()
-                # A bubble already painted on screen would linger as a
-                # detached top-level window after the buddy vanishes.
-                if self._hide_bubble_timer is not None:
-                    self._hide_bubble_timer.stop()
-                if self._bubble is not None:
-                    self._bubble.hide_bubble()
-                if self._sky_window is not None:
-                    self._sky_window.hide()
-                if self._buddy_rain_overlay is not None:
-                    self._buddy_rain_overlay.hide()
-            if self._tray is not None:
-                self._tray.set_buddy_visible(new_visible)
-            self._update_dock_placement()
-            # When buddy hides while history is already open the dock
-            # reparents into the history window. The history NSWindow
-            # must be activated or the embedded QLineEdit can't receive
-            # key events.
-            if (
-                not new_visible
-                and self._user_visible.get(_WINDOW_CHAT, False)
-                and self._history is not None
-            ):
-                self._history.activateWindow()
-                if self._dock is not None:
-                    self._dock.focus_input()
-            self._persist_ui_state()
-
         def _launch_options() -> None:
             # Route through the existing slash-command dispatcher in
             # app.py — it already knows how to assemble OptionsModalState
@@ -495,7 +439,9 @@ class QtOverlay(AbstractOverlay):
                 self._app.quit()
 
         self._tray = BuddyTrayIcon(
-            on_toggle_buddy=_toggle_buddy,
+            on_toggle_buddy=lambda: self._set_buddy_visible(
+                not self._buddy_user_visible,
+            ),
             windows=[
                 TrayWindow(
                     name=_WINDOW_CHAT,
@@ -530,19 +476,7 @@ class QtOverlay(AbstractOverlay):
         if self._app is None:
             raise RuntimeError("QtOverlay.setup() must run before run_loop()")
         if self._buddy is not None and self._buddy_user_visible:
-            self._buddy_host.show()  # type: ignore[union-attr]
-            # NSWindow collectionBehavior can only be set once the
-            # native window actually exists: after show().
-            if not self._use_quick_backend:
-                apply_macos_stay_visible(self._buddy_host)
-            if self._resize_grip is not None:
-                self._resize_grip.show()
-                if not self._use_quick_backend:
-                    apply_macos_stay_visible(self._resize_grip)
-                    lock_macos_child_above(
-                        self._buddy, self._resize_grip,
-                    )
-                self._reposition_grip()
+            self._show_buddy_chrome()
         if self._sky_window is not None and self._buddy_user_visible:
             self._sky_window.show()
             apply_macos_stay_visible(self._sky_window)
@@ -977,11 +911,22 @@ class QtOverlay(AbstractOverlay):
 
         ``zoom`` is stashed and applied to the buddy/bubble/dock/sky/rain
         on first ``setup()``; clamped to the same range as ``set_zoom``.
+
+        A restored state with both the buddy and the chat window hidden
+        is repaired to the buddy so something is on screen.
         """
         self._buddy_user_visible = bool(buddy_visible)
         if windows is not None:
             for name, visible in windows.items():
                 self._user_visible[name] = bool(visible)
+        if not self._buddy_user_visible and not self._user_visible.get(
+            _WINDOW_CHAT, False,
+        ):
+            # An all-hidden persisted state would leave nothing on
+            # screen; reset to the default surface and mark it dirty so
+            # teardown's flush writes the repair back.
+            self._buddy_user_visible = True
+            self._persist_pending = True
         if zoom is not None:
             self._zoom = _clamp_zoom(zoom)
 
@@ -1050,10 +995,12 @@ class QtOverlay(AbstractOverlay):
         self._flush_ui_state()
 
     def _flush_ui_state(self) -> None:
-        self._persist_pending = False
         cb = self._ui_state_persist_callback
         if cb is None:
+            # Keep the pending flag: restore_visibility_state's repair
+            # sets it before app.py wires the callback.
             return
+        self._persist_pending = False
         state: UiState = {
             "buddy_visible": self._buddy_user_visible,
             "windows": {name: bool(v) for name, v in self._user_visible.items()},
@@ -1231,24 +1178,118 @@ class QtOverlay(AbstractOverlay):
         if self._dock is not None:
             self._dock.set_status(text)
 
+    def _clear_dock_mock(self) -> None:
+        """Hide the rotated stand-in if it is up. Idempotent."""
+        if self._dock_mock_active:
+            self._dock_mock.hide()
+            self._dock_mock_active = False
+
+    def _show_buddy_chrome(self) -> None:
+        """Map the buddy host and its resize grip.
+
+        Both callers need the macOS collectionBehavior pass: it can only
+        be set once the native window exists, i.e. after ``show()``, and
+        a session restored buddy-hidden never reaches ``run_loop``'s
+        copy — its first ``show()`` is a toggle, and without this the
+        buddy vanishes on the next click-away.
+        """
+        self._buddy_host.show()  # type: ignore[union-attr]
+        if not self._use_quick_backend:
+            apply_macos_stay_visible(self._buddy_host)
+        if self._resize_grip is not None:
+            self._resize_grip.show()
+            if not self._use_quick_backend:
+                apply_macos_stay_visible(self._resize_grip)
+                lock_macos_child_above(
+                    self._buddy, self._resize_grip,
+                )
+            self._reposition_grip()
+
+    def _set_buddy_visible(self, visible: bool) -> None:
+        """Show or hide the buddy and every widget anchored to it.
+
+        Hiding the buddy shows the chat window when it isn't already
+        up: the anchor rule keeps at least one surface on screen.
+        """
+        if self._buddy is None:
+            return
+        self._buddy_user_visible = visible
+        if visible:
+            self._show_buddy_chrome()
+            if self._sky_window is not None:
+                self._sky_window.show()
+                apply_macos_stay_visible(self._sky_window)
+                apply_macos_click_through(self._sky_window)
+                self._sky_window.reanchor()
+            if self._buddy_rain_overlay is not None:
+                self._buddy_rain_overlay.show()
+                apply_macos_click_through(self._buddy_rain_overlay)
+                self._buddy_rain_overlay.reanchor()
+            if self._use_quick_backend and self._buddy_host is not None:
+                self._buddy_host.raise_()  # type: ignore[attr-defined]
+        else:
+            self._buddy_host.hide()  # type: ignore[union-attr]
+            if self._resize_grip is not None:
+                self._resize_grip.hide()
+            # A bubble already painted on screen would linger as a
+            # detached top-level window after the buddy vanishes.
+            if self._hide_bubble_timer is not None:
+                self._hide_bubble_timer.stop()
+            if self._bubble is not None:
+                self._bubble.hide_bubble()
+            if self._sky_window is not None:
+                self._sky_window.hide()
+            if self._buddy_rain_overlay is not None:
+                self._buddy_rain_overlay.hide()
+            # On the widget backend the mock is an always-on-top
+            # top-level of its own, and _reposition_dock — which would
+            # otherwise re-snapshot it — stops running once the dock
+            # embeds, so it would hang over every app until the buddy
+            # came back.
+            self._clear_dock_mock()
+            if not self._user_visible.get(_WINDOW_CHAT, False):
+                self._set_window_visible(_WINDOW_CHAT, True)
+        if self._tray is not None:
+            self._tray.set_buddy_visible(visible)
+        self._update_dock_placement()
+        # When buddy hides while history is already open the dock
+        # reparents into the history window. The history NSWindow
+        # must be activated or the embedded QLineEdit can't receive
+        # key events.
+        if (
+            not visible
+            and self._user_visible.get(_WINDOW_CHAT, False)
+            and self._history is not None
+        ):
+            self._history.activateWindow()
+            if self._dock is not None:
+                self._dock.focus_input()
+        self._persist_ui_state()
+
     def _do_toggle_window(self, name: str) -> None:
         """Generic show/hide for a registered log window. Window-
         specific post-toggle work (dock embed, focus_input) lives in
         callers like ``_do_toggle_chat`` and reads back ``_user_visible``."""
+        self._set_window_visible(name, not self._user_visible.get(name, False))
+
+    def _set_window_visible(self, name: str, visible: bool) -> None:
         window = self._log_windows.get(name)
         if window is None:
             return
-        new_visible = not self._user_visible.get(name, False)
-        self._user_visible[name] = new_visible
-        if new_visible:
+        self._user_visible[name] = visible
+        if visible:
             window.show()
             apply_macos_stay_visible(window)
             window.raise_()
             window.activateWindow()
         else:
             window.hide()
+            # Anchor rule, enforced at the mutator rather than in
+            # _do_toggle_chat so no wrapper can hide the last surface.
+            if name == _WINDOW_CHAT and not self._buddy_user_visible:
+                self._set_buddy_visible(True)
         if self._tray is not None:
-            self._tray.set_window_visible(name, new_visible)
+            self._tray.set_window_visible(name, visible)
         self._persist_ui_state()
 
     def _do_toggle_chat(self) -> None:
@@ -1287,12 +1328,16 @@ class QtOverlay(AbstractOverlay):
 
     def _update_dock_placement(self) -> None:
         """Reconcile dock placement with the current (buddy, history)
-        visibility intent. Independent state — neither window toggles
-        the other.
+        visibility intent. Derivation only — this never mutates intent.
+        The anchor rule is enforced upstream by ``_set_buddy_visible``,
+        ``_set_window_visible`` and ``restore_visibility_state``.
 
         buddy shown           → dock floats under buddy
         buddy hidden, hist on → dock embedded in history's bottom slot
-        both hidden           → dock hidden (user must open a window)
+        both hidden           → dock hidden
+
+        "both hidden" is unreachable through the toggles or restore; it
+        is only reached by writing the intent flags directly.
         """
         if self._dock is None or self._history is None:
             return
@@ -1421,9 +1466,7 @@ class QtOverlay(AbstractOverlay):
                 self._dock_mock_active = True
             self._dock_mock.set_pose(QPointF(anchor_x, anchor_y), angle)
         else:
-            if self._dock_mock_active:
-                self._dock_mock.hide()
-                self._dock_mock_active = False
+            self._clear_dock_mock()
             x = int(anchor_x) - w // 2
             y = int(anchor_y)
             self._dock.move(*self._clamp_to_buddy_screen(x, y, w, h))
