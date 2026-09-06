@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from tokenpal.util.paths import (
     allowed_roots,
     is_hidden_or_protected,
     path_is_sensitive,
+    resolve_declared_path,
     resolve_inside,
 )
 
@@ -230,3 +232,194 @@ async def test_empty_allowed_dirs_is_opt_out(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(paths, "git_root", real_looking_git_root)
 
     assert await allowed_roots([]) == []
+
+
+# --- resolve_declared_path: the policy the invoker enforces ---
+
+
+def _stub_git_root(monkeypatch: pytest.MonkeyPatch, repo: Path | None) -> list[int]:
+    """Point ``git_root`` at *repo*; the returned list counts the calls."""
+    calls: list[int] = []
+
+    async def fake(_start: Path) -> Path | None:
+        calls.append(1)
+        return repo
+
+    monkeypatch.setattr(paths, "git_root", fake)
+    return calls
+
+
+def _stub_allowed_dirs(monkeypatch: pytest.MonkeyPatch, *dirs: Path) -> None:
+    cfg = SimpleNamespace(paths=SimpleNamespace(allowed_dirs=[str(d) for d in dirs]))
+    monkeypatch.setattr(paths, "load_config", lambda: cfg)
+    _stub_git_root(monkeypatch, None)
+
+
+async def test_resolve_declared_path_carries_raw_resolved_root_and_rel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The tuple, not a bare resolved string: read_file compares the spelled
+    name against ``rel`` and needs ``root`` for ``git -C``."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "a.md").write_text("x")
+    _stub_git_root(monkeypatch, tmp_path)
+
+    path, refusal = await resolve_declared_path("docs/a.md", "git_root", "broad")
+
+    assert refusal == ""
+    assert path == paths.ResolvedPath(
+        raw="docs/a.md",
+        resolved=(tmp_path / "docs" / "a.md").resolve(),
+        root=tmp_path.resolve(),
+        rel="docs/a.md",
+    )
+
+
+async def test_a_denied_raw_name_refuses_before_any_roots_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REJECT_PATH on the raw spelling, the broad screen's first gate."""
+    _stub_git_root(monkeypatch, tmp_path)
+
+    path, refusal = await resolve_declared_path(".env", "git_root", "broad")
+
+    assert path is None
+    assert refusal == "Path matches a denied pattern."
+
+
+async def test_broad_screen_refuses_the_raw_name_before_any_roots_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = _stub_git_root(monkeypatch, tmp_path)
+
+    _, refusal = await resolve_declared_path("notes/1password.txt", "git_root", "broad")
+
+    assert refusal == "Path references a sensitive app."
+    assert calls == [], "the raw screen must refuse before the git subprocess"
+
+
+async def test_narrow_screen_does_not_screen_the_raw_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw ABSOLUTE path under a badly-named allowed root would be refused by
+    the broad screen, and open_path accepts it today."""
+    root = tmp_path / "credentials-app"
+    root.mkdir()
+    target = root / "README.md"
+    target.write_text("x")
+    _stub_allowed_dirs(monkeypatch, root)
+
+    narrow, _ = await resolve_declared_path(str(target), "allowed_dirs", "narrow")
+    broad, refusal = await resolve_declared_path(str(target), "allowed_dirs", "broad")
+
+    assert narrow is not None and narrow.rel == "README.md"
+    assert broad is None and refusal == "Path matches a denied pattern."
+
+
+@pytest.mark.parametrize("screen", ["broad", "narrow"])
+async def test_the_resolved_name_is_screened_whatever_the_raw_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, screen: str
+) -> None:
+    """A symlink spelled benignly must be refused as what it opens."""
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "id_rsa").write_text("key")
+    (root / "notes.txt").symlink_to(root / "id_rsa")
+    _stub_allowed_dirs(monkeypatch, root)
+
+    path, refusal = await resolve_declared_path(
+        str(root / "notes.txt"), "allowed_dirs", screen
+    )
+
+    assert path is None
+    # The exact string, so an earlier refusal (no roots, outside roots) cannot
+    # stand in for the resolved-name screen this test exists to pin.
+    assert refusal == (
+        "Path matches a denied pattern." if screen == "broad" else "That path is protected."
+    )
+
+
+async def test_git_root_policy_refuses_outside_a_repo(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_git_root(monkeypatch, None)
+
+    path, refusal = await resolve_declared_path("a.txt", "git_root", "broad")
+
+    assert path is None
+    assert refusal == "Not inside a git repository."
+
+
+async def test_allowed_dirs_policy_refuses_when_the_list_is_empty(
+    monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_allowed_dirs(monkeypatch)
+
+    path, refusal = await resolve_declared_path("a.txt", "allowed_dirs", "narrow")
+
+    assert path is None
+    assert "[paths] allowed_dirs" in refusal
+
+
+async def test_a_relative_path_anchors_at_the_repo_under_git_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``resolve_inside`` anchors relatives at the process cwd, so the policy
+    has to join the root explicitly or the meaning silently changes."""
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    (repo / "docs" / "a.md").write_text("x")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    _stub_git_root(monkeypatch, repo)
+
+    path, _ = await resolve_declared_path("docs/a.md", "git_root", "broad")
+
+    assert path is not None
+    assert path.resolved == (repo / "docs" / "a.md").resolve()
+
+
+async def test_a_relative_path_stays_cwd_anchored_under_allowed_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N roots means no single anchor, which is why open_path works this way.
+
+    The cwd is a SUBDIRECTORY of the root, so cwd-anchoring and root-anchoring
+    give different answers and the assertion can tell them apart.
+    """
+    root = tmp_path / "root"
+    (root / "sub").mkdir(parents=True)
+    (root / "a.pdf").write_text("root copy")
+    (root / "sub" / "a.pdf").write_text("sub copy")
+    monkeypatch.chdir(root / "sub")
+    _stub_allowed_dirs(monkeypatch, root)
+
+    path, _ = await resolve_declared_path("a.pdf", "allowed_dirs", "narrow")
+
+    assert path is not None
+    assert path.resolved == (root / "sub" / "a.pdf").resolve()
+    assert path.rel == "sub/a.pdf"
+
+
+@pytest.mark.parametrize("policy", ["git_root", "allowed_dirs"])
+async def test_refusals_never_echo_the_argument(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    """The name itself can be the secret."""
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "acquisition-memo.pdf").write_text("x")
+    if policy == "allowed_dirs":
+        _stub_allowed_dirs(monkeypatch, root)
+    else:
+        _stub_git_root(monkeypatch, root)
+
+    _, refusal = await resolve_declared_path(
+        str(outside / "acquisition-memo.pdf"), policy, "narrow"
+    )
+
+    assert "acquisition-memo" not in refusal
+    assert str(tmp_path) not in refusal

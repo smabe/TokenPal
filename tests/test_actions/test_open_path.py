@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from tests._helpers import stub_allowed_root
+from tests._helpers import invoke_tool, stub_allowed_root
 from tokenpal.actions import open_path as open_path_mod
 from tokenpal.actions.catalog import LOCAL_SECTION
 from tokenpal.actions.open_path import OpenPathAction
@@ -54,7 +54,7 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """An allowed root with HOME pointed at it, and no git root appended."""
     allowed = tmp_path / "root"
     allowed.mkdir()
-    stub_allowed_root(monkeypatch, open_path_mod, allowed)
+    stub_allowed_root(monkeypatch, allowed)
     return allowed
 
 
@@ -89,7 +89,7 @@ def test_open_path_requires_confirm() -> None:
 async def test_openable_shapes_open(root: Path, launcher: _Launcher, name: str) -> None:
     target = _write(root / name)
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is True, result.output
     assert launcher.calls == [["open", str(target)]]
@@ -103,7 +103,7 @@ async def test_refuses_a_path_outside_the_roots(
 ) -> None:
     outside = _write(tmp_path / "outside" / "a.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(outside))
+    result = await invoke_tool(OpenPathAction({}), path=str(outside))
 
     assert result.success is False
     assert "outside" in result.output
@@ -117,7 +117,7 @@ async def test_refuses_a_symlink_that_resolves_outside(
     link = root / "inside.pdf"
     link.symlink_to(outside)
 
-    result = await OpenPathAction({}).execute(path=str(link))
+    result = await invoke_tool(OpenPathAction({}), path=str(link))
 
     assert result.success is False
     assert launcher.calls == []
@@ -128,7 +128,7 @@ async def test_refuses_a_dotdot_escape(
 ) -> None:
     _write(tmp_path / "outside" / "a.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(root / ".." / "outside" / "a.pdf"))
+    result = await invoke_tool(OpenPathAction({}), path=str(root / ".." / "outside" / "a.pdf"))
 
     assert result.success is False
     assert launcher.calls == []
@@ -139,9 +139,9 @@ async def test_refuses_when_allowed_dirs_is_empty(
 ) -> None:
     target = _write(root / "a.pdf")
     cfg = SimpleNamespace(paths=SimpleNamespace(allowed_dirs=[]))
-    monkeypatch.setattr(open_path_mod, "load_config", lambda: cfg)
+    monkeypatch.setattr("tokenpal.util.paths.load_config", lambda: cfg)
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False
     assert "[paths] allowed_dirs" in result.output
@@ -152,7 +152,7 @@ async def test_refuses_when_allowed_dirs_is_empty(
 
 
 async def test_refuses_a_missing_file(root: Path, launcher: _Launcher) -> None:
-    result = await OpenPathAction({}).execute(path=str(root / "gone.pdf"))
+    result = await invoke_tool(OpenPathAction({}), path=str(root / "gone.pdf"))
 
     assert result.success is False
     assert launcher.calls == []
@@ -161,7 +161,7 @@ async def test_refuses_a_missing_file(root: Path, launcher: _Launcher) -> None:
 async def test_refuses_a_directory(root: Path, launcher: _Launcher) -> None:
     (root / "sub").mkdir()
 
-    result = await OpenPathAction({}).execute(path=str(root / "sub"))
+    result = await invoke_tool(OpenPathAction({}), path=str(root / "sub"))
 
     assert result.success is False
     assert "folders" in result.output
@@ -172,7 +172,7 @@ async def test_refuses_a_directory(root: Path, launcher: _Launcher) -> None:
 async def test_refuses_a_missing_argument(
     root: Path, launcher: _Launcher, raw: str | None
 ) -> None:
-    result = await OpenPathAction({}).execute(path=raw)
+    result = await invoke_tool(OpenPathAction({}), path=raw)
 
     assert result.success is False
     assert launcher.calls == []
@@ -204,7 +204,7 @@ async def test_refuses_anything_that_could_run(
 ) -> None:
     target = _write(root / name, mode)
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False, f"{name} was opened"
     assert launcher.calls == [], f"{name} reached the launcher"
@@ -218,7 +218,7 @@ async def test_type_checks_read_the_resolved_target_not_the_argument(
     link = root / "notes.txt"
     link.symlink_to(script)
 
-    result = await OpenPathAction({}).execute(path=str(link))
+    result = await invoke_tool(OpenPathAction({}), path=str(link))
 
     assert result.success is False
     assert launcher.calls == []
@@ -232,7 +232,7 @@ async def test_refuses_a_sensitive_name_without_repeating_it(
 ) -> None:
     target = _write(root / "1password-export.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False
     assert "1password" not in result.output.lower()
@@ -249,7 +249,7 @@ async def test_refuses_protected_paths(
 ) -> None:
     target = _write(root / name)
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False, f"{name} was opened"
     assert launcher.calls == []
@@ -264,7 +264,7 @@ async def test_windows_uses_startfile(
     monkeypatch.setattr(open_path_mod, "current_platform", lambda: "windows")
     target = _write(root / "a.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is True
     assert launcher.calls == [str(target)]
@@ -277,7 +277,7 @@ async def test_windows_launch_failure_refuses(
     launcher.raises = OSError("no association")
     target = _write(root / "a.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False
     assert "could not open" in result.output
@@ -290,7 +290,7 @@ async def test_linux_without_xdg_open_refuses(
     launcher.raises = FileNotFoundError("xdg-open")
     target = _write(root / "a.pdf")
 
-    result = await OpenPathAction({}).execute(path=str(target))
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
 
     assert result.success is False
     assert "xdg-open" in result.output

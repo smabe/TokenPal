@@ -18,9 +18,8 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
-from tokenpal.config.loader import load_config
 from tokenpal.util.paths import (
-    allowed_roots,
+    declared_roots,
     is_hidden_or_protected,
     path_is_sensitive,
     resolve_inside,
@@ -317,7 +316,7 @@ class FindFilesAction(AbstractAction):
             return _refuse("limit", f"must be a whole number from 1 to {_MAX_LIMIT}.")
         limit = min(limit, _MAX_LIMIT)
 
-        roots = await allowed_roots(load_config().paths.allowed_dirs)
+        roots = await declared_roots("allowed_dirs")
         if not roots:
             return _refuse("[paths] allowed_dirs", "names no folder that exists.")
 

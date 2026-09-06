@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
-from tokenpal.util.paths import git_root
+from tokenpal.util.paths import ResolvedPath, git_root
 from tokenpal.util.proc import run_capture
 
 # Total lines returned to the caller, enforced in Python: ripgrep has no
@@ -42,6 +42,9 @@ class GrepCodebaseAction(AbstractAction):
     }
     safe = True
     requires_confirm = False
+    path_params = ("path",)
+    path_roots = "git_root"
+    path_screen = "broad"
 
     async def execute(self, **kwargs: Any) -> ActionResult:
         pattern = kwargs.get("pattern", "")
@@ -52,17 +55,23 @@ class GrepCodebaseAction(AbstractAction):
         if rg is None:
             return ActionResult(output="ripgrep (rg) is not installed.", success=False)
 
-        root = await git_root(Path.cwd()) or Path.cwd()
-
         target: Path
         path_arg = kwargs.get("path")
-        if isinstance(path_arg, str) and path_arg.strip():
-            if contains_sensitive_term(path_arg):
-                return ActionResult(output="Path references a sensitive app.", success=False)
-            candidate = Path(path_arg)
-            target = candidate if candidate.is_absolute() else (root / candidate)
-        else:
+        if isinstance(path_arg, ResolvedPath):
+            # The resolved value, not the argument: rg walks whatever argv says.
+            target = path_arg.resolved
+        elif path_arg is None or (isinstance(path_arg, str) and not path_arg.strip()):
+            # `path` is optional, so the invoker resolved nothing and the repo
+            # root is the target. Refused outside one: "the current repo" has no
+            # meaning there, and the cwd is not a bounded search.
+            root = await git_root(Path.cwd())
+            if root is None:
+                return ActionResult(output="Not inside a git repository.", success=False)
             target = root
+        else:
+            # Never fall through to the whole repo on an argument shape the
+            # invoker declined to contain.
+            return ActionResult(output="Path is required.", success=False)
 
         cmd = [
             rg,

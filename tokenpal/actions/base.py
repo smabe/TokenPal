@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import abc
 from dataclasses import dataclass
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 
 @dataclass(frozen=True)
@@ -87,6 +87,22 @@ class AbstractAction(abc.ABC):
     # tool from the advertised specs and refuses it at execution once desktop
     # content is in the run's context.
     writes_durable_sink: ClassVar[bool] = False
+    # Argument names carrying a filesystem path. Empty means the invoker does
+    # no path work for this tool at all — the gate that keeps a git subprocess
+    # off every non-path tool call. A declared name is resolved and contained
+    # before `execute` runs, and arrives as a `ResolvedPath` instead of a str.
+    path_params: ClassVar[tuple[str, ...]] = ()
+    # Which roots a declared path must resolve inside: the cwd's git worktree,
+    # or the folders in `[paths] allowed_dirs`. Also fixes where a relative
+    # path is anchored — at the repo root, or at the process cwd.
+    path_roots: ClassVar[Literal["git_root", "allowed_dirs"]] = "git_root"
+    # Strength of the screen applied to the RAW argument, before resolution.
+    # "broad" adds REJECT_PATH and contains_sensitive_term; "narrow" screens the
+    # raw name not at all, because on an absolute path those two refuse benign
+    # files under a badly-named folder. The RESOLVED name is always screened
+    # with path_is_sensitive regardless. Defaults to the stricter value so a
+    # tool that declares a path and forgets the screen still gets one.
+    path_screen: ClassVar[Literal["broad", "narrow"]] = "broad"
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config

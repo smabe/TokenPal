@@ -15,13 +15,7 @@ from typing import Any, ClassVar
 
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
-from tokenpal.config.loader import load_config
-from tokenpal.util.paths import (
-    allowed_roots,
-    is_hidden_or_protected,
-    path_is_sensitive,
-    resolve_inside,
-)
+from tokenpal.util.paths import ResolvedPath, is_hidden_or_protected
 from tokenpal.util.platform import current_platform
 
 log = logging.getLogger(__name__)
@@ -72,20 +66,17 @@ class OpenPathAction(AbstractAction):
     requires_confirm = True
     # Launching is a side effect; a cached "Opening x." would skip the launch.
     cacheable: ClassVar[bool] = False
+    path_params = ("path",)
+    path_roots = "allowed_dirs"
+    # Narrow: the argument is an absolute path from find_files, and the broad
+    # screen would refuse a benign file under a badly-named folder.
+    path_screen = "narrow"
 
     async def execute(self, **kwargs: Any) -> ActionResult:
-        raw = kwargs.get("path")
-        if not isinstance(raw, str) or not raw.strip():
+        path = kwargs.get("path")
+        if not isinstance(path, ResolvedPath):
             return _refuse("open_path needs a path.")
-
-        roots = await allowed_roots(load_config().paths.allowed_dirs)
-        if not roots:
-            return _refuse("[paths] allowed_dirs names no folder that exists.")
-
-        match = resolve_inside(raw, roots)
-        if match is None:
-            return _refuse("That path is outside [paths] allowed_dirs.")
-        resolved, root, rel = match
+        resolved = path.resolved
 
         # Every check below reads the resolved target, never the argument: a
         # "notes.txt" symlink pointing at a shell script must be refused as the
@@ -97,7 +88,9 @@ class OpenPathAction(AbstractAction):
         if not resolved.is_file():
             return _refuse("open_path opens regular files only.")
 
-        if is_hidden_or_protected(resolved, root) or path_is_sensitive(rel):
+        # Same string the invoker's resolved-name screen returns, so a refusal
+        # cannot separate a denied name from a protected location.
+        if is_hidden_or_protected(resolved, path.root):
             return _refuse("That path is protected.")
 
         if resolved.suffix.lower() in _DENIED:

@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
-from tokenpal.actions.base import AbstractAction
+from tokenpal.actions.base import AbstractAction, ActionResult
+from tokenpal.actions.invoker import ToolInvoker
 from tokenpal.brain.memory import MemoryStore
 from tokenpal.brain.orchestrator import AgentBridge, Brain
 from tokenpal.brain.personality import PersonalityEngine
@@ -228,17 +229,24 @@ async def _no_git_root(_start: Path) -> Path | None:
     return None
 
 
-def stub_allowed_root(
-    monkeypatch: Any, module: ModuleType, root: Path
-) -> None:
-    """Point *module*'s ``[paths] allowed_dirs`` at *root* and nothing else.
+def stub_allowed_root(monkeypatch: Any, root: Path) -> None:
+    """Point ``[paths] allowed_dirs`` at *root* and nothing else.
 
     Also sets HOME to *root* (``is_hidden_or_protected`` special-cases
     ``~/Library``) and stubs the git-root append, which would otherwise add the
-    real repo and let its files match. Patch ``git_root`` where ``allowed_roots``
-    looks it up, not in the importing module.
+    real repo and let its files match. Patch ``load_config`` and ``git_root``
+    where ``declared_roots`` looks them up, not in the importing module.
     """
     monkeypatch.setenv("HOME", str(root))
     cfg = SimpleNamespace(paths=SimpleNamespace(allowed_dirs=[str(root)]))
-    monkeypatch.setattr(module, "load_config", lambda: cfg)
+    monkeypatch.setattr("tokenpal.util.paths.load_config", lambda: cfg)
     monkeypatch.setattr("tokenpal.util.paths.git_root", _no_git_root)
+
+
+async def invoke_tool(action: AbstractAction, **arguments: Any) -> ActionResult:
+    """Run *action* the way production does — through ``ToolInvoker``.
+
+    Path policy is declared on the action and enforced in the invoker, so a
+    direct ``execute()`` call would skip the containment the tool relies on.
+    """
+    return await ToolInvoker().invoke(action, arguments)

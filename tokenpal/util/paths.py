@@ -7,8 +7,10 @@ import os
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Literal, NamedTuple
 
-from tokenpal.brain.personality import contains_sensitive_content_term
+from tokenpal.brain.personality import contains_sensitive_content_term, contains_sensitive_term
+from tokenpal.config.loader import load_config
 
 REJECT_PATH = re.compile(r"\.env|credentials|secrets|\.key$|\.pem$", re.IGNORECASE)
 
@@ -117,3 +119,83 @@ def path_is_sensitive(rel: str) -> bool:
         for part in re.split(r"[\\/]", lower)
         for ext in part.split(".")[1:]
     )
+
+
+class ResolvedPath(NamedTuple):
+    """A path argument the invoker has screened, resolved and contained.
+
+    ``raw`` is what the caller spelled: a tool comparing spellings (read_file's
+    dual git-tracking check) has no other source for it once the invoker
+    substitutes. ``rel`` is posix so it can be handed to a git pathspec.
+    """
+
+    raw: str
+    resolved: Path
+    root: Path
+    rel: str
+
+
+RootsPolicy = Literal["git_root", "allowed_dirs"]
+PathScreen = Literal["broad", "narrow"]
+
+_NO_ROOTS: dict[str, str] = {
+    "git_root": "Not inside a git repository.",
+    "allowed_dirs": "[paths] allowed_dirs names no folder that exists.",
+}
+_OUTSIDE: dict[str, str] = {
+    "git_root": "Path is outside the git repo.",
+    "allowed_dirs": "That path is outside [paths] allowed_dirs.",
+}
+# One string per screen strength, so a refusal cannot tell the caller whether
+# the raw name or the resolved target was the denied one.
+_SCREEN_REFUSAL: dict[str, str] = {
+    "broad": "Path matches a denied pattern.",
+    "narrow": "That path is protected.",
+}
+
+
+async def declared_roots(roots_policy: RootsPolicy) -> list[Path]:
+    """Roots admitted by a tool's declared ``path_roots``.
+
+    ``git_root`` yields at most one root and refuses outside a repo, rather
+    than falling back to the cwd: "the current repo" has no meaning there.
+    """
+    if roots_policy == "git_root":
+        root = await git_root(Path.cwd())
+        return [] if root is None else [root.resolve()]
+    return await allowed_roots(load_config().paths.allowed_dirs)
+
+
+async def resolve_declared_path(
+    raw: str, roots_policy: RootsPolicy, screen: PathScreen
+) -> tuple[ResolvedPath | None, str]:
+    """Screen and contain *raw*, returning ``(path, "")`` or ``(None, refusal)``.
+
+    The order is fixed: raw-name screen, resolve, resolved-name re-screen. Both
+    screens are load-bearing — the raw one alone lets a symlink launder a
+    denied name, the resolved one alone drops the broad app terms. Refusals are
+    fixed strings and never echo the argument: the name can be the secret.
+    """
+    if screen == "broad":
+        if REJECT_PATH.search(raw):
+            return None, _SCREEN_REFUSAL["broad"]
+        if contains_sensitive_term(raw):
+            return None, "Path references a sensitive app."
+
+    roots = await declared_roots(roots_policy)
+    if not roots:
+        return None, _NO_ROOTS[roots_policy]
+
+    # git_root returns exactly one root, so a relative path anchors at the repo
+    # — what read_file and grep_codebase advertise. allowed_dirs has N roots and
+    # so no single anchor; a relative path stays anchored at the process cwd.
+    candidate: str | Path = roots[0] / raw if roots_policy == "git_root" else raw
+    match = resolve_inside(candidate, roots)
+    if match is None:
+        return None, _OUTSIDE[roots_policy]
+
+    resolved, root, rel = match
+    rel = Path(rel).as_posix()
+    if path_is_sensitive(rel):
+        return None, _SCREEN_REFUSAL[screen]
+    return ResolvedPath(raw, resolved, root, rel), ""

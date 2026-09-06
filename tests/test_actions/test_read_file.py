@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._helpers import invoke_tool
 from tokenpal.actions.read_file import _MAX_BYTES, ReadFileAction
 
 
@@ -24,7 +25,7 @@ async def test_read_file_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
     monkeypatch.chdir(tmp_path)
 
-    result = await ReadFileAction({}).execute(path="hello.txt")
+    result = await invoke_tool(ReadFileAction({}), path="hello.txt")
     assert result.success is True
     assert "hello world" in result.output
 
@@ -34,14 +35,14 @@ async def test_read_file_rejects_untracked(tmp_path: Path, monkeypatch: pytest.M
     (tmp_path / "untracked.txt").write_text("secret")
     monkeypatch.chdir(tmp_path)
 
-    result = await ReadFileAction({}).execute(path="untracked.txt")
+    result = await invoke_tool(ReadFileAction({}), path="untracked.txt")
     assert result.success is False
     assert "not tracked" in result.output.lower()
 
 
 async def test_read_file_rejects_denied_pattern() -> None:
     for bad in [".env", "src/credentials.json", "key.pem", "api.key", "deploy/secrets.yml"]:
-        result = await ReadFileAction({}).execute(path=bad)
+        result = await invoke_tool(ReadFileAction({}), path=bad)
         assert result.success is False
 
 
@@ -55,7 +56,7 @@ async def test_read_file_caps_at_max_bytes(
     subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
     monkeypatch.chdir(tmp_path)
 
-    result = await ReadFileAction({}).execute(path="big.txt")
+    result = await invoke_tool(ReadFileAction({}), path="big.txt")
     assert result.success is True
     assert "truncated" in result.output
     # Output is text content plus the marker — truncated body equals MAX_BYTES of 'x'.
@@ -63,7 +64,7 @@ async def test_read_file_caps_at_max_bytes(
 
 
 async def test_read_file_missing_path() -> None:
-    result = await ReadFileAction({}).execute(path="")
+    result = await invoke_tool(ReadFileAction({}), path="")
     assert result.success is False
 
 
@@ -71,7 +72,7 @@ async def test_read_file_outside_repo_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    result = await ReadFileAction({}).execute(path="anything.txt")
+    result = await invoke_tool(ReadFileAction({}), path="anything.txt")
     assert result.success is False
 
 
@@ -97,7 +98,7 @@ async def test_read_file_rejects_tracked_symlink_escaping_repo(
     repo, _ = _repo_with_escaping_symlink(tmp_path)
     monkeypatch.chdir(repo)
 
-    result = await ReadFileAction({}).execute(path="notes.txt")
+    result = await invoke_tool(ReadFileAction({}), path="notes.txt")
     assert result.success is False
     assert result.output == "Path is outside the git repo."
     assert "PRIVATE KEY MATERIAL" not in result.output
@@ -109,8 +110,8 @@ async def test_read_file_absolute_and_relative_agree(
     repo, link = _repo_with_escaping_symlink(tmp_path)
     monkeypatch.chdir(repo)
 
-    relative = await ReadFileAction({}).execute(path="notes.txt")
-    absolute = await ReadFileAction({}).execute(path=str(link))
+    relative = await invoke_tool(ReadFileAction({}), path="notes.txt")
+    absolute = await invoke_tool(ReadFileAction({}), path=str(link))
     assert (relative.success, relative.output) == (absolute.success, absolute.output)
 
 
@@ -120,7 +121,7 @@ async def test_read_file_refusal_does_not_echo_target(
     repo, _ = _repo_with_escaping_symlink(tmp_path)
     monkeypatch.chdir(repo)
 
-    result = await ReadFileAction({}).execute(path="notes.txt")
+    result = await invoke_tool(ReadFileAction({}), path="notes.txt")
     assert "private.txt" not in result.output
     assert str(tmp_path) not in result.output
 
@@ -144,10 +145,10 @@ async def test_tracked_symlink_cannot_launder_a_denied_path(
     repo = _repo_with_internal_symlink(tmp_path, track_link=True)
     monkeypatch.chdir(repo)
 
-    direct = await ReadFileAction({}).execute(path="docs/credentials.md")
+    direct = await invoke_tool(ReadFileAction({}), path="docs/credentials.md")
     assert direct.success is False
 
-    aliased = await ReadFileAction({}).execute(path="notes.md")
+    aliased = await invoke_tool(ReadFileAction({}), path="notes.md")
     assert aliased.success is False
     assert "AWS_SECRET" not in aliased.output
 
@@ -158,7 +159,7 @@ async def test_untracked_symlink_cannot_read_a_tracked_file(
     repo = _repo_with_internal_symlink(tmp_path, track_link=False)
     monkeypatch.chdir(repo)
 
-    result = await ReadFileAction({}).execute(path="notes.md")
+    result = await invoke_tool(ReadFileAction({}), path="notes.md")
     assert result.success is False
     assert "AWS_SECRET" not in result.output
 
@@ -173,7 +174,7 @@ async def test_unreadable_target_refusal_does_not_echo_the_path(
     subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
     monkeypatch.chdir(tmp_path)
 
-    result = await ReadFileAction({}).execute(path="docs")
+    result = await invoke_tool(ReadFileAction({}), path="docs")
     assert result.success is False
     assert str(tmp_path) not in result.output
 
@@ -188,6 +189,56 @@ async def test_dash_leading_path_is_not_parsed_as_a_git_option(
     (tmp_path / "--others").write_text("untracked payload\n")
     monkeypatch.chdir(tmp_path)
 
-    result = await ReadFileAction({}).execute(path="--others")
+    result = await invoke_tool(ReadFileAction({}), path="--others")
     assert result.success is False
     assert "untracked payload" not in result.output
+
+
+async def test_untracked_symlink_with_a_benign_name_is_still_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Isolates the dual git-tracking check from the denylist.
+
+    The fixture above is refused by the resolved-name screen before tracking is
+    consulted, so it does not pin this. With both names benign, only
+    ``_spelled_rel(raw, root) != rel`` stands between an untracked symlink and
+    a tracked file -- and it needs the SPELLED name, which is why the invoker
+    substitutes a ResolvedPath and not a resolved string.
+    """
+    _init_repo(tmp_path)
+    (tmp_path / "tracked_notes.txt").write_text("TRACKED CONTENT\n")
+    subprocess.run(["git", "add", "tracked_notes.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
+    (tmp_path / "alias.txt").symlink_to("tracked_notes.txt")
+    monkeypatch.chdir(tmp_path)
+
+    result = await invoke_tool(ReadFileAction({}), path="alias.txt")
+
+    assert result.success is False
+    assert result.output == "File is not tracked by git."
+    assert "TRACKED CONTENT" not in result.output
+
+
+async def test_tracked_symlink_to_an_untracked_file_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The second half of the dual tracking check, with benign names.
+
+    The sibling test aims its symlink at a denylisted name, so the invoker's
+    resolved-name screen refuses it before `execute` runs and the tracking
+    logic is never reached. Both names here are benign, so this is the only
+    test that fails if the resolved-spelling check is dropped.
+    """
+    _init_repo(tmp_path)
+    (tmp_path / "untracked_secret.txt").write_text("PAYLOAD\n")
+    (tmp_path / "alias.txt").symlink_to("untracked_secret.txt")
+    (tmp_path / "kept.txt").write_text("kept\n")
+    subprocess.run(["git", "add", "alias.txt", "kept.txt"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = await invoke_tool(ReadFileAction({}), path="alias.txt")
+
+    assert result.success is False
+    assert result.output == "File is not tracked by git."
+    assert "PAYLOAD" not in result.output

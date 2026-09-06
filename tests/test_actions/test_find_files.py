@@ -80,7 +80,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     pointing HOME at the root exercises that rule alongside the generic one.
     """
     root = _build_tree(tmp_path)
-    stub_allowed_root(monkeypatch, find_files, root)
+    stub_allowed_root(monkeypatch, root)
     return root
 
 
