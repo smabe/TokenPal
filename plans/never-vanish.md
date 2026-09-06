@@ -1,14 +1,14 @@
 # never-vanish — the buddy can always be found
 
 ## Phase map
-**Phase p1 — visible-surface invariant: buddy or chat is always on screen**
+**Phase p1 — visible-surface invariant: buddy or chat is always on screen** — SHIPPED at `b12119b`
 - Enters when: start here
 - Done signal: every Done criterion in the shard is met, including the Ghostty-launched captures of both auto-show transitions with the click-away/Space-switch re-check
 - If it fails: no gate — fix-forward
 - Shard: `plans/never-vanish-p1.md`
 
-**Phase p2 — own bundle identity on macOS: the menu bar item belongs to `com.tokenpal.app`, launched through LaunchServices**
-- Enters when: p1 shipped
+**Phase p2 — own bundle identity on macOS: the menu bar item belongs to `com.tokenpal.app`, launched through LaunchServices** — NEXT
+- Enters when: p1 shipped (done, `b12119b`)
 - Done signal: every Done criterion in the shard is met, including the AX placement check of the status item from a Ghostty-launched run
 - If it fails: the in-process fallback keeps today's behavior; stop and report if the bundle cannot be built on this Mac
 - Shard: `plans/never-vanish-p2.md`
@@ -22,10 +22,16 @@ Verification pass 2026-09-06 — grounding 74/74 claims resolve · 0 problems ·
 design: systems 14 checked · 5 fixed (Ctrl-C path; cwd hand-off; restore repair sets `_persist_pending`; `OSError` caught + stamp written last; per-fd tty redirect) · 1 refuted (signature identity — copied stub with `org.python.python` signature placed at `(1487, 7)` under its Info.plist id, probe this session) · 1 fixed from cap-drop (parent closes its log handlers before `open`) · integration 45 sites checked · 3 fixed (cwd consumers `util/paths.py:62,177-178`, `grep_codebase.py:154`, `git_log.py:20`; `test_qt_dock_follow.py:86` docstring; `resolve_overlay(` grep) · 4 unlisted callers recorded as no-behavior-change (`test_qt_set_zoom.py:239,261`, `test_qt_overlay.py:206-221,245-250`, `test_qt_platform.py:170-203`, `test_selected_text.py:143`) · persona ui 14 checked · 4 fixed (insertion point; chat-label assertion; history position note; `ui.md` `_history_user_visible`) · persona reliability 13 checked · 6 fixed (already-running check before build; stamp last + mid-build test; `ttyname` `OSError`; log truncation; `open` rc fallback; TCC re-grant recurs per rebuild) · 1 unverified-kept (`open --stdout` truncation, mitigated by parent truncate) ·
 history: 4 qualifying (max 122 commits: `app.py` 122, `overlay.py` 43, `cli.py` 15, `tests/test_qt_overlay.py` 11) · 4 mined · 2 fixed (Ctrl-C forwards SIGINT so `_shutdown`→`teardown`→flush survives; Done captures add click-away + Space switch for the re-map bug class `98823c3`/`c357b5e`/`2e05131`/`60c00c4`) · 1 promoted to parking lot (tray Quit bypasses `teardown`) · hazard recorded (`qt/app.py:build_shell`, `tests/manual/quick_backend_smoke.py:42` show a tray outside `main()`).
 
-NEXT: p1 — read `plans/never-vanish-p1.md` FIRST. Binding decisions for p1:
-- The anchor set is {buddy, chat}. The rule at every transition: **if the buddy is hidden, chat is shown; if chat is being hidden while the buddy is hidden, the buddy is shown.** At restore, an all-hidden file resets to the buddy (operator sign-off above). News never counts.
-- The rule is enforced inside `QtOverlay` (`_set_buddy_visible`, `_do_toggle_chat`, `restore_visibility_state`), never in `ui_state.py` — the codec stays dumb, the overlay is the only writer of intent. The restore repair sets `_persist_pending` so it reaches disk at teardown.
-- Assertions use `isHidden()`, never `isVisible()` (`tests/test_qt_overlay.py:180-186`); unit tests never assert focus.
+**Spec check at p1** — 6/6 Work items evidenced · 1 unclaimed file (`docs/qt-frontend.md`), routed as required-by-the-described-work and added to Work with the planning miss recorded.
+**Review at p1** — `/auto-review high`. Codex peer was out of quota until 22:26 tonight, so the skill's documented same-family fallback ran: 8 parallel angle agents, a 2-agent closing round over the repaired diff, and a final verification pass over the last delta. 10 findings filed via `ReportFindings` (7 fixed, 3 skipped to the parking lot). **No external-peer receipt exists for p1 and no `peer-review.sh stamp` was filed** — the record is the ReportFindings entry. Full adjudication in `plans/never-vanish-p1.md`.
+**Sweep at p1** — opened `plans/never-vanish-p2.md`: 3 stale hints corrected (`flush_pending_persist` `:1040-1050`→`:985-995`, tray `show()` `:596`→`:530`, `ui.md` insertion `:7`→`:8`). No other shard.
+
+NEXT: p2 — read `plans/never-vanish-p2.md` FIRST. Binding decisions for p2:
+- The bundle is built into the data dir and launched with `open -W --stdout <tty> --stderr <tty> --env <cwd> <bundle> --args …`. Only a LaunchServices launch gets a fresh coalition; exec'ing the bundle executable from a terminal inherits the terminal's and re-poisons the registry.
+- Ctrl-C must reach the child as **SIGINT**, never as an Apple Quit event: `_shutdown` (`tokenpal/app.py:1826-1830`) is the only path that runs `overlay.teardown()` → `flush_pending_persist()` (`tokenpal/ui/qt/overlay.py:985-995`). p1 made this load-bearing for more than zoom — the restore repair also rides that flush.
+- `ensure_bundle` builds into a sibling temp directory and `os.replace`es it into place, not `rmtree` in-place — carried in from p1's review; see the shard's Decisions & findings for the three existing call sites of that idiom.
+- The permission cost is accepted (operator sign-off above): first run re-prompts for Accessibility / Screen Recording / Microphone under `com.tokenpal.app`, and again after every stub rebuild, because the ad-hoc requirement is cdhash-bound.
+- **p1 proved the AX harness works on this Mac:** a Ghostty-launched run reported the status item at `(1517, 7)` and the `menu bar 2` AX query returned cleanly. That is the launcher-dependent placement p2 removes, not evidence the bug is gone.
 
 ## Goal
 Two things the operator asked for on 2026-09-06 after the menu bar icon vanished: the Qt UI must never reach a state with nothing on screen ("when the buddy is hidden we need to automatically show the chat window … if we're in chat window only mode and we hide the chat window the app is also gone but still running"), and the macOS menu bar item must stop depending on the shared `org.python.python` identity that let another app's Control Center record hide it.
