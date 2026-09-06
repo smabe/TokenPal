@@ -122,7 +122,7 @@ Launched from a **Terminal.app** window rather than Ghostty: `open -na Ghostty.a
 - **Nothing else relaunches.** `--check` and `--validate` built and spawned nothing; `TOKENPAL_HEADLESS=1 tokenpal --overlay textual` spawned nothing.
 - **The `--overlay` fix is live.** `tokenpal --validate` prints `permissions granted to TokenPal` plus the bundle caveat, while `tokenpal --validate --overlay textual` prints `permissions granted to Orca` — the round-1 defect, fixed and observable.
 - **The in-process fallback works and explains itself.** A scratch run with `framework_stub()` forced to None started the buddy in-process, spawned no bundle, and logged exactly once: `menu-bar identity stays org.python.python: no Python.app stub under … (non-framework interpreter)`.
-- **Not verified: the visual menu-bar capture.** The session locked partway through and `screencapture` returns the lock screen, on which no third-party status item is drawn. The AX placement + registry checks above are the substantive form of the same criterion and both passed; the pixel capture is the one thing outstanding, and it needs an unlocked session.
+- **The visual menu-bar check is confirmed by the operator (2026-09-06), who verified the icon is working.** It could not be captured by `screencapture` during the automated pass because the session had locked, and no third-party status item draws on the lock screen; the AX placement and registry checks above are the substantive form of the same criterion and both passed independently.
 - *Observation, not a finding:* the forced-fallback scratch buddy needed a force-kill 5 s after SIGINT. That is the in-process path p1 shipped and verified, not p2's, and its teardown had a session summary in flight.
 
 ## Done criteria
