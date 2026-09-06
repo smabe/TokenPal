@@ -1001,3 +1001,48 @@ def test_the_receiver_pin_catches_what_a_name_heuristic_missed() -> None:
     assert _execute_receivers("self._registry[n].execute(q)") == {"self._registry[n]"}
     assert _execute_receivers("self._conn.execute(sql, **binds)") == {"self._conn"}
     assert _execute_receivers("cursor.execute(sql)") == {"cursor"}
+
+
+async def test_a_tool_that_was_not_offered_is_refused_before_it_runs() -> None:
+    """The advertised spec list is a gate, not a hint.
+
+    `_execute_tool_call` resolves a name against every enabled action, so
+    without this a model emitting a name it was never shown -- which small
+    local models do -- reaches the tool anyway. That would make every
+    spec-list filter advisory, `allow_unprompted` included, on the ambient
+    path that has nobody watching. The probe is one line: advertise nothing,
+    call the tool regardless.
+    """
+    action = _StubAction()
+    tool_response = LLMResponse(
+        text="",
+        tokens_used=10,
+        model_name="mock",
+        latency_ms=5.0,
+        tool_calls=[ToolCall(id="call_1", name=action.action_name, arguments={})],
+    )
+    final = LLMResponse(text="done", tokens_used=5, model_name="mock", latency_ms=1.0)
+    brain = _make_brain(_MockLLM([tool_response, final]), actions=[action])
+
+    result = await brain._generate_with_tools("test", tool_specs=[])
+
+    assert result.text == "done"
+    assert action.call_count == 0, "an unadvertised tool was executed"
+
+
+async def test_an_offered_tool_still_runs() -> None:
+    """The other direction, so the gate cannot pass by refusing everything."""
+    action = _StubAction()
+    tool_response = LLMResponse(
+        text="",
+        tokens_used=10,
+        model_name="mock",
+        latency_ms=5.0,
+        tool_calls=[ToolCall(id="call_1", name=action.action_name, arguments={})],
+    )
+    final = LLMResponse(text="done", tokens_used=5, model_name="mock", latency_ms=1.0)
+    brain = _make_brain(_MockLLM([tool_response, final]), actions=[action])
+
+    await brain._generate_with_tools("test", tool_specs=[action.to_tool_spec()])
+
+    assert action.call_count == 1

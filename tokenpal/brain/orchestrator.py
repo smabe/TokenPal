@@ -1827,6 +1827,12 @@ class Brain:
             assert prompt is not None
             messages = [{"role": "user", "content": prompt}]
         specs = self._tool_specs if tool_specs is None else tool_specs
+        # What was advertised is a GATE, not a hint. A local model re-emitting a
+        # name it saw in an earlier round -- or inventing one -- would otherwise
+        # reach any enabled tool, because _execute_tool_call resolves against
+        # the full set. That would make every spec-list filter, `allow_unprompted`
+        # included, advisory on the one path that has no user watching.
+        offered = {s["function"]["name"] for s in specs}
 
         deadline = (
             time.monotonic() + target_latency_s
@@ -1860,7 +1866,7 @@ class Brain:
                 self._status_callback(f"using {names}...")
 
             results = await asyncio.gather(
-                *(self._execute_tool_call(tc) for tc in response.tool_calls),
+                *(self._execute_tool_call(tc, offered) for tc in response.tool_calls),
             )
             # Leave "using X..." visible through the follow-up LLM round so a
             # fast gather isn't overwritten before the UI can render it. The
@@ -1924,8 +1930,14 @@ class Brain:
                 full = trimmed + "…"
         return full
 
-    async def _execute_tool_call(self, tc: ToolCall) -> str:
-        """Execute a single tool call and return the result text."""
+    async def _execute_tool_call(self, tc: ToolCall, offered: set[str]) -> str:
+        """Execute a single tool call and return the result text.
+
+        *offered* is the spec list this round actually advertised. A call for
+        anything else is refused before lookup: the narrowed list is the only
+        thing standing between an unattended tick and a tool it was never
+        shown.
+        """
         action = self._actions.get(tc.name)
         if action is None:
             log.warning("LLM called unknown action: %s", tc.name)
@@ -1933,6 +1945,12 @@ class Brain:
         if action.reads_desktop_content:
             log.warning("Conversation path refused desktop-content tool: %s", tc.name)
             return f"Tool '{tc.name}' is only available in /agent."
+        # Last, so the two refusals above keep their more specific wording: both
+        # name tools this round also did not offer, and a caller reading
+        # "not available here" would learn less than "only available in /agent".
+        if tc.name not in offered:
+            log.warning("LLM called a tool it was not offered: %s", tc.name)
+            return f"Tool '{tc.name}' is not available here."
         if action.requires_confirm:
             confirm = self._agent.confirm_callback
             if confirm is None:
