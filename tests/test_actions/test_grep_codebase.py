@@ -37,6 +37,43 @@ async def test_grep_happy_path(
     assert "needle" in result.output
 
 
+async def test_grep_rejects_path_outside_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, require_rg: str
+) -> None:
+    _init_repo(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("outside marker\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = await GrepCodebaseAction({}).execute(
+        pattern="outside marker", path=str(outside)
+    )
+
+    assert result.success is False
+    assert "outside the current repo" in result.output
+    assert "outside marker" not in result.output
+
+
+async def test_grep_accepts_path_inside_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, require_rg: str
+) -> None:
+    _init_repo(tmp_path)
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "a.txt").write_text("inside marker\n")
+    (tmp_path / "root.txt").write_text("inside marker\n")
+    monkeypatch.chdir(tmp_path)
+
+    result = await GrepCodebaseAction({}).execute(
+        pattern="inside marker", path="src"
+    )
+
+    assert result.success is True
+    assert "src" in result.output
+    assert "root.txt" not in result.output
+
+
 async def test_grep_missing_pattern() -> None:
     result = await GrepCodebaseAction({}).execute(pattern="")
     assert result.success is False

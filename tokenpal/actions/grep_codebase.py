@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 from tokenpal.actions.base import AbstractAction, ActionResult
 from tokenpal.actions.registry import register_action
 from tokenpal.brain.personality import contains_sensitive_term
-from tokenpal.util.paths import git_root
+from tokenpal.util.paths import git_root, resolve_inside
 from tokenpal.util.proc import run_capture
 
 # Total lines returned to the caller, enforced in Python: ripgrep has no
@@ -60,7 +60,12 @@ class GrepCodebaseAction(AbstractAction):
             if contains_sensitive_term(path_arg):
                 return ActionResult(output="Path references a sensitive app.", success=False)
             candidate = Path(path_arg)
-            target = candidate if candidate.is_absolute() else (root / candidate)
+            match = resolve_inside(candidate, [root])
+            if match is None:
+                return ActionResult(
+                    output="Search path is outside the current repo.", success=False
+                )
+            target = match[0]
         else:
             target = root
 
