@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 
 # The schema's enum and execute's validation read this same tuple, so a mode
 # the model can discover and a mode that works cannot drift apart.
-ACTION_MODES: tuple[str, ...] = ("arm", "cancel", "list")
+ACTION_MODES: tuple[str, ...] = ("arm", "cancel", "cancel_all", "list")
 
 _NO_BRAIN = "Reminders need a running brain; not available here."
 _ONE_FORM = (
@@ -102,11 +102,11 @@ def _text_arg(kwargs: dict[str, Any], name: str) -> str:
 
 @register_action
 class ReminderAction(AbstractAction):
-    """Arm / cancel / list the recurring nudges the ProactiveScheduler fires."""
+    """Arm, cancel or list the recurring nudges the ProactiveScheduler fires."""
 
     action_name = "reminder"
     description = (
-        "Arm, cancel or list recurring nudges. Schedules are either "
+        "Arm, cancel one or all, or list recurring nudges. Schedules are either "
         "every N minutes or a daily time like 22:30."
     )
     parameters: ClassVar[dict[str, Any]] = {
@@ -115,7 +115,10 @@ class ReminderAction(AbstractAction):
             "action": {
                 "type": "string",
                 "enum": list(ACTION_MODES),
-                "description": "arm a nudge, cancel one by id, or list what is armed.",
+                "description": (
+                    "arm a nudge, cancel one by id, cancel_all armed nudges, "
+                    "or list what is armed."
+                ),
             },
             "label": {
                 "type": "string",
@@ -182,6 +185,8 @@ class ReminderAction(AbstractAction):
             return self._arm(kwargs, reminder_id)
         if mode == "cancel":
             return self._cancel(reminder_id)
+        if mode == "cancel_all":
+            return self._cancel_all()
         return self._list()
 
     # ------------------------------------------------------------------
@@ -250,6 +255,13 @@ class ReminderAction(AbstractAction):
         # cancel() answers False for an unknown id AND for a memory store that
         # is off or closed, so this must not claim the reminder never existed.
         return ActionResult(output=f"Nothing armed under '{reminder_id}'.")
+
+    def _cancel_all(self) -> ActionResult:
+        assert self._scheduler is not None
+        armed = self._scheduler.armed()
+        for reminder in armed:
+            self._scheduler.cancel(reminder.id)
+        return ActionResult(output=f"Cancelled {len(armed)} reminder(s).")
 
     def _list(self) -> ActionResult:
         assert self._scheduler is not None

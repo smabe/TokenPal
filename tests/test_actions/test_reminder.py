@@ -243,6 +243,23 @@ async def test_cancel_without_an_id_asks_for_one() -> None:
     assert "list" in result.output
 
 
+async def test_cancel_all_removes_and_unpersists_every_reminder(
+    memory: MemoryStore,
+) -> None:
+    action, sched = _wire(memory)
+    await action.execute(action="arm", label="Stretch", every_min=30)
+    await action.execute(action="arm", label="Wind down", at="22:30")
+    assert len(sched.armed()) == 2
+    assert len(memory.list_reminders()) == 2
+
+    result = await action.execute(action="cancel_all")
+
+    assert result.success
+    assert result.output == "Cancelled 2 reminder(s)."
+    assert sched.armed() == []
+    assert memory.list_reminders() == []
+
+
 # ---------------------------------------------------------------------------
 # 5. list
 # ---------------------------------------------------------------------------
@@ -279,7 +296,7 @@ async def test_list_shows_every_armed_reminder_with_its_schedule() -> None:
 
 def test_schema_enum_is_the_constant_execute_checks() -> None:
     schema = ReminderAction.parameters["properties"]["action"]
-    assert schema["enum"] == ["arm", "cancel", "list"]
+    assert schema["enum"] == ["arm", "cancel", "cancel_all", "list"]
     assert schema["enum"] == list(ACTION_MODES)
     assert ReminderAction.parameters["required"] == ["action"]
 
