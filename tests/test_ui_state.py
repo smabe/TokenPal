@@ -6,6 +6,8 @@ import os
 import stat
 from pathlib import Path
 
+import pytest
+
 from tokenpal.config.ui_state import load_ui_state, save_ui_state
 
 _DEFAULTS = {"buddy_visible": True, "windows": {}, "zoom": 1.0}
@@ -47,6 +49,10 @@ def test_arbitrary_window_names_persist(tmp_path: Path) -> None:
     assert state["windows"]["stats_dashboard"] is True
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix file permissions are not enforced on Windows",
+)
 def test_save_chmods_0o600(tmp_path: Path) -> None:
     path = save_ui_state(tmp_path, dict(_DEFAULTS))
     mode = stat.S_IMODE(os.stat(path).st_mode)

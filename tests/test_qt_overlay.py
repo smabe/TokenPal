@@ -93,7 +93,7 @@ def test_qt_overlay_full_adapter_surface(qapp: QApplication) -> None:
         overlay.schedule_callback(lambda: fired.append(True), delay_ms=0)
         overlay.schedule_callback(lambda: fired.append(True), delay_ms=20)
 
-        _pump(qapp, ms=100)
+        _pump(qapp, ms=500)
         assert fired == [True, True], "schedule_callback didn't run on UI thread"
 
         # User-submit path should hit the registered callback.

@@ -36,6 +36,10 @@ def test_save_and_load_roundtrip(consent_path: Path) -> None:
     assert flags[Category.LOCATION_LOOKUPS] is False
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix file permissions are not enforced on Windows",
+)
 def test_save_consent_chmods_0o600(consent_path: Path) -> None:
     save_consent({Category.WEB_FETCHES: True}, consent_path)
     mode = stat.S_IMODE(os.stat(consent_path).st_mode)

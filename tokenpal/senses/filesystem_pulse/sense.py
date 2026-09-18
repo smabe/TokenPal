@@ -127,8 +127,12 @@ class FilesystemPulse(AbstractSense):
         Compares with a path-separator boundary so `/foo/Downloads` does not
         match `/foo/Downloads2/x`.
         """
+        normalized_path = os.path.normpath(src_path)
         for root_key in self._root_leaf:
-            if src_path == root_key or src_path.startswith(root_key + os.sep):
+            normalized_root = os.path.normpath(root_key)
+            if normalized_path == normalized_root or normalized_path.startswith(
+                normalized_root + os.sep
+            ):
                 return root_key
         return None
 

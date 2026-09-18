@@ -8,6 +8,7 @@ test harness and aren't worth the weight for a simple settings screen.
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,10 @@ def test_apply_saves_new_key_and_flips_enabled(
     assert stored["anthropic_key"] == key
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix file permissions are not enforced on Windows",
+)
 def test_apply_persists_key_at_0o600(
     isolated, cfg: TokenPalConfig
 ) -> None:

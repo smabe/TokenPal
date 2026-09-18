@@ -8,6 +8,7 @@ touching the user's real ~/.tokenpal.
 from __future__ import annotations
 
 import json
+import os
 import stat
 from pathlib import Path
 from typing import Any
@@ -136,6 +137,10 @@ def test_enable_stores_key_and_flips_config(
     assert "sk-ant-..." in result.message
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Unix file permissions are not enforced on Windows",
+)
 def test_enable_persists_key_at_0o600(isolated, cfg: TokenPalConfig) -> None:
     key = "sk-ant-api03-" + "c" * 40
     _handle_cloud_command(f"enable {key}", cfg)

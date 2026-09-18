@@ -404,7 +404,7 @@ def generate_modelfile(
     model_path can be a GGUF file or a safetensors directory.
     """
     return (
-        f"FROM {model_path}\n"
+        f"FROM {model_path.as_posix()}\n"
         f"PARAMETER temperature {temperature}\n"
         f"PARAMETER num_ctx 2048\n"
         f'SYSTEM """{system_prompt}"""\n'

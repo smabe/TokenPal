@@ -980,7 +980,7 @@ def test_tool_dispatch_happens_only_inside_the_invoker() -> None:
     for path in sorted(root.rglob("*.py")):
         if path.name == "invoker.py" and path.parent.name == "actions":
             continue
-        receivers = _execute_receivers(path.read_text())
+        receivers = _execute_receivers(path.read_text(encoding="utf-8"))
         if receivers:
             found[path.relative_to(root).as_posix()] = receivers
 

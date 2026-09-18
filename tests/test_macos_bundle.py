@@ -42,17 +42,23 @@ def stub(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def fake_env(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stub: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stub: Path,
 ) -> Path:
     site = tmp_path / "venv/lib/python9.9/site-packages"
     site.mkdir(parents=True)
     monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
     monkeypatch.setattr(macos_bundle.sys, "base_prefix", str(tmp_path / "base"))
     monkeypatch.setattr(
-        macos_bundle.sys, "_base_executable", str(tmp_path / "base/bin/python9.9"),
+        macos_bundle.sys,
+        "_base_executable",
+        str(tmp_path / "base/bin/python9.9"),
     )
     monkeypatch.setattr(
-        macos_bundle.sysconfig, "get_paths", lambda: {"purelib": str(site)},
+        macos_bundle.sysconfig,
+        "get_paths",
+        lambda: {"purelib": str(site)},
     )
     return site
 
@@ -67,7 +73,8 @@ def _data_dir(tmp_path: Path) -> Path:
 
 
 def test_framework_stub_is_none_off_darwin(
-    monkeypatch: pytest.MonkeyPatch, fake_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
 ) -> None:
     monkeypatch.setattr(macos_bundle.sys, "platform", "linux")
     assert macos_bundle.framework_stub() is None
@@ -80,7 +87,8 @@ def test_framework_stub_finds_the_python_app_executable(fake_env: Path) -> None:
 
 
 def test_framework_stub_is_none_without_a_framework_build(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
     monkeypatch.setattr(macos_bundle.sys, "base_prefix", str(tmp_path / "nope"))
@@ -102,6 +110,7 @@ def test_running_in_bundle_compares_the_main_bundle_id(
     monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
 
     for reported, expected in ((macos_bundle.BUNDLE_ID, True), ("org.python.python", False)):
+
         class _Bundle:
             @staticmethod
             def bundleIdentifier() -> str:  # noqa: N802
@@ -113,7 +122,9 @@ def test_running_in_bundle_compares_the_main_bundle_id(
                 return _Bundle
 
         monkeypatch.setitem(
-            sys.modules, "AppKit", type("appkit", (), {"NSBundle": _NSBundle}),
+            sys.modules,
+            "AppKit",
+            type("appkit", (), {"NSBundle": _NSBundle}),
         )
         assert macos_bundle.running_in_bundle() is expected
 
@@ -129,7 +140,8 @@ def test_running_instances_empty_off_darwin(
 
 
 def test_ensure_bundle_builds_the_tree_and_a_readable_info_plist(
-    fake_env: Path, tmp_path: Path,
+    fake_env: Path,
+    tmp_path: Path,
 ) -> None:
     data_dir = _data_dir(tmp_path)
     bundle = macos_bundle.ensure_bundle(data_dir)
@@ -137,7 +149,8 @@ def test_ensure_bundle_builds_the_tree_and_a_readable_info_plist(
     assert bundle == data_dir / "TokenPal.app"
     exe = bundle / "Contents/MacOS/TokenPal"
     assert exe.read_bytes() == b"#not-really-a-mach-o"
-    assert exe.stat().st_mode & 0o111
+    if os.name != "nt":
+        assert exe.stat().st_mode & 0o111
 
     info = plistlib.loads((bundle / "Contents/Info.plist").read_bytes())
     assert info["CFBundleIdentifier"] == macos_bundle.BUNDLE_ID
@@ -155,11 +168,14 @@ def test_ensure_bundle_builds_the_tree_and_a_readable_info_plist(
     major, minor = sys.version_info[:2]
     site = bundle / f"Contents/lib/python{major}.{minor}/site-packages"
     assert site.is_symlink()
-    assert site.readlink() == fake_env
+    assert os.path.normcase(str(site.readlink()).removeprefix("\\\\?\\")) == os.path.normcase(
+        str(fake_env)
+    )
 
 
 def test_ensure_bundle_is_a_no_op_when_the_stamp_matches(
-    fake_env: Path, tmp_path: Path,
+    fake_env: Path,
+    tmp_path: Path,
 ) -> None:
     data_dir = _data_dir(tmp_path)
     bundle = macos_bundle.ensure_bundle(data_dir)
@@ -171,7 +187,9 @@ def test_ensure_bundle_is_a_no_op_when_the_stamp_matches(
 
 
 def test_ensure_bundle_rebuilds_when_the_stub_changes(
-    fake_env: Path, tmp_path: Path, stub: Path,
+    fake_env: Path,
+    tmp_path: Path,
+    stub: Path,
 ) -> None:
     """A Homebrew Python upgrade replaces the stub; the copy inside the
     bundle must follow or `open` launches a stale interpreter."""
@@ -184,7 +202,9 @@ def test_ensure_bundle_rebuilds_when_the_stub_changes(
 
 
 def test_ensure_bundle_recovers_from_a_build_that_died_midway(
-    fake_env: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A failed build must never leave a half-built TokenPal.app behind for
     `open` to launch: the tree is staged elsewhere and swapped in whole."""
@@ -207,7 +227,8 @@ def test_ensure_bundle_recovers_from_a_build_that_died_midway(
 
 
 def test_ensure_bundle_replaces_a_stampless_bundle(
-    fake_env: Path, tmp_path: Path,
+    fake_env: Path,
+    tmp_path: Path,
 ) -> None:
     data_dir = _data_dir(tmp_path)
     bundle = macos_bundle.ensure_bundle(data_dir)
@@ -217,11 +238,17 @@ def test_ensure_bundle_replaces_a_stampless_bundle(
     bundle = macos_bundle.ensure_bundle(data_dir)
     assert (bundle / "Contents/MacOS/TokenPal").exists()
     stamp = json.loads((bundle / "Contents/.tokenpal-bundle-stamp").read_text())
-    assert stamp["stub"].endswith("Python.app/Contents/MacOS/Python")
+    assert Path(stamp["stub"]).parts[-4:] == (
+        "Python.app",
+        "Contents",
+        "MacOS",
+        "Python",
+    )
 
 
 def test_ensure_bundle_raises_without_a_framework_stub(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
     monkeypatch.setattr(macos_bundle.sys, "base_prefix", str(tmp_path / "nope"))
@@ -303,8 +330,11 @@ def fake_open(monkeypatch: pytest.MonkeyPatch) -> _FakeOpen:
     return faked
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_relaunch_composes_the_locked_open_command(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_dir = _data_dir(tmp_path)
@@ -317,18 +347,30 @@ def test_relaunch_composes_the_locked_open_command(
     (cmd,) = fake_open.calls
     log = str(data_dir / "logs/tokenpal-bundle.log")
     assert cmd == [
-        "open", "-W",
-        "--env", "TOKENPAL_IN_BUNDLE=1",
-        "--env", "TOKENPAL_LAUNCH_CWD=/repo/windoze",
-        "--stdout", log,
-        "--stderr", log,
+        "open",
+        "-W",
+        "--env",
+        "TOKENPAL_IN_BUNDLE=1",
+        "--env",
+        "TOKENPAL_LAUNCH_CWD=/repo/windoze",
+        "--stdout",
+        log,
+        "--stderr",
+        log,
         str(data_dir / "TokenPal.app"),
-        "--args", "-m", "tokenpal", "--verbose", "--skip-welcome",
+        "--args",
+        "-m",
+        "tokenpal",
+        "--verbose",
+        "--skip-welcome",
     ]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_relaunch_truncates_the_log_it_redirects_into(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Only non-tty launches land in the file; it must not grow across runs."""
@@ -343,8 +385,11 @@ def test_relaunch_truncates_the_log_it_redirects_into(
     assert log.read_text() == ""
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_relaunch_uses_the_tty_when_stdout_is_a_terminal(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`./run.sh --verbose` must keep printing into the terminal it was
@@ -361,8 +406,11 @@ def test_relaunch_uses_the_tty_when_stdout_is_a_terminal(
 
 
 def test_relaunch_declines_to_start_a_second_buddy(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """The already-running check runs before any build, so a rebuild can
     never swap the tree out from under a live app."""
@@ -375,8 +423,11 @@ def test_relaunch_declines_to_start_a_second_buddy(
     assert "already running" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_relaunch_raises_when_open_fails(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`open -W` returns 1 when the app dies before it can attach — the
@@ -390,8 +441,11 @@ def test_relaunch_raises_when_open_fails(
         macos_bundle.relaunch_in_bundle([], data_dir)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_ctrl_c_sends_sigint_to_the_running_buddy(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """SIGINT, not terminate(): only the signal handler runs teardown() and
@@ -413,8 +467,11 @@ def test_ctrl_c_sends_sigint_to_the_running_buddy(
     assert fake_open.proc.waits == 2
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_ctrl_c_force_quits_a_buddy_that_ignores_sigint(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_dir = _data_dir(tmp_path)
@@ -437,8 +494,11 @@ def test_ctrl_c_force_quits_a_buddy_that_ignores_sigint(
     assert app.force_quits == 1
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_ctrl_c_never_signals_a_pidless_instance(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """NSRunningApplication reports -1 for an app with no live process, and
@@ -472,8 +532,11 @@ def test_running_in_bundle_trusts_the_env_marker_without_pyobjc(
     assert macos_bundle.running_in_bundle() is True
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_relaunch_marks_the_child_as_in_bundle(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     data_dir = _data_dir(tmp_path)
@@ -487,8 +550,11 @@ def test_relaunch_marks_the_child_as_in_bundle(
     assert f"{macos_bundle.IN_BUNDLE_ENV}=1" in cmd
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_redirect_log_is_owner_only(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """It carries the child's whole stdout+stderr, --verbose DEBUG included,
@@ -504,7 +570,10 @@ def test_redirect_log_is_owner_only(
 
 
 def test_a_failed_swap_keeps_the_bundle_that_already_worked(
-    fake_env: Path, tmp_path: Path, stub: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    tmp_path: Path,
+    stub: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A rebuild that dies between the two renames must leave the old bundle
     in place, not delete the only working one."""
@@ -543,7 +612,8 @@ def test_would_use_bundle_is_false_off_darwin(
 
 
 def test_would_use_bundle_is_false_inside_the_bundle(
-    fake_env: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """It answers for the launch, so the child never re-enters the gate."""
     monkeypatch.setenv(macos_bundle.IN_BUNDLE_ENV, "1")
@@ -551,7 +621,8 @@ def test_would_use_bundle_is_false_inside_the_bundle(
 
 
 def test_would_use_bundle_is_false_without_a_framework_stub(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """uv-managed and non-framework pyenv builds stay in-process."""
     monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
@@ -560,13 +631,16 @@ def test_would_use_bundle_is_false_without_a_framework_stub(
     assert macos_bundle.would_use_bundle({"overlay": "qt"}) is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires macOS bundle and Qt overlay")
 def test_would_use_bundle_follows_the_resolved_overlay(
-    fake_env: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`--overlay textual` must not relaunch, and --validate must not then
     tell the user to grant permissions to TokenPal."""
     from tokenpal.ui.registry import discover_overlays
 
+    monkeypatch.setattr(macos_bundle.sys, "platform", "darwin")
     monkeypatch.delenv(macos_bundle.IN_BUNDLE_ENV, raising=False)
     discover_overlays()
 
@@ -602,7 +676,8 @@ def test_consume_launch_env_is_quiet_when_not_relaunched(
 
 
 def test_a_host_without_pyobjc_does_not_relaunch(
-    fake_env: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Without pyobjc we can neither see a running instance nor SIGINT one,
     so relaunching would strand a buddy no terminal can reach."""
@@ -618,7 +693,8 @@ def test_a_host_without_pyobjc_does_not_relaunch(
 
 
 def test_a_non_framework_interpreter_names_its_reason(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     """The population most likely to hit the parked-status-item bug is the one
     that must find an explanation in the log."""
@@ -630,7 +706,10 @@ def test_a_non_framework_interpreter_names_its_reason(
 
 
 def test_a_failed_restore_still_leaves_the_old_bundle_on_disk(
-    fake_env: Path, tmp_path: Path, stub: Path, monkeypatch: pytest.MonkeyPatch,
+    fake_env: Path,
+    tmp_path: Path,
+    stub: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Whatever makes the swap fail usually makes the restore fail too; the
     retired tree is the last copy and must not be swept with the staging one."""
@@ -656,8 +735,11 @@ def test_a_failed_restore_still_leaves_the_old_bundle_on_disk(
     assert (retired[0] / "Contents/MacOS/TokenPal").exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires Unix/macOS signal or TTY support")
 def test_terminal_close_quits_the_buddy_like_ctrl_c(
-    fake_env: Path, tmp_path: Path, fake_open: _FakeOpen,
+    fake_env: Path,
+    tmp_path: Path,
+    fake_open: _FakeOpen,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The buddy is launchd-parented now, so nothing but the blocking parent

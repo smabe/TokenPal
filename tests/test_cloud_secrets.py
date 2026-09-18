@@ -38,6 +38,7 @@ def test_set_and_get_roundtrip(secrets_path: Path) -> None:
     assert get_cloud_key(secrets_path) == key
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix file permissions are not enforced on Windows")
 def test_set_cloud_key_chmods_0o600(secrets_path: Path) -> None:
     set_cloud_key("sk-ant-api03-" + "x" * 40, secrets_path)
     mode = stat.S_IMODE(os.stat(secrets_path).st_mode)
