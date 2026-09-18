@@ -45,6 +45,19 @@ def _inside_bundle(resolved: Path) -> bool:
     return any(part.lower().endswith(_BUNDLE_SUFFIXES) for part in resolved.parent.parts)
 
 
+def _is_executable(resolved: Path) -> bool:
+    if current_platform() == "windows" or os.name == "nt":
+        pathext = os.environ.get("PATHEXT", "")
+        extensions = {
+            ext.strip().lower()
+            for ext in pathext.split(";")
+            if ext.strip()
+        }
+        return resolved.suffix.lower() in extensions
+
+    return os.access(resolved, os.X_OK)
+
+
 @register_action
 class OpenPathAction(AbstractAction):
     action_name = "open_path"
@@ -95,7 +108,7 @@ class OpenPathAction(AbstractAction):
 
         if resolved.suffix.lower() in _DENIED:
             return _refuse("open_path does not open scripts, programs, or installers.")
-        if os.access(resolved, os.X_OK):
+        if _is_executable(resolved):
             return _refuse("That file is executable, so open_path will not open it.")
         if _inside_bundle(resolved):
             return _refuse("That file is inside an app bundle.")

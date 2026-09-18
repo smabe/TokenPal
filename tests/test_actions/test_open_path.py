@@ -195,8 +195,22 @@ async def test_refuses_a_missing_argument(
         ("d.pkg", 0o644),
         ("e.dmg", 0o644),
         ("f.webloc", 0o644),
-        ("bare", 0o755),
-        ("notes.txt", 0o755),
+        pytest.param(
+            "bare",
+            0o755,
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="Unix executable bits",
+            ),
+        ),
+        pytest.param(
+            "notes.txt",
+            0o755,
+            marks=pytest.mark.skipif(
+                os.name == "nt",
+                reason="Unix executable bits",
+            ),
+        ),
     ],
 )
 async def test_refuses_anything_that_could_run(
@@ -257,6 +271,34 @@ async def test_refuses_protected_paths(
 
 # --- other platforms ---
 
+async def test_windows_refuses_pathext_executable(
+    root: Path,
+    launcher: _Launcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(open_path_mod, "current_platform", lambda: "windows")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD;.TEST")
+
+    target = _write(root / "run.test")
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
+
+    assert result.success is False
+    assert launcher.calls == []
+
+
+async def test_windows_allows_non_pathext_extension(
+    root: Path,
+    launcher: _Launcher,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(open_path_mod, "current_platform", lambda: "windows")
+    monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD;.TEST")
+
+    target = _write(root / "notes.txt")
+    result = await invoke_tool(OpenPathAction({}), path=str(target))
+
+    assert result.success is True
+    assert launcher.calls == [str(target)]
 
 async def test_windows_uses_startfile(
     root: Path, launcher: _Launcher, monkeypatch: pytest.MonkeyPatch
