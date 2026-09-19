@@ -245,14 +245,14 @@ def test_train_requires_two_args(personality, voices_dir, overlay) -> None:
 def test_train_kicks_off_thread(
     personality, voices_dir, overlay,
 ) -> None:
-    with _patch_thread() as Thread:
+    with _patch_thread() as thread:
         r = _call(
             'train https://finn.fandom.com "Finn the Human"',
             personality, voices_dir, overlay,
         )
-    Thread.assert_called_once()
-    assert Thread.call_args.kwargs.get("name") == "voice-train"
-    Thread.return_value.start.assert_called_once()
+    thread.assert_called_once()
+    assert thread.call_args.kwargs.get("name") == "voice-train"
+    thread.return_value.start.assert_called_once()
     assert r.message == ""
 
 
@@ -280,12 +280,12 @@ def test_finetune_no_remote_host(
 def test_finetune_kicks_off_thread(
     personality, voices_dir, overlay, config, saved_profile,
 ) -> None:
-    with _patch_thread() as Thread:
+    with _patch_thread() as thread:
         r = _call(
             "finetune finn", personality, voices_dir, overlay, config=config,
         )
-    Thread.assert_called_once()
-    assert Thread.call_args.kwargs.get("name") == "voice-finetune"
+    thread.assert_called_once()
+    assert thread.call_args.kwargs.get("name") == "voice-finetune"
     assert r.message == ""
 
 
@@ -303,12 +303,12 @@ def test_finetune_setup_no_remote_host(
 def test_finetune_setup_kicks_off_thread(
     personality, voices_dir, overlay, config,
 ) -> None:
-    with _patch_thread() as Thread:
+    with _patch_thread() as thread:
         r = _call(
             "finetune-setup", personality, voices_dir, overlay, config=config,
         )
-    Thread.assert_called_once()
-    assert Thread.call_args.kwargs.get("name") == "finetune-setup"
+    thread.assert_called_once()
+    assert thread.call_args.kwargs.get("name") == "finetune-setup"
     assert r.message == ""
 
 
@@ -327,12 +327,12 @@ def test_regenerate_kicks_off_thread(
     personality, voices_dir, overlay, saved_profile,
 ) -> None:
     personality.voice_name = "Finn"
-    with _patch_thread() as Thread:
+    with _patch_thread() as thread:
         r = _call(
             "regenerate", personality, voices_dir, overlay,
         )
-    Thread.assert_called_once()
-    assert Thread.call_args.kwargs.get("name") == "voice-regen"
+    thread.assert_called_once()
+    assert thread.call_args.kwargs.get("name") == "voice-regen"
     assert r.message == ""
 
 
@@ -351,10 +351,10 @@ def test_ascii_kicks_off_thread(
     personality, voices_dir, overlay, saved_profile,
 ) -> None:
     personality.voice_name = "Finn"
-    with _patch_thread() as Thread:
+    with _patch_thread() as thread:
         r = _call("ascii", personality, voices_dir, overlay)
-    Thread.assert_called_once()
-    assert Thread.call_args.kwargs.get("name") == "voice-ascii-regen"
+    thread.assert_called_once()
+    assert thread.call_args.kwargs.get("name") == "voice-ascii-regen"
     assert r.message == ""
 
 

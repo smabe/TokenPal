@@ -26,7 +26,6 @@ from PySide6.QtWidgets import QApplication
 from tokenpal.ui.ascii_renderer import BUDDY_IDLE
 from tokenpal.ui.quick.buddy_window import BuddyQuickWindow
 
-
 _SAMPLE_LINES = [
     "hi there. just watching the cursor.",
     "you've been on this file for a while -- is it the imports again?",

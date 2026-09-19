@@ -30,7 +30,6 @@ from tokenpal.brain.research_followup import FollowupSession, bump
 from tokenpal.config.secrets import get_cloud_key
 from tokenpal.llm.cloud_backend import CloudBackend
 
-
 # Realistic Immich sources with bulkier excerpts so the prompt crosses
 # Anthropic's minimum-cacheable-prefix thresholds (Haiku ~2048 tokens,
 # Sonnet/Opus ~1024 tokens). Content is plausible GitHub-issue chatter

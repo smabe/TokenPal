@@ -706,7 +706,15 @@ async def test_remote_finetune_windows_skips_flock(tmp_path):
             return (0, "", "")
         return (0, "", "")
 
-    async def succeeding_scp(remote, local, remote_path, *, pull=False, recursive=False, timeout=1800):
+    async def succeeding_scp(
+    remote,
+    local,
+    remote_path,
+    *,
+    pull=False,
+    recursive=False,
+    timeout=1800,
+    ):
         return (0, "")
 
     with (
@@ -781,7 +789,15 @@ async def test_remote_finetune_windows_training_failure_includes_ssh_drop_hint(t
             return (1, "", "CUDA out of memory")  # training fails
         return (0, "", "")
 
-    async def succeeding_scp(remote, local, remote_path, *, pull=False, recursive=False, timeout=1800):
+    async def succeeding_scp(
+    remote,
+    local,
+    remote_path,
+    *,
+    pull=False,
+    recursive=False,
+    timeout=1800,
+    ):
         return (0, "")
 
     with (

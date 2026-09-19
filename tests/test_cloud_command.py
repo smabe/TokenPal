@@ -397,7 +397,11 @@ def test_brave_enable_rejects_too_short(isolated, cfg: TokenPalConfig) -> None:
 def test_brave_forget_wipes_key(isolated, cfg: TokenPalConfig) -> None:
     _handle_cloud_command("brave enable BSA-" + "y" * 28, cfg)
     _handle_cloud_command("brave forget", cfg)
-    stored = json.loads(isolated["secrets_path"].read_text()) if isolated["secrets_path"].exists() else {}
+    stored = (
+        json.loads(isolated["secrets_path"].read_text())
+        if isolated["secrets_path"].exists()
+        else {}
+    )
     assert "brave_key" not in stored
 
 

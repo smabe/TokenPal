@@ -17,7 +17,6 @@ from tokenpal.brain.memory import MemoryStore
 from tokenpal.config.loader import load_config
 from tokenpal.llm.http_backend import HttpBackend
 
-
 PROMPTS = [
     "In one sentence, describe a rainy afternoon.",
     "Give a single-line weather forecast for Tokyo.",

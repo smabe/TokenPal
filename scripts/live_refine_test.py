@@ -30,10 +30,9 @@ import sys
 
 from tokenpal.actions.research.fetch_url import fetch_and_extract
 from tokenpal.actions.research.research_action import _build_cloud_backend
+from tokenpal.brain.research import ResearchRunner, Source
 from tokenpal.config.loader import load_config
 from tokenpal.config.secrets import load_search_keys
-from tokenpal.brain.research import ResearchRunner, Source
-
 
 # Fake C64 source pool — these five URLs are the same ones the user's
 # actual session surfaced. None of them contain VIC-20 CPU specs.

@@ -229,7 +229,10 @@ def test_hot_swap_custom_to_custom():
         created="2026-01-01",
         lines=[f"Line {i}" for i in range(15)],
         mood_roles={"default": "SMUG", "bored": "DISGUSTED"},
-        mood_prompts={"default": "Your current mood: SMUG.", "bored": "Your current mood: DISGUSTED."},
+        mood_prompts={
+            "default": "Your current mood: SMUG.",
+            "bored": "Your current mood: DISGUSTED.",
+        },
         default_mood="SMUG",
     )
     engine.set_voice(other)

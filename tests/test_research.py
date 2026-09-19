@@ -451,7 +451,8 @@ def test_parse_synth_json_tolerates_pre_post_chatter() -> None:
 def test_parse_synth_json_returns_none_for_invalid() -> None:
     assert _parse_synth_json("") is None
     assert _parse_synth_json("not json at all") is None
-    assert _parse_synth_json('{"kind": "comparison"}') is not None  # empty picks ok, runner downgrades
+    assert _parse_synth_json('{"kind": "comparison"}') is not None
+    # Empty picks ok, runner downgrades.
 
 
 def test_parse_synth_json_skips_unrelated_objects() -> None:

@@ -59,7 +59,6 @@ def test_auto_tune_large_dataset():
 
 
 def test_auto_tune_alpha_follows_rank():
-    config = LoRAConfig()
     for n in [50, 300, 800, 5000]:
         c = auto_tune(LoRAConfig(), n)
         assert c.lora_alpha == c.lora_rank * 2

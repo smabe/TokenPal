@@ -274,7 +274,10 @@ class TestPersonalityConversation:
 
     def test_filter_conversation_allows_longer_responses(self):
         engine = _make_engine()
-        text = "Sure, I can help with that, but honestly you should have figured this out yourself by now."
+        text = (
+          "Sure, I can help with that, but honestly you should have figured "
+          "this out yourself by now."
+        )
         result = engine.filter_conversation_response(text)
         assert result is not None
         assert len(result) > 70
@@ -346,7 +349,9 @@ class TestBrainConversation:
         assert brain._conversation.is_active
 
     async def test_handle_user_input_builds_messages_array(self):
-        llm = _MockLLM(["Response one that is plenty long.", "Response two that is also long enough."])
+        llm = _MockLLM(
+            ["Response one that is plenty long.", "Response two that is also long enough."]
+        )
         brain = _make_brain(llm=llm)
 
         await brain._handle_user_input("first message")

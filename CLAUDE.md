@@ -46,7 +46,7 @@ Load the relevant doc on demand rather than reading all of them.
 - `tokenpal --overlay {auto|qt|textual|console|tkinter}` -- override `[ui] overlay` from config at launch (e.g. `--overlay textual` for rich TUI in the terminal without editing config.toml)
 - `scripts/download-model.ps1` -- interactive GGUF picker for llamacpp path (Windows). Downloads, updates config + bat.
 - `pytest` -- run tests (asyncio_mode=auto)
-- `ruff check tokenpal/` — lint (line-length 100, select E/F/I/N/W/UP)
+- `ruff check tokenpal/ tests/` — lint (line-length 100, select E/F/I/N/W/UP)
 - `mypy tokenpal/ --ignore-missing-imports` — type check (strict mode)
 
 ## Privacy
@@ -75,7 +75,7 @@ Load the relevant doc on demand rather than reading all of them.
 - When a Qt change involves painting, translucency, or custom widget rendering, verify the approach actually paints on screen before declaring done. Stylesheet approaches can be silently blocked by `WA_TranslucentBackground` and similar flags — reach for `paintEvent` when stylesheets mysteriously don't render.
 
 ## Code Style
-- Python 3.12+, strict mypy, ruff for linting
+- Python 3.12.1+, strict mypy, ruff for linting
 - abc.ABC for abstractions, dataclasses for data, ClassVar for registry metadata
 - Sense implementations go in `tokenpal/senses/<sense_name>/<platform>_impl.py`
 

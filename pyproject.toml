@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tokenpal"
 version = "0.1.0"
 description = "Cross-platform AI desktop buddy powered by local LLMs"
-requires-python = ">=3.12"
+requires-python = ">=3.12.1"
 dependencies = [
     "psutil>=5.9",
     "pynput>=1.7",
@@ -106,6 +106,9 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "tokenpal/ui/qt/*.py" = ["N802"]
 "tokenpal/ui/quick/*.py" = ["N802"]
 "tests/test_qt_platform.py" = ["N802"]
+"tests/manual/quick_spike.py" = ["N802", "N806"]
+"tests/manual/ruler_scroll.py" = ["N802"]
+"tests/test_web_search.py" = ["E501"]
 # Embeds bash + PowerShell installer scripts as triple-quoted strings;
 # their lines are bound by shell syntax, not Python's 100-char line limit.
 "tokenpal/tools/remote_train.py" = ["E501"]

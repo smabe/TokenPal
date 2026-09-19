@@ -17,13 +17,20 @@ from tokenpal.tools.voice_profile import (
 # _parse_custom_moods
 # ---------------------------------------------------------------
 
-_VALID_INPUT = """\
+_VALID_INPUT = (
+    """\
 DEFAULT | PLAYFUL | BMO is feeling playful boyee!
+
 SLEEPY | DROWSY | BMO cannot self-snooze.
+
 BORED | BLAH | Nothing is happening boy.
+
 HYPER | TURBO | Everything is awesome!
+
 IMPRESSED | WHOA | That was algebraic.
+
 CONCERNED | WORRIED | Are you okay boy?"""
+)
 
 
 def test_parse_valid_input():
@@ -38,7 +45,14 @@ def test_parse_valid_input():
 
 
 def test_parse_with_extra_whitespace():
-    text = "  DEFAULT | PLAYFUL | desc.\n  SLEEPY | DROWSY | desc.\n  BORED | BLAH | desc.\n  HYPER | TURBO | desc.\n  IMPRESSED | WHOA | desc.\n  CONCERNED | WORRIED | desc."
+    text = (
+    "  DEFAULT | PLAYFUL | desc.\n"
+    "  SLEEPY | DROWSY | desc.\n"
+    "  BORED | BLAH | desc.\n"
+    "  HYPER | TURBO | desc.\n"
+    "  IMPRESSED | WHOA | desc.\n"
+    "  CONCERNED | WORRIED | desc."
+    )
     result = _parse_custom_moods(text)
     assert result is not None
 
