@@ -56,6 +56,15 @@ _BRAIN_INVOKED_METHODS: tuple[tuple[str, tuple[Any, ...]], ...] = (
     ("set_buddy_reaction_callback", (lambda s: None,)),
 )
 
+_BRAIN_INVOKED_KEYWORD_METHODS: tuple[
+    tuple[str, dict[str, Any]], ...
+] = (
+    (
+        "restore_visibility_state",
+        {"buddy_visible": True, "windows": {}, "zoom": 1.0},
+    ),
+)
+
 _MODAL_METHODS: tuple[tuple[str, tuple[Any, ...]], ...] = (
     ("open_selection_modal", ("title", [], lambda r: None)),
     ("open_confirm_modal", ("title", "body", lambda r: None)),
@@ -82,7 +91,12 @@ def test_overlay_exposes_full_adapter_surface(
     overlay_cls: type[AbstractOverlay],
 ) -> None:
     """Every brain-invoked method is present on every overlay."""
-    for name, _args in (*_BRAIN_INVOKED_METHODS, *_MODAL_METHODS):
+    methods = (
+        *_BRAIN_INVOKED_METHODS,
+        *_BRAIN_INVOKED_KEYWORD_METHODS,
+        *_MODAL_METHODS,
+    )
+    for name, _args in methods:
         assert hasattr(overlay_cls, name), (
             f"{overlay_cls.__name__} is missing `{name}` — the brain "
             f"may hit this; default should live in AbstractOverlay."
@@ -104,6 +118,10 @@ def test_console_overlay_accepts_full_adapter_surface(
             continue  # these mutate terminal state; skip in unit tests
         method = getattr(overlay, name)
         method(*args)
+
+    for name, kwargs in _BRAIN_INVOKED_KEYWORD_METHODS:
+        method = getattr(overlay, name)
+        method(**kwargs)
 
     for name, args in _MODAL_METHODS:
         result = getattr(overlay, name)(*args)

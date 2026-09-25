@@ -313,18 +313,17 @@ def main() -> None:
     # Restore each toggleable window's show-hide intent from the last
     # session. The overlay owns the registry of windows; we just hand
     # over the {name: visible} dict.
-    if hasattr(overlay, "restore_visibility_state"):
-        ui_state = load_ui_state(data_dir)
-        overlay.restore_visibility_state(
-            buddy_visible=ui_state["buddy_visible"],
-            windows=dict(ui_state["windows"]),
-            zoom=ui_state["zoom"],
-        )
+    ui_state = load_ui_state(data_dir)
+    overlay.restore_visibility_state(
+        buddy_visible=ui_state["buddy_visible"],
+        windows=dict(ui_state["windows"]),
+        zoom=ui_state["zoom"],
+    )
 
-        def _persist_ui_state(state: UiState) -> None:
-            save_ui_state(data_dir, state)
+    def _persist_ui_state(state: UiState) -> None:
+        save_ui_state(data_dir, state)
 
-        overlay.set_ui_state_persist_callback(_persist_ui_state)
+    overlay.set_ui_state_persist_callback(_persist_ui_state)
 
     _agent_log = make_agent_log(overlay)
 

@@ -162,6 +162,17 @@ class AbstractOverlay(abc.ABC):
         ``UiState`` dict. Optional — overlays without per-window
         toggles no-op."""
 
+    def restore_visibility_state(
+        self,
+        *,
+        buddy_visible: bool,
+        windows: dict[str, bool] | None = None,
+        zoom: float | None = None,
+    ) -> None:
+        """Restore persisted visibility and zoom state. Optional — overlays
+        without per-window visibility or zoom controls no-op.
+        """
+
     def set_chat_history_background_color(self, hex_color: str) -> None:
         """Recolor the chat history panel background. Optional."""
 
